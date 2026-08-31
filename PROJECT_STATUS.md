@@ -2844,6 +2844,80 @@ Voice Studio, Video Studio, Social, AI Video, tax/finance logic — none touched
 
 ---
 
+## STEP 24 — INITIALIZE GIT + BASELINE COMMIT
+
+Date: 2026-08-31
+
+Scope: version-control setup only — no application/source-code logic, database schema, or
+`PROJECT_CHECKPOINT.md` changed. Create the project's first Git repository and one baseline commit
+covering everything completed through STEP 23.
+
+**Pre-flight checks (before touching anything)**: `pwd` confirmed `C:\Users\maxim\thai-amulet-ai`;
+`git status` → `fatal: not a git repository`; `.git` directory confirmed absent — this was genuinely
+the first Git initialization for this project, no prior history existed anywhere.
+
+**`.gitignore` inspected before initializing**: a standard `create-next-app` `.gitignore` already
+existed, correctly covering `node_modules`, `.next`, `.env*` (confirmed via `git check-ignore` after
+init — `.env` itself is ignored; `.env.example`/`.env.example.*-backup` are also caught by the same
+`.env*` pattern, which is safe, just means the template isn't tracked either — left as-is, no source
+change needed to fix that), `*.tsbuildinfo`, build output, OS/log noise.
+
+**Gap found and closed (minimum necessary additions only)**: `.gitignore` did **not** cover
+`data/thai-amulet.db` (the real business database — real products, orders, transaction history) or
+`public/generated/` (52MB / 76 files of runtime-generated media: product photos, AI images/video,
+voice audio, and transaction receipt/slip attachments — exactly the kind of "generated/private"
+content the task called out). Added exactly two directory rules — `/data/` and `/public/generated/`
+— plus one more found during inspection: `/.playwright-mcp/` (3.3MB of this session's own Playwright
+test-tool console logs/snapshots, pure testing exhaust with zero source value). All three verified
+excluded via `git check-ignore -v` **before** running `git add .`, not after.
+
+**Verified NOT a secret / left alone**: `check-openai-models.mjs` and the other root-level
+`check-*.cjs`/`test-content-save.cjs` debug scripts were inspected line-by-line — `.mjs`/`.cjs`
+scripts read `OPENAI_API_KEY` from `.env` at runtime, none hardcode a key; `.env.example`'s
+`OPENAI_API_KEY=` line confirmed empty (genuine template, no real value) via direct inspection.
+
+**Observation, not acted on** (outside this STEP's minimum-necessary-for-secrets scope, flagged for
+the user to decide): `.claude/settings.local.json` (a Claude Code tool-permission allowlist — no
+secrets in it, verified) and `.claude/launch.json` got committed as-is. `settings.local.json`'s own
+naming convention signals "local, not meant to be shared," similar to `.env.local` — worth a
+follow-up `.gitignore` entry if the user wants it excluded, but it contains no security-sensitive
+data and wasn't in this STEP's explicit remit, so left untouched.
+
+**Staged/committed**: `git add .` → 288 files staged (only CRLF-normalization warnings, no errors);
+verified via `git diff --cached --name-only` that nothing under `data/` was staged, `public/` only
+contained the 5 default Next.js SVG assets (not `generated/`), and no `.env*` path appeared anywhere
+in the staged list. Committed with the exact requested message.
+
+**Not addressed by this STEP (correctly out of scope)**: the repo also contains ~150 `.bak`/
+`*-backup-*`/`*.step\d+-backup*` files scattered across `src/` from every prior STEP's file-safety
+backups, plus loose root-level test artifacts (`voice-test*.mp3`, `voice-test.json`,
+`products_check*.html`-style one-offs from earlier sessions). None are secrets and none block a safe
+baseline, so all were committed as-is — the task asked only to protect secrets/large runtime
+artifacts and create the baseline, not to clean up repo history; noted here for awareness only.
+
+**Verification**:
+- `git status --short` after `.gitignore` update, before `git add` → confirmed no `.env`,
+  `data/*.db*`, `public/generated/**`, or `.playwright-mcp/` entries present
+- `git check-ignore -v` on `.env`, `data/thai-amulet.db`, `data/thai-amulet.db-wal`, `data/app.db`,
+  a sample `public/generated/voice/*.mp3` path, `node_modules`, `.next` → all correctly matched and
+  ignored, each against the exact rule that should have caught it
+- `git log -1 --oneline` → `fab1f02 STEP 24: Baseline after back-office completion through STEP 23`
+- `git status --short` post-commit → empty (clean working tree)
+
+**Defects found**: 1 — the pre-existing `.gitignore` did not protect the real SQLite database or
+generated media directory (a real gap; if left unfixed, the first commit would have included live
+business data and dozens of megabytes of regenerable media).
+**Defects fixed**: 1/1 — closed via the three `.gitignore` additions above, verified before staging.
+**Files changed**: `.gitignore` (3 additions). No application/source-code file's logic was modified
+by this STEP — every other file in the commit was added to version control as-is, not edited.
+**Database changed**: No — `data/thai-amulet.db` was read (for the `git check-ignore` sanity check)
+but never staged or modified; STEP 23's live data is untouched and excluded from version control
+entirely by design. `PROJECT_CHECKPOINT.md` not touched.
+
+**STEP 24 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

@@ -96,12 +96,21 @@ export default function OrdersPage() {
             </p>
           </div>
 
-          <Link
-            href="/"
-            className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-          >
-            ← กลับหน้าแรก
-          </Link>
+          <div className="flex flex-wrap gap-3">
+            <Link
+              href="/orders/new"
+              className="w-fit rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700"
+            >
+              ➕ สร้างออเดอร์ใหม่
+            </Link>
+
+            <Link
+              href="/"
+              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              ← กลับหน้าแรก
+            </Link>
+          </div>
         </div>
 
         <div className="mb-6 grid gap-4 md:grid-cols-2">

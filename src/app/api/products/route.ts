@@ -349,6 +349,13 @@ const PRODUCT_REFERENCE_TABLES: Array<{ table: string; label: string }> = [
   // ไม่เช่นนั้นจะลบสินค้าที่มีประวัติการเงินจริงผูกอยู่ได้ ทำให้ transactions.product_id เหลือค้างเป็น
   // ค่าที่ไม่มีสินค้าจริงรองรับ (ข้อมูลการเงินต้องไม่สูญหาย/เสียหายจากการลบสินค้าเด็ดขาด)
   { table: "transactions", label: "รายการรายรับ-รายจ่าย" },
+  // STEP 26 — inventory_movements.product_id (STEP 36) เคยตกหล่นจากรายการนี้ — SQLite เองยังบล็อกการ
+  // ลบไว้ถูกต้องอยู่แล้วเสมอ (foreign_keys pragma เปิดอยู่จริง ตรวจสอบแล้วใน STEP 25 audit) ข้อมูล
+  // ไม่เคยเสี่ยงสูญหาย แต่เพราะตารางนี้ไม่อยู่ใน list นี้ findProductReferences() จึงมองไม่เห็น reference
+  // นี้ ทำให้ error message ตกไปใช้ fallback ทั่วไป "(ข้อมูลที่เกี่ยวข้อง)" แทนที่จะระบุเหตุผลจริงชัดเจน
+  // เหมือนตารางอื่นทั้งหมด — เพิ่มเข้ามาให้ครบเพื่อความถูกต้องของข้อความเท่านั้น ไม่กระทบพฤติกรรมการบล็อก
+  // ที่มีอยู่แล้วแต่อย่างใด
+  { table: "inventory_movements", label: "ประวัติการเคลื่อนไหวสต็อก" },
 ];
 
 function findProductReferences(productId: number): string[] {

@@ -2918,6 +2918,166 @@ entirely by design. `PROJECT_CHECKPOINT.md` not touched.
 
 ---
 
+## STEP 26 — FIX INVENTORY MOVEMENTS PRODUCT REFERENCE (back-office numbering thread)
+
+Date: 2026-08-31 / 2026-09-01
+
+Scope: fix the one Minor finding from the back-office STEP 25 read-only audit (not logged as its
+own entry per that audit's own "PROJECT_STATUS.md: NOT UPDATED" instruction) — `inventory_movements`
+was missing from `PRODUCT_REFERENCE_TABLES` in `src/app/api/products/route.ts`, so a product-deletion
+attempt blocked only by stock-movement history fell back to a generic
+`"(ข้อมูลที่เกี่ยวข้อง)"` message instead of naming the real reason.
+
+**Confirmed before editing**: SQLite's `foreign_keys` pragma is `ON` for this app (`PRAGMA
+foreign_keys` → `1`) and `inventory_movements` already has a real
+`FOREIGN KEY (product_id) REFERENCES products(id)` in `src/lib/db.ts` — so deletion was **always**
+correctly blocked at the database level; this was a message-accuracy gap only, never a data-loss
+risk. `findProductReferences()` works generically over any table with a `product_id` column via
+`SELECT COUNT(*) AS c FROM ${table} WHERE product_id = ?`, so no code-logic change was needed —
+only a data entry, following the exact same shape as the existing `transactions` entry (STEP 21).
+
+**Implementation**: added one entry to `PRODUCT_REFERENCE_TABLES`:
+`{ table: "inventory_movements", label: "ประวัติการเคลื่อนไหวสต็อก" }`. Nothing else in the file
+changed — no schema, no stock/order/finance/tax/attachment logic touched.
+
+**Backup created**: `src/app/api/products/route.ts.step26-backup-20260901-001846`.
+
+**Tested (dev server running locally, real production data used for the delete-protection test per
+instructions — no synthetic test rows needed, nothing was ever actually deleted)**:
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**
+2. Baseline row counts recorded: `products:4, orders:1, order_items:1, inventory_movements:4,
+   transactions:0, transaction_attachments:0`
+3. `DELETE /api/products?id=3` (real product เบี้ยแก้, has 3 `ai_cost_ledger` rows + 3
+   `inventory_movements` rows, nothing else) → `409`, message now reads
+   `"...(ประวัติต้นทุน AI, ประวัติการเคลื่อนไหวสต็อก)..."` — **stock movement history is now named
+   correctly**, same `409` status as before the fix — **PASS**
+4. `DELETE /api/products?id=4` (real product ตะกรุด, has `order_items` + `content_plans` +
+   `ai_cost_ledger` + `inventory_movements`) → `409`, all four reasons listed correctly including the
+   new one — **PASS**
+5. Row counts re-checked after both delete attempts: **byte-identical to baseline** — `products:4`
+   confirmed still present (`เบี้ยแก้` stock still `13`), no row anywhere was touched
+6. Regression: `GET /api/health`, `GET /api/products` (4), `GET /api/orders` (1),
+   `GET /api/orders/1`, `GET /api/inventory/movements` (4), `GET /api/transactions`,
+   `GET /api/tax/summary?year=2026`, `GET /api/costs/summary` — all **PASS**
+7. Dev server log reviewed for the full session — only the two expected `409`s and the regression
+   `200`s, no unhandled exception
+
+**Git**: `git status` before and after confirmed only `src/app/api/products/route.ts` modified plus
+the new backup file (untracked) — no commit, no push, per instructions.
+
+**Defects found**: 0 new (this STEP closes the one already found in the prior audit).
+**Defects fixed**: 1/1 — the `PRODUCT_REFERENCE_TABLES` gap.
+**Files changed**: `src/app/api/products/route.ts` (one array entry added). `PROJECT_STATUS.md`
+updated with this entry. `PROJECT_CHECKPOINT.md` not touched. Database: read-only for this STEP —
+zero rows changed anywhere (verified before/after). Video Studio, AI Video, Voice Studio, Social,
+video automation — none touched.
+
+**STEP 26 STATUS: PASS**
+
+---
+
+## STEP 27 — NEW ORDER UI FOR REAL SHOP USE
+
+Date: 2026-09-01
+
+Scope: give the shop owner a real way to create an order from the browser — `/orders/new` + a
+"➕ สร้างออเดอร์ใหม่" button on `/orders`. Uses the existing `POST /api/orders` →
+`createOrder()` pipeline exactly as-is; zero backend logic changed.
+
+**Phase 1 inspection (before writing any UI code)**: confirmed `POST /api/orders`
+(`src/app/api/orders/route.ts`) already fully supports multi-item orders (`body.items` array, each
+validated independently) and per-item custom sale price; `createOrder()` (`src/lib/orders.ts`) does
+order + all items + all stock deductions + all inventory movements in one `db.transaction()`
+(atomic — confirmed no partial rows possible). **Customer gap confirmed**: `customers` table and
+`createOrder()`'s `customerId` parameter both exist, but `POST /api/orders`'s route handler never
+reads `customerId` from the request body at all — so no customer can be attached to an order today
+through any interface. Per instructions, did **not** extend the route to add this (would be a
+backend change beyond "necessary for the New Order UI") — `/orders/new` has no customer field, and
+this is reported here as a known limitation, not built around.
+
+**Implementation**:
+- `src/app/orders/new/page.tsx` (new) — product picker per line (shows live current stock in the
+  option label + below the select), quantity, sale price (auto-filled from the product's list price
+  on selection, freely editable), add/remove line items, live per-line and order-level
+  subtotal/total, full client-side validation (empty selection, non-integer/zero/negative quantity,
+  quantity over current stock, invalid price) with Thai messages, a `submitting` state that disables
+  the confirm button and guards the handler against re-entry (`if (submitting) return`), and a
+  Thai-message translation table for the backend's English error strings
+  (`"Insufficient stock"` → `"สต็อกสินค้าไม่เพียงพอ..."`, etc.) since the backend intentionally
+  wasn't touched. No shipping-fee/discount/channel/payment-method inputs — kept to exactly the 15
+  requirements given, backend defaults (`channel:"manual"`, `payment_method:"unknown"`,
+  `shippingFee:0`, `discount:0`) apply automatically when omitted, matching existing behavior.
+- `src/app/orders/page.tsx` — added the "➕ สร้างออเดอร์ใหม่" button linking to `/orders/new`, next
+  to the existing "← กลับหน้าแรก" link. No other line changed.
+
+**Backup created**: `src/app/orders/page.tsx.step27-backup-20260901-002331` (the only existing file
+modified; `src/app/orders/new/page.tsx` is new, no backup needed per convention).
+
+**Minor finding, not fixed (out of strict scope)**: client-side stock validation checks each line
+item's quantity against the product's stock independently — it does not sum quantities across
+multiple line items referencing the *same* product before comparing to stock. If a user split one
+product across two rows with a combined quantity exceeding stock, the client would not catch it, but
+`createOrder()`'s real atomic transaction still would (each item's `decreaseStockForSale()` reads
+current stock sequentially inside the same `db.transaction()`, so the whole order rolls back with
+`INSUFFICIENT_STOCK` if it's ever actually exceeded) — a UX polish gap, not a data-safety gap.
+
+**Tested (dev server running locally, zero AI calls, zero external cost, real production data used
+carefully and fully restored)**:
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**
+2. Baseline recorded: `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+   transaction_attachments:0, ai_cost_ledger:10`; product stock snapshot recorded for restore
+3. **Browser test (Playwright), full flow A–R**: `/orders` loads (0 console errors) → clicked
+   "➕ สร้างออเดอร์ใหม่" → `/orders/new` loads with real products + real stock (0 console errors) →
+   validation tests **M** (qty 0), **N** (qty −5), **O** (qty 999 > stock 13), **P** (price −50) all
+   correctly blocked client-side with clear Thai messages before ever reaching the API — **PASS**
+4. **Valid single-item order**: selected real product เบี้ยแก้ (id 3, stock 13), qty 1, price ฿199
+   (auto-filled, confirmed) → subtotal/total showed ฿199.00 correctly (**G/H**) → submitted (**I**)
+   → redirected to `/orders/4` (**J**), rendered correctly, 0 console errors — **PASS**
+5. **Stock deduction (K)**: product 3 stock `13→12` confirmed directly in DB — **PASS**
+6. **Inventory movement (L)**: new `inventory_movements` row confirmed —
+   `movement_type:'sale', quantity_change:-1, reference_type:'order', reference_id:4` — **PASS**
+7. **Multi-item order (R)**: built a 2-line order (both referencing product 3, prices ฿199 and ฿150
+   — a real 2-entry `items` array through the full UI→API path) → subtotal correctly summed to
+   ฿349.00 → **double-submit test (Q)** fired two near-simultaneous clicks on the confirm button;
+   Playwright's own retry log shows the button became disabled and the page navigated away before
+   the second click could land — DB confirmed **exactly one** new order (`id 5, total 349`), not two
+   — **PASS** for both R and Q. Order 5 verified with 2 correct `order_items` rows (different prices
+   preserved), stock correctly deducted twice sequentially (`12→11→10`), 2 separate
+   `inventory_movements` rows — **PASS**
+8. Regression: `GET /api/health`, `GET /api/products` (4), `GET /api/orders` (3 during testing),
+   `GET /api/orders/1` (real order, confirmed byte-identical: `TEST-36-12F-5B-...`, total `299`,
+   untouched throughout), `GET /api/inventory/movements`, `GET /api/transactions`,
+   `GET /api/tax/summary?year=2026`, `GET /api/costs/summary` — all **PASS**
+9. Dev server log reviewed for the full session — no unhandled exception
+10. **Cleanup**: test orders 4 and 5 + their `order_items` (3 rows) + their `inventory_movements` (3
+    rows) deleted; product 3 stock explicitly restored `10→13`; final row counts confirmed
+    byte-identical to baseline (`products:4, orders:1, order_items:1, inventory_movements:4,
+    transactions:0, transaction_attachments:0, ai_cost_ledger:10`); real order id 1 re-verified
+    completely untouched (`order_number`/`total` unchanged) — real order id 1 was never at risk since
+    only ids 4/5 (the test orders themselves) were ever touched
+
+**Security**: `POST /api/orders` (and every other back-office endpoint) has **no authentication or
+authorization** — confirmed unchanged from the STEP 25 audit finding (no `src/middleware.ts`, no
+session/auth code anywhere in `src/`). Not addressed here per explicit instruction — logged as a
+**STEP 29 dependency**, not built in this STEP.
+
+**Git**: `git status` checked before and after — only `src/app/orders/page.tsx` (modified),
+`src/app/orders/new/` (new), and the one backup file changed/added this STEP (plus STEP 26's
+still-uncommitted `src/app/api/products/route.ts`/`PROJECT_STATUS.md`, untouched again here). No
+commit, no push.
+
+**Defects found**: 1 Minor (the same-product-multi-row client-validation gap above).
+**Defects fixed**: 0 (out of strict scope — reported, not fixed, per instructions to STOP and report
+rather than fix anything beyond the New Order UI).
+**Files changed**: `src/app/orders/new/page.tsx` (new), `src/app/orders/page.tsx` (one button
+added). `PROJECT_STATUS.md` updated with this entry. `PROJECT_CHECKPOINT.md` not touched. Database
+schema: unchanged. `createOrder()`/stock-deduction logic: unchanged. Video Studio, AI Video, Voice
+Studio, Social, Tax, Finance, Attachments — none touched.
+
+**STEP 27 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

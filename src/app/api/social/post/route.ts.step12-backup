@@ -1,0 +1,222 @@
+import { NextResponse } from "next/server";
+import { stat } from "node:fs/promises";
+import path from "node:path";
+import { isValidPlatform, type SocialPlatform } from "@/lib/socialContent";
+import { getProvider } from "@/lib/social";
+import { ProviderNotConfiguredError } from "@/lib/social/provider";
+import {
+  insertSocialPost,
+  markSocialPostFailed,
+  markSocialPostPublished,
+} from "@/lib/socialPosts";
+
+export const runtime = "nodejs";
+
+const MAX_CAPTION_LENGTH = 2200; // ตาม limit จริงที่เข้มที่สุดในสามแพลตฟอร์ม (Instagram/TikTok)
+
+type PostRequest = {
+  productId?: number;
+  platform?: string;
+  videoUrl?: string;
+  caption?: string;
+  hashtags?: string[];
+};
+
+// เหมือน isValidVideoUrl ใน src/app/api/social/prepare/route.ts (ตรรกะเดียวกัน ไม่ได้แก้
+// src/app/api/video/render/route.ts) — ต้องขึ้นต้นด้วย /generated/video/ และไม่มี ".."
+function isValidVideoUrl(videoUrl: string): boolean {
+  if (!videoUrl || !videoUrl.startsWith("/")) {
+    return false;
+  }
+
+  const cleanUrl = decodeURIComponent(videoUrl.split("?")[0]);
+
+  return !cleanUrl.includes("..") && cleanUrl.startsWith("/generated/video/");
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json()) as PostRequest;
+
+    const productId = Number(body.productId || 0);
+    const platformRaw = String(body.platform || "").trim().toLowerCase();
+    const videoUrl = String(body.videoUrl || "").trim();
+    const caption = String(body.caption || "").trim();
+    const hashtags = Array.isArray(body.hashtags)
+      ? body.hashtags.filter((tag) => typeof tag === "string")
+      : [];
+
+    // productId ไม่ได้อยู่ใน payload ตัวอย่างของสเปค STEP 10.4 แต่ social_posts (STEP 10.5)
+    // ผูกกับสินค้าเสมอ (product_id NOT NULL) — จึงต้องรับค่านี้จริงจาก caller (Video Studio UI
+    // ส่งมาจาก selectedProductId ที่มีอยู่แล้วตั้งแต่ STEP 9) ไม่ใช่ค่าเดา
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return NextResponse.json(
+        { error: "กรุณาระบุรหัสสินค้าให้ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    // 1. validate platform
+    if (!isValidPlatform(platformRaw)) {
+      return NextResponse.json(
+        {
+          error:
+            'platform ไม่ถูกต้อง — รองรับเฉพาะ "facebook", "reels", "instagram", "tiktok" เท่านั้น',
+        },
+        { status: 400 }
+      );
+    }
+
+    const platform: SocialPlatform = platformRaw;
+
+    // 2. + 3. validate videoUrl + verify ไฟล์มีอยู่จริงบนดิสก์
+    if (!isValidVideoUrl(videoUrl)) {
+      return NextResponse.json({ error: "videoUrl ไม่ถูกต้อง" }, { status: 400 });
+    }
+
+    const videoFilePath = path.join(
+      process.cwd(),
+      "public",
+      videoUrl.replace(/^\/+/, "")
+    );
+
+    try {
+      const stats = await stat(videoFilePath);
+
+      if (!stats.isFile() || stats.size <= 0) {
+        throw new Error("empty or invalid file");
+      }
+    } catch {
+      return NextResponse.json(
+        { error: "ไม่พบไฟล์วิดีโอที่ระบุบนดิสก์จริง" },
+        { status: 400 }
+      );
+    }
+
+    // 4. validate caption
+    if (!caption) {
+      return NextResponse.json(
+        { error: "กรุณาระบุ caption สำหรับโพสต์" },
+        { status: 400 }
+      );
+    }
+
+    if (caption.length > MAX_CAPTION_LENGTH) {
+      return NextResponse.json(
+        { error: `caption ยาวเกินไป (สูงสุด ${MAX_CAPTION_LENGTH} ตัวอักษร)` },
+        { status: 400 }
+      );
+    }
+
+    // 5. load provider
+    const provider = getProvider(platform);
+
+    // 6. check connection
+    const connection = await provider.validateConnection();
+
+    // 7. ถ้า not_configured → ตอบสถานะที่ชัดเจน ไม่แตะ DB เลย (ยังไม่มีการพยายามโพสต์จริง)
+    if (connection.status === "not_configured") {
+      return NextResponse.json(
+        {
+          success: false,
+          platform,
+          status: "not_configured",
+          message: `ยังไม่ได้ตั้งค่าการเชื่อมต่อ ${platform}`,
+        },
+        { status: 503 }
+      );
+    }
+
+    if (connection.status === "error") {
+      return NextResponse.json(
+        {
+          success: false,
+          platform,
+          status: "error",
+          message: connection.message || `ไม่สามารถเชื่อมต่อ ${platform} ได้`,
+        },
+        { status: 502 }
+      );
+    }
+
+    // จากจุดนี้ไปคือ "พยายามโพสต์จริง" แล้ว — บันทึกแถวไว้ก่อนเรียก provider จริง เพื่อให้มี
+    // record ถาวรแม้ process ล้มกลางคัน (ไม่ใช่แค่เก็บหลังสำเร็จ)
+    const postRecord = insertSocialPost({
+      productId,
+      platform,
+      videoUrl,
+      caption,
+      status: "posting",
+    });
+
+    try {
+      const videoAbsoluteUrl = new URL(videoUrl, request.url).toString();
+
+      // 8. เรียก provider จริง — createPost() แล้วต่อด้วย publishPost() ตาม flow ของแต่ละแพลตฟอร์ม
+      // (Facebook/TikTok: publishPost แค่ยืนยันสถานะซ้ำ, Instagram: publishPost คือขั้นตอนเผยแพร่จริง)
+      const created = await provider.createPost({
+        videoUrl: videoAbsoluteUrl,
+        caption,
+        hashtags,
+      });
+
+      const published = await provider.publishPost(created.externalPostId);
+
+      // ห้ามรายงาน published ถ้า provider ไม่ยืนยันสถานะ published จริง
+      if (published.status !== "published") {
+        markSocialPostFailed(
+          postRecord.id,
+          "แพลตฟอร์มยังไม่ยืนยันสถานะเผยแพร่ (อยู่ระหว่างประมวลผล)"
+        );
+
+        return NextResponse.json(
+          {
+            success: false,
+            platform,
+            status: "processing",
+            postId: published.externalPostId,
+            message: "โพสต์กำลังประมวลผลอยู่ ยังไม่ได้รับการยืนยันว่าเผยแพร่สำเร็จ",
+          },
+          { status: 202 }
+        );
+      }
+
+      // 9. + 10. รับ platform post ID และคืนผลลัพธ์จริง
+      markSocialPostPublished(postRecord.id, published.externalPostId);
+
+      return NextResponse.json({
+        success: true,
+        platform,
+        status: "published",
+        postId: published.externalPostId,
+        message: "โพสต์สำเร็จ",
+      });
+    } catch (error) {
+      const message =
+        error instanceof ProviderNotConfiguredError
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : "ไม่สามารถโพสต์ไปยังแพลตฟอร์มได้";
+
+      markSocialPostFailed(postRecord.id, message);
+
+      console.error(`POST /api/social/post (${platform}) error:`, message);
+
+      return NextResponse.json(
+        { success: false, platform, status: "failed", message },
+        { status: 502 }
+      );
+    }
+  } catch (error) {
+    console.error("POST /api/social/post error:", error);
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "ไม่สามารถโพสต์ไปยังแพลตฟอร์มได้",
+      },
+      { status: 500 }
+    );
+  }
+}

@@ -1,0 +1,90 @@
+﻿import OpenAI from "openai";
+import { NextResponse } from "next/server";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+
+    const product = body.product;
+
+    if (!product || !product.name) {
+      return NextResponse.json(
+        { error: "ไม่พบข้อมูลสินค้า" },
+        { status: 400 }
+      );
+    }
+
+    const tone = String(body.tone || "premium");
+
+    const prompt = [
+      "คุณคือผู้เชี่ยวชาญด้านการทำคอนเทนต์วัตถุมงคลไทยของร้าน THAI AMULET TH",
+      "",
+      "สร้างคอนเทนต์สำหรับสินค้าต่อไปนี้",
+      "",
+      "ชื่อสินค้า: " + String(product.name || "-"),
+      "รุ่น: " + String(product.model || "-"),
+      "พระอาจารย์/สำนัก: " + String(product.master || "-"),
+      "ปี: " + String(product.year || "-"),
+      "รายละเอียด: " + String(product.description || "-"),
+      "ราคา: " + String(product.price || 0) + " บาท",
+      "สต็อก: " + String(product.stock || 0) + " ชิ้น",
+      "",
+      "โทนภาษา: " + tone,
+      "",
+      "สร้างผลลัพธ์ 4 ส่วน:",
+      "1. Facebook Post",
+      "2. Reels",
+      "3. TikTok",
+      "4. สคริปต์พูด",
+      "",
+      "เขียนเป็นภาษาไทย อ่านง่าย น่าเชื่อถือ",
+      "เคารพความเชื่อ",
+      "ห้ามกล่าวอ้างสรรพคุณเหนือธรรมชาติเป็นข้อเท็จจริง",
+      "ห้ามแต่งข้อมูลประวัติ ปีสร้าง พระอาจารย์ หรือพิธีปลุกเสกที่ไม่มีอยู่ในข้อมูลสินค้า",
+      "ใช้เฉพาะข้อมูลที่ได้รับ",
+      "",
+      "ตอบเป็น JSON เท่านั้นในรูปแบบ:",
+      '{ "facebook": "...", "reels": "...", "tiktok": "...", "script": "..." }',
+    ].join("\n");
+
+    const response = await openai.responses.create({
+      model: "gpt-5-mini",
+      input: prompt,
+    });
+
+    const text = response.output_text;
+
+    let content;
+
+    try {
+      content = JSON.parse(text);
+    } catch {
+      return NextResponse.json(
+  {
+    error:
+      error instanceof Error
+        ? error.message
+        : String(error),
+  },
+  { status: 500 }
+);
+    }
+
+    return NextResponse.json({
+      content,
+    });
+  } catch (error) {
+    console.error("POST /api/content/generate error:", error);
+
+    return NextResponse.json(
+      {
+        error: "ไม่สามารถสร้างคอนเทนต์ด้วย AI ได้",
+      },
+      { status: 500 }
+    );
+  }
+}

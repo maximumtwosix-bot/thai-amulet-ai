@@ -1,0 +1,241 @@
+import { NextResponse } from "next/server";
+import { stat } from "node:fs/promises";
+import path from "node:path";
+import db from "@/lib/db";
+import {
+  isValidGeneratedVideoUrl,
+  isValidPlatform,
+  MAX_CAPTION_LENGTH,
+  type SocialPlatform,
+} from "@/lib/socialContent";
+import { listSocialPosts, scheduleSocialPost } from "@/lib/socialQueue";
+import type { SocialPostStatus } from "@/lib/socialPosts";
+
+export const runtime = "nodejs";
+
+const VALID_STATUSES: SocialPostStatus[] = [
+  "draft",
+  "scheduled",
+  "processing",
+  "published",
+  "failed",
+  "cancelled",
+];
+
+function isValidStatus(value: string): value is SocialPostStatus {
+  return (VALID_STATUSES as string[]).includes(value);
+}
+
+type QueueRequest = {
+  productId?: number;
+  platform?: string;
+  videoUrl?: string;
+  caption?: string;
+  hashtags?: string[];
+  scheduledAt?: string;
+};
+
+export async function POST(request: Request) {
+  try {
+    // STEP 18.11: จับ malformed JSON แยกจาก error อื่นๆ — คืน 400 ไม่ leak ข้อความ parser ดิบ
+    let body: QueueRequest;
+
+    try {
+      body = (await request.json()) as QueueRequest;
+    } catch {
+      return NextResponse.json(
+        { error: "รูปแบบคำขอไม่ถูกต้อง (ต้องเป็น JSON)" },
+        { status: 400 }
+      );
+    }
+
+    const productId = Number(body.productId || 0);
+    const platformRaw = String(body.platform || "").trim().toLowerCase();
+    const videoUrl = String(body.videoUrl || "").trim();
+    const caption = String(body.caption || "").trim();
+    const hashtags = Array.isArray(body.hashtags)
+      ? body.hashtags.filter((tag) => typeof tag === "string")
+      : [];
+    const scheduledAtRaw = String(body.scheduledAt || "").trim();
+
+    // 1. validate productId (ต้องมีสินค้านี้อยู่จริง ไม่ใช่แค่รูปแบบตัวเลขถูกต้อง)
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return NextResponse.json(
+        { error: "กรุณาระบุรหัสสินค้าให้ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    const product = db
+      .prepare("SELECT id FROM products WHERE id = ?")
+      .get(productId) as { id: number } | undefined;
+
+    if (!product) {
+      return NextResponse.json(
+        { error: `ไม่พบสินค้ารหัส ${productId}` },
+        { status: 404 }
+      );
+    }
+
+    // 2. validate platform
+    if (!isValidPlatform(platformRaw)) {
+      return NextResponse.json(
+        {
+          error:
+            'platform ไม่ถูกต้อง — รองรับเฉพาะ "facebook", "reels", "instagram", "tiktok" เท่านั้น',
+        },
+        { status: 400 }
+      );
+    }
+
+    const platform: SocialPlatform = platformRaw;
+
+    // 3. validate videoUrl (รูปแบบ + ไฟล์มีอยู่จริงบนดิสก์ — ไม่รับ path จาก client ตรงๆ โดยไม่ตรวจ)
+    if (!isValidGeneratedVideoUrl(videoUrl)) {
+      return NextResponse.json({ error: "videoUrl ไม่ถูกต้อง" }, { status: 400 });
+    }
+
+    const videoFilePath = path.join(
+      process.cwd(),
+      "public",
+      videoUrl.replace(/^\/+/, "")
+    );
+
+    try {
+      const stats = await stat(videoFilePath);
+
+      if (!stats.isFile() || stats.size <= 0) {
+        throw new Error("empty or invalid file");
+      }
+    } catch {
+      return NextResponse.json(
+        { error: "ไม่พบไฟล์วิดีโอที่ระบุบนดิสก์จริง" },
+        { status: 400 }
+      );
+    }
+
+    // 4. validate caption
+    if (!caption) {
+      return NextResponse.json(
+        { error: "กรุณาระบุ caption สำหรับโพสต์" },
+        { status: 400 }
+      );
+    }
+
+    if (caption.length > MAX_CAPTION_LENGTH) {
+      return NextResponse.json(
+        { error: `caption ยาวเกินไป (สูงสุด ${MAX_CAPTION_LENGTH} ตัวอักษร)` },
+        { status: 400 }
+      );
+    }
+
+    // 5. validate scheduledAt — ต้องเป็น ISO date ที่ parse ได้จริง และต้องเป็นเวลาในอนาคตเท่านั้น
+    if (!scheduledAtRaw) {
+      return NextResponse.json(
+        { error: "กรุณาระบุเวลาที่ต้องการโพสต์ (scheduledAt)" },
+        { status: 400 }
+      );
+    }
+
+    const scheduledDate = new Date(scheduledAtRaw);
+
+    if (Number.isNaN(scheduledDate.getTime())) {
+      return NextResponse.json(
+        { error: "รูปแบบ scheduledAt ไม่ถูกต้อง (ต้องเป็น ISO date string)" },
+        { status: 400 }
+      );
+    }
+
+    if (scheduledDate.getTime() <= Date.now()) {
+      return NextResponse.json(
+        { error: "scheduledAt ต้องเป็นเวลาในอนาคตเท่านั้น" },
+        { status: 400 }
+      );
+    }
+
+    const queuedPost = scheduleSocialPost({
+      productId,
+      platform,
+      videoUrl,
+      caption,
+      hashtags,
+      scheduledAt: scheduledDate.toISOString(),
+    });
+
+    return NextResponse.json({ success: true, post: queuedPost }, { status: 201 });
+  } catch (error) {
+    console.error("POST /api/social/queue error:", error);
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "ไม่สามารถตั้งเวลาโพสต์ได้",
+      },
+      { status: 500 }
+    );
+  }
+}
+
+export async function GET(request: Request) {
+  try {
+    const url = new URL(request.url);
+
+    const platformParam = url.searchParams.get("platform");
+    const statusParam = url.searchParams.get("status");
+    const productIdParam = url.searchParams.get("productId");
+
+    if (platformParam && !isValidPlatform(platformParam)) {
+      return NextResponse.json(
+        { error: "platform ไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    if (statusParam && !isValidStatus(statusParam)) {
+      return NextResponse.json(
+        { error: "status ไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    let productId: number | undefined;
+
+    if (productIdParam) {
+      productId = Number(productIdParam);
+
+      if (!Number.isInteger(productId) || productId <= 0) {
+        return NextResponse.json(
+          { error: "productId ไม่ถูกต้อง" },
+          { status: 400 }
+        );
+      }
+    }
+
+    const pageParam = Number(url.searchParams.get("page") || "1");
+    const pageSizeParam = Number(url.searchParams.get("pageSize") || "20");
+
+    const page = Number.isInteger(pageParam) && pageParam > 0 ? pageParam : 1;
+    const pageSize =
+      Number.isInteger(pageSizeParam) && pageSizeParam > 0 && pageSizeParam <= 100
+        ? pageSizeParam
+        : 20;
+
+    const result = listSocialPosts(
+      {
+        platform: (platformParam as SocialPlatform) || undefined,
+        status: (statusParam as SocialPostStatus) || undefined,
+        productId,
+      },
+      { page, pageSize }
+    );
+
+    return NextResponse.json({ success: true, ...result });
+  } catch (error) {
+    console.error("GET /api/social/queue error:", error);
+
+    return NextResponse.json(
+      { error: "ไม่สามารถโหลด Social Post Queue ได้" },
+      { status: 500 }
+    );
+  }
+}

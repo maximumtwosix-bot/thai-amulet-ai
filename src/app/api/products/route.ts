@@ -1,0 +1,441 @@
+﻿import { NextResponse } from "next/server";
+import db from "@/lib/db";
+
+export async function GET() {
+  try {
+    const products = db
+      .prepare(`
+        SELECT
+          id,
+          name,
+          model,
+          master,
+          year,
+          description,
+          price,
+          cost,
+          stock,
+          low_stock_threshold,
+          category,
+          status,
+          created_at,
+          updated_at
+        FROM products
+        ORDER BY id DESC
+      `)
+      .all();
+
+    return NextResponse.json(products);
+  } catch (error) {
+    console.error("GET /api/products error:", error);
+
+    return NextResponse.json(
+      { error: "ไม่สามารถโหลดข้อมูลสินค้าได้" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    let body: any;
+
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: "รูปแบบคำขอไม่ถูกต้อง (ต้องเป็น JSON)" },
+        { status: 400 }
+      );
+    }
+
+    const name = String(body.name ?? "").trim();
+    const model = String(body.model ?? "").trim();
+    const master = String(body.master ?? "").trim();
+    const year = String(body.year ?? "").trim();
+    const description = String(body.description ?? "").trim();
+
+    const price = Number(body.price ?? 0);
+    const cost = Number(body.cost ?? 0);
+    const stock = Number(body.stock ?? 0);
+    const lowStockThreshold = Number(body.lowStockThreshold ?? 0);
+
+    if (!name) {
+      return NextResponse.json(
+        { error: "กรุณาระบุชื่อสินค้า" },
+        { status: 400 }
+      );
+    }
+
+    if (!Number.isFinite(price) || price < 0) {
+      return NextResponse.json(
+        { error: "ราคาสินค้าไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    if (!Number.isFinite(cost) || cost < 0) {
+      return NextResponse.json(
+        { error: "ต้นทุนสินค้าไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    if (!Number.isInteger(stock) || stock < 0) {
+      return NextResponse.json(
+        { error: "จำนวนสต็อกต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป" },
+        { status: 400 }
+      );
+    }
+
+    // STEP 23 — เกณฑ์แจ้งเตือนสต็อกต่ำ ต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไปเหมือน stock ทุกประการ
+    if (!Number.isInteger(lowStockThreshold) || lowStockThreshold < 0) {
+      return NextResponse.json(
+        { error: "เกณฑ์แจ้งเตือนสต็อกต่ำต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป" },
+        { status: 400 }
+      );
+    }
+
+    const status = stock > 0 ? "active" : "out_of_stock";
+
+    const result = db
+      .prepare(`
+        INSERT INTO products
+          (
+            name,
+            model,
+            master,
+            year,
+            description,
+            price,
+            cost,
+            stock,
+            low_stock_threshold,
+            category,
+            status
+          )
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        name,
+        model,
+        master,
+        year,
+        description,
+        price,
+        cost,
+        stock,
+        lowStockThreshold,
+        "วัตถุมงคล",
+        status
+      );
+
+    const product = db
+      .prepare(`
+        SELECT
+          id,
+          name,
+          model,
+          master,
+          year,
+          description,
+          price,
+          cost,
+          stock,
+          low_stock_threshold,
+          category,
+          status,
+          created_at,
+          updated_at
+        FROM products
+        WHERE id = ?
+      `)
+      .get(result.lastInsertRowid);
+
+    return NextResponse.json(product, { status: 201 });
+  } catch (error) {
+    console.error("POST /api/products error:", error);
+
+    return NextResponse.json(
+      { error: "ไม่สามารถเพิ่มสินค้าได้" },
+      { status: 500 }
+    );
+  }
+}
+
+// STEP 30 — PATCH /api/products?id=<id> แก้ไขข้อมูลสินค้าที่มีอยู่แล้วเท่านั้น (ไม่สร้างใหม่)
+// ใช้ validation แบบเดียวกับ POST ทุกประการ — ไม่รับ id/status/created_at/updated_at จากฝั่ง client
+// โดยตรง: id มาจาก query string เท่านั้น (validate แยกเหมือน DELETE), status คำนวณจาก stock เสมอ
+// เหมือน POST, created_at/updated_at ไม่รับค่าจาก client เลย (updated_at ให้ SQL ตั้งเป็น
+// CURRENT_TIMESTAMP ที่ query ตรงๆ)
+//
+// ทุกค่าอ้างด้วยชื่อ key ที่ชัดเจนตลอดทาง (body.name, body.model, ...) ไม่ใช้ array/index mapping
+// เพื่อกันไม่ให้ field สลับกันได้ — ลำดับ column ใน UPDATE ... SET กับลำดับ argument ใน .run()
+// ต้องตรงกันเป๊ะเสมอ (name, model, master, year, description, price, cost, stock, status, id)
+export async function PATCH(request: Request) {
+  try {
+    const url = new URL(request.url);
+    const id = Number(url.searchParams.get("id"));
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return NextResponse.json(
+        { error: "รหัสสินค้าไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    const existing = db
+      .prepare("SELECT id, low_stock_threshold FROM products WHERE id = ?")
+      .get(id) as { id: number; low_stock_threshold: number } | undefined;
+
+    if (!existing) {
+      return NextResponse.json(
+        { error: `ไม่พบสินค้ารหัส ${id}` },
+        { status: 404 }
+      );
+    }
+
+    let body: any;
+
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: "รูปแบบคำขอไม่ถูกต้อง (ต้องเป็น JSON)" },
+        { status: 400 }
+      );
+    }
+
+    const name = String(body.name ?? "").trim();
+    const model = String(body.model ?? "").trim();
+    const master = String(body.master ?? "").trim();
+    const year = String(body.year ?? "").trim();
+    const description = String(body.description ?? "").trim();
+
+    const price = Number(body.price ?? 0);
+    const cost = Number(body.cost ?? 0);
+    const stock = Number(body.stock ?? 0);
+
+    // STEP 23 — ต่างจาก field อื่นด้านบนที่ default เป็น 0 เมื่อไม่ส่งมา: threshold นี้ default เป็น
+    // "ค่าเดิมของสินค้ารายการนี้" แทน เพื่อไม่ให้ caller ที่ยังไม่รู้จัก field ใหม่นี้ (เช่น integration
+    // เก่า หรือการเรียก API ตรงๆ ที่ไม่ได้ตั้งใจแตะ threshold) ทำให้ threshold ที่ตั้งไว้ก่อนหน้าถูก
+    // เผลอรีเซ็ตเป็น 0 โดยไม่ได้ตั้งใจ — ฟอร์มแก้ไขสินค้าใน products/page.tsx ส่งค่าปัจจุบันมาเสมออยู่แล้ว
+    const lowStockThreshold =
+      body.lowStockThreshold === undefined
+        ? existing.low_stock_threshold
+        : Number(body.lowStockThreshold);
+
+    if (!name) {
+      return NextResponse.json(
+        { error: "กรุณาระบุชื่อสินค้า" },
+        { status: 400 }
+      );
+    }
+
+    if (!Number.isFinite(price) || price < 0) {
+      return NextResponse.json(
+        { error: "ราคาสินค้าไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    if (!Number.isFinite(cost) || cost < 0) {
+      return NextResponse.json(
+        { error: "ต้นทุนสินค้าไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    if (!Number.isInteger(stock) || stock < 0) {
+      return NextResponse.json(
+        { error: "จำนวนสต็อกต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป" },
+        { status: 400 }
+      );
+    }
+
+    if (!Number.isInteger(lowStockThreshold) || lowStockThreshold < 0) {
+      return NextResponse.json(
+        { error: "เกณฑ์แจ้งเตือนสต็อกต่ำต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป" },
+        { status: 400 }
+      );
+    }
+
+    // status ไม่รับจาก client เด็ดขาด — คำนวณจาก stock เสมอ เหมือน POST /api/products ทุกประการ
+    const status = stock > 0 ? "active" : "out_of_stock";
+
+    db.prepare(
+      `
+        UPDATE products
+        SET
+          name = ?,
+          model = ?,
+          master = ?,
+          year = ?,
+          description = ?,
+          price = ?,
+          cost = ?,
+          stock = ?,
+          low_stock_threshold = ?,
+          status = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `
+    ).run(
+      name,
+      model,
+      master,
+      year,
+      description,
+      price,
+      cost,
+      stock,
+      lowStockThreshold,
+      status,
+      id
+    );
+
+    const product = db
+      .prepare(`
+        SELECT
+          id,
+          name,
+          model,
+          master,
+          year,
+          description,
+          price,
+          cost,
+          stock,
+          low_stock_threshold,
+          category,
+          status,
+          created_at,
+          updated_at
+        FROM products
+        WHERE id = ?
+      `)
+      .get(id);
+
+    return NextResponse.json({ success: true, product });
+  } catch (error) {
+    console.error("PATCH /api/products error:", error);
+
+    return NextResponse.json(
+      { error: "ไม่สามารถแก้ไขสินค้าได้" },
+      { status: 500 }
+    );
+  }
+}
+
+// STEP 27.1 — ทุกตารางนี้มี FOREIGN KEY (product_id) REFERENCES products(id) แบบ NO ACTION
+// (ดู src/lib/db.ts) ไม่มีตารางไหนตั้ง ON DELETE CASCADE เลยโดยเจตนา — ตรวจสอบแล้วว่า
+// ai_cost_ledger (ประวัติต้นทุน AI จริง ผูกกับ costLedger.ts) และ content_plans (แผนคอนเทนต์ที่มี
+// ค่าทางธุรกิจจริง) ต้องไม่ถูกลบทิ้งตามสินค้าเด็ดขาด ส่วนตารางอื่นที่เหลือก็เป็นประวัติการใช้งานจริง
+// เช่นกัน (คำสั่งซื้อ/โพสต์/ปฏิทิน/งานวิดีโอ AI/คอนเทนต์ที่สร้างจากสินค้านี้) จึงตรวจสอบทุกตารางแบบ
+// เดียวกัน ไม่ cascade ตัวไหนทั้งสิ้น — ใช้เพื่อ "อ่าน" ว่ามีข้อมูลลูกจริงหรือไม่ก่อนพยายามลบ เพื่อคืน
+// ข้อความที่บอกสาเหตุจริงจากข้อมูลจริง ไม่ใช่ข้อความกำกวมที่เดาไว้ล่วงหน้า
+const PRODUCT_REFERENCE_TABLES: Array<{ table: string; label: string }> = [
+  { table: "order_items", label: "รายการคำสั่งซื้อ" },
+  { table: "product_media", label: "รูปภาพสินค้า" },
+  { table: "social_posts", label: "โพสต์บนโซเชียล" },
+  { table: "content_calendar", label: "ปฏิทินคอนเทนต์" },
+  { table: "ai_video_jobs", label: "งานสร้างวิดีโอ AI" },
+  { table: "content_plans", label: "แผนคอนเทนต์" },
+  { table: "ai_cost_ledger", label: "ประวัติต้นทุน AI" },
+  { table: "content", label: "คอนเทนต์ที่สร้างจากสินค้านี้" },
+  // STEP 21 — transactions.product_id (STEP 19) เป็นอีกตารางที่อ้างอิง product_id เดียวกัน
+  // (รายรับ-รายจ่ายจริงที่ผูกกับสินค้านี้) ต้องกันไว้ในรายการเดียวกันนี้ด้วยเหตุผลเดียวกันทุกประการ —
+  // ไม่เช่นนั้นจะลบสินค้าที่มีประวัติการเงินจริงผูกอยู่ได้ ทำให้ transactions.product_id เหลือค้างเป็น
+  // ค่าที่ไม่มีสินค้าจริงรองรับ (ข้อมูลการเงินต้องไม่สูญหาย/เสียหายจากการลบสินค้าเด็ดขาด)
+  { table: "transactions", label: "รายการรายรับ-รายจ่าย" },
+];
+
+function findProductReferences(productId: number): string[] {
+  const labels: string[] = [];
+
+  for (const { table, label } of PRODUCT_REFERENCE_TABLES) {
+    const row = db
+      .prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE product_id = ?`)
+      .get(productId) as { c: number };
+
+    if (row.c > 0) {
+      labels.push(label);
+    }
+  }
+
+  return labels;
+}
+
+function referenceBlockedMessage(labels: string[]): string {
+  const detail = labels.length > 0 ? labels.join(", ") : "ข้อมูลที่เกี่ยวข้อง";
+
+  return `ไม่สามารถลบสินค้านี้ได้ เนื่องจากมีประวัติการใช้งานในระบบ (${detail}) เพื่อป้องกันข้อมูลสำคัญสูญหาย`;
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const url = new URL(request.url);
+    const id = Number(url.searchParams.get("id"));
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return NextResponse.json(
+        { error: "รหัสสินค้าไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    // ตรวจสอบข้อมูลลูกจริงจากฐานข้อมูลก่อนพยายามลบ (ไม่ใช่การเดา) เพื่อให้ข้อความ error บอก
+    // สาเหตุจริงที่ตรงกับสินค้ารายการนี้ — ยังคงพึ่ง FOREIGN KEY constraint ของ SQLite เป็นกลไก
+    // บังคับจริงเสมอ (ดู catch ด้านล่าง) การเช็คนี้เป็นแค่ชั้นอ่านข้อมูลเพื่อสื่อสาเหตุ ไม่ใช่การ
+    // ตัดสินใจแทน constraint
+    const referenceLabels = findProductReferences(id);
+
+    if (referenceLabels.length > 0) {
+      return NextResponse.json(
+        { error: referenceBlockedMessage(referenceLabels) },
+        { status: 409 }
+      );
+    }
+
+    const result = db
+      .prepare("DELETE FROM products WHERE id = ?")
+      .run(id);
+
+    if (result.changes === 0) {
+      return NextResponse.json(
+        { error: "ไม่พบสินค้าที่ต้องการลบ" },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    // STEP 26.9/27.1 fix: SQLite บล็อกการลบ product ที่ยังมีแถวลูกอ้างอิงอยู่จริง (FOREIGN KEY
+    // constraint, ตรวจสอบแล้วว่า foreign_keys pragma ของ better-sqlite3 build นี้ enabled by
+    // default) — เผื่อกรณี race condition ที่แถวลูกถูกสร้างขึ้นระหว่างเช็คด้านบนกับตอนลบจริง จับ
+    // error code นี้แยกออกมาคืน 409 พร้อมข้อความที่สื่อความหมายชัดเจนเช่นเดียวกับด้านบน แทนที่จะ
+    // ปล่อยให้ตกไปที่ 500 ทั่วไปที่ไม่บอกสาเหตุ ไม่ได้ลบ/เปลี่ยน constraint หรือ cascade ข้อมูลใดๆ
+    // ทั้งสิ้น
+    if (
+      error instanceof Error &&
+      (error as { code?: string }).code === "SQLITE_CONSTRAINT_FOREIGNKEY"
+    ) {
+      const url = new URL(request.url);
+      const id = Number(url.searchParams.get("id"));
+      const referenceLabels = Number.isInteger(id) ? findProductReferences(id) : [];
+
+      return NextResponse.json(
+        { error: referenceBlockedMessage(referenceLabels) },
+        { status: 409 }
+      );
+    }
+
+    console.error("DELETE /api/products error:", error);
+
+    return NextResponse.json(
+      { error: "ไม่สามารถลบสินค้าได้" },
+      { status: 500 }
+    );
+  }
+}

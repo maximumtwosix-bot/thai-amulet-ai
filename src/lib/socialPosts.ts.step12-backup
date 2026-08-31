@@ -1,0 +1,83 @@
+import db from "@/lib/db";
+import type { SocialPlatform } from "@/lib/socialContent";
+
+export type SocialPostStatus = "draft" | "posting" | "published" | "failed";
+
+export type SocialPostRow = {
+  id: number;
+  productId: number;
+  platform: SocialPlatform;
+  videoUrl: string;
+  caption: string;
+  status: SocialPostStatus;
+  externalPostId: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  publishedAt: string | null;
+};
+
+type DbRow = {
+  id: number;
+  product_id: number;
+  platform: string;
+  video_url: string;
+  caption: string;
+  status: string;
+  external_post_id: string | null;
+  error_message: string | null;
+  created_at: string;
+  published_at: string | null;
+};
+
+function toRow(row: DbRow): SocialPostRow {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    platform: row.platform as SocialPlatform,
+    videoUrl: row.video_url,
+    caption: row.caption,
+    status: row.status as SocialPostStatus,
+    externalPostId: row.external_post_id,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+    publishedAt: row.published_at,
+  };
+}
+
+export function insertSocialPost(params: {
+  productId: number;
+  platform: SocialPlatform;
+  videoUrl: string;
+  caption: string;
+  status: SocialPostStatus;
+}): SocialPostRow {
+  const result = db
+    .prepare(
+      `INSERT INTO social_posts (product_id, platform, video_url, caption, status)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(params.productId, params.platform, params.videoUrl, params.caption, params.status);
+
+  const row = db
+    .prepare("SELECT * FROM social_posts WHERE id = ?")
+    .get(result.lastInsertRowid) as DbRow;
+
+  return toRow(row);
+}
+
+export function markSocialPostPublished(
+  id: number,
+  externalPostId: string
+): void {
+  db.prepare(
+    `UPDATE social_posts
+     SET status = 'published', external_post_id = ?, published_at = CURRENT_TIMESTAMP, error_message = NULL
+     WHERE id = ?`
+  ).run(externalPostId, id);
+}
+
+export function markSocialPostFailed(id: number, errorMessage: string): void {
+  db.prepare(
+    `UPDATE social_posts SET status = 'failed', error_message = ? WHERE id = ?`
+  ).run(errorMessage, id);
+}

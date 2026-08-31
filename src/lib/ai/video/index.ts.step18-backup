@@ -1,0 +1,14 @@
+import { ReplicateVideoProvider } from "@/lib/ai/video/replicateProvider";
+import type { VideoGenerationProvider } from "@/lib/ai/video/provider";
+
+const provider = new ReplicateVideoProvider();
+
+export function getVideoProvider(): VideoGenerationProvider {
+  return provider;
+}
+
+export type {
+  VideoGenerationProvider,
+  VideoProviderStatus,
+  VideoJobStatusResult,
+} from "@/lib/ai/video/provider";

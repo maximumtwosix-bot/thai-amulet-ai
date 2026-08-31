@@ -1,0 +1,53 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# STEP 24 — runtime data, not source code. data/*.db* holds real business data (products, orders,
+# transactions) and SQLite WAL/SHM journal files that are machine/session-specific and must never be
+# committed. public/generated/** is user-uploaded and AI-generated media written at runtime by the
+# app itself (product photos, AI images/video, voice audio, transaction receipt/slip attachments) —
+# regenerable, potentially large, and can contain real business/financial documents.
+/data/
+/public/generated/
+
+# Playwright MCP tool output (console logs / page snapshots from interactive testing sessions) —
+# ephemeral test-tool exhaust, not source code or a fixture the project depends on.
+/.playwright-mcp/

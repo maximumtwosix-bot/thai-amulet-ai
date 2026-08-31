@@ -1,0 +1,86 @@
+// Income & Expense — STEP 19 — schema-foundation constants only.
+//
+// This file intentionally contains NO database access and NO insert/update/delete functions.
+// It exists purely so the `transactions` table's TEXT columns (transaction_type/category/
+// sales_channel) have one authoritative, typed list of allowed values to import from, matching
+// this codebase's existing convention (StockMovementType in inventory.ts, AiCostOperation in
+// costLedger.ts) of validating enum-like TEXT columns in the TS layer rather than with SQL CHECK
+// constraints. The actual read/write logic (recordTransaction(), etc.) belongs to STEP 20.
+
+export type TransactionType = "income" | "expense";
+
+export const TRANSACTION_TYPES: TransactionType[] = ["income", "expense"];
+
+export function isValidTransactionType(value: string): value is TransactionType {
+  return (TRANSACTION_TYPES as string[]).includes(value);
+}
+
+export type ExpenseCategory =
+  | "PRODUCT_PURCHASE"
+  | "SHIPPING"
+  | "COD_FEE"
+  | "RETURNED_PARCEL"
+  | "PACKAGING"
+  | "FACEBOOK_ADS"
+  | "FUEL"
+  | "OTHER";
+
+export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
+  "PRODUCT_PURCHASE",
+  "SHIPPING",
+  "COD_FEE",
+  "RETURNED_PARCEL",
+  "PACKAGING",
+  "FACEBOOK_ADS",
+  "FUEL",
+  "OTHER",
+];
+
+export function isValidExpenseCategory(value: string): value is ExpenseCategory {
+  return (EXPENSE_CATEGORIES as string[]).includes(value);
+}
+
+export type IncomeCategory = "PRODUCT_SALE" | "OTHER_INCOME";
+
+export const INCOME_CATEGORIES: IncomeCategory[] = ["PRODUCT_SALE", "OTHER_INCOME"];
+
+export function isValidIncomeCategory(value: string): value is IncomeCategory {
+  return (INCOME_CATEGORIES as string[]).includes(value);
+}
+
+export type TransactionCategory = ExpenseCategory | IncomeCategory;
+
+export function isValidTransactionCategory(
+  type: TransactionType,
+  value: string
+): value is TransactionCategory {
+  return type === "income" ? isValidIncomeCategory(value) : isValidExpenseCategory(value);
+}
+
+// Business sales channel — deliberately separate from the existing social-platform enums
+// (SocialPlatform in video-studio/page.tsx: facebook/reels/instagram/tiktok, used for content
+// posting) since this represents where a *sale* happened, not where content was *posted*. Kept
+// as a plain string union (not a DB-backed table) per instructions — extensible by adding a value
+// here later, same pattern as the category lists above.
+export type SalesChannel =
+  | "facebook"
+  | "tiktok_shop"
+  | "shopee"
+  | "lazada"
+  | "line"
+  | "walk_in"
+  | "other";
+
+export const SALES_CHANNELS: SalesChannel[] = [
+  "facebook",
+  "tiktok_shop",
+  "shopee",
+  "lazada",
+  "line",
+  "walk_in",
+  "other",
+];
+
+export function isValidSalesChannel(value: string): value is SalesChannel {
+  return (SALES_CHANNELS as string[]).includes(value);
+}

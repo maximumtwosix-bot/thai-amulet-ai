@@ -1,0 +1,238 @@
+import db from "@/lib/db";
+
+type ProductMediaRow = {
+  id: number;
+  product_id: number;
+  file_name: string;
+  image_url: string;
+  is_primary: number;
+  source: string;
+  type: string;
+  created_at: string;
+};
+
+export type ProductMediaSource = "product" | "ai";
+export type ProductMediaType = "image" | "video";
+
+export type ProductMediaItem = {
+  id: number;
+  productId: number;
+  fileName: string;
+  url: string;
+  type: ProductMediaType;
+  source: ProductMediaSource;
+  isPrimary: boolean;
+  createdAt: string;
+};
+
+const SELECT_COLUMNS =
+  "id, product_id, file_name, image_url, is_primary, source, type, created_at";
+
+function mapRow(row: ProductMediaRow): ProductMediaItem {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    fileName: row.file_name,
+    url: row.image_url,
+    type: row.type === "video" ? "video" : "image",
+    source: row.source === "ai" ? "ai" : "product",
+    isPrimary: row.is_primary === 1,
+    createdAt: row.created_at,
+  };
+}
+
+/**
+ * รายการสื่อจริงของสินค้า เรียงลำดับ primary ก่อน แล้วตามด้วยเวลาที่อัปโหลด (เก่าไปใหม่)
+ * — ลำดับนี้คือลำดับที่ /api/video/auto ใช้สร้าง Timeline โดยตรง ไม่ต้องเรียงซ้ำที่อื่น
+ */
+export function listProductMedia(productId: number): ProductMediaItem[] {
+  const rows = db
+    .prepare(
+      `SELECT ${SELECT_COLUMNS} FROM product_media
+       WHERE product_id = ?
+       ORDER BY is_primary DESC, created_at ASC, id ASC`
+    )
+    .all(productId) as ProductMediaRow[];
+
+  return rows.map(mapRow);
+}
+
+export function getProductMediaById(
+  productId: number,
+  mediaId: number
+): ProductMediaItem | undefined {
+  const row = db
+    .prepare(`SELECT ${SELECT_COLUMNS} FROM product_media WHERE id = ? AND product_id = ?`)
+    .get(mediaId, productId) as ProductMediaRow | undefined;
+
+  return row ? mapRow(row) : undefined;
+}
+
+/**
+ * บันทึกสื่อสินค้าใหม่ (ไฟล์ต้องถูกเขียนลงดิสก์เรียบร้อยแล้วก่อนเรียกฟังก์ชันนี้)
+ *
+ * กติกาการตั้ง primary (STEP 14 — แก้ปัญหาที่ STEP 13 เคยระบุไว้):
+ *   - รูปอัปโหลดจริง ("product"): ถ้าสินค้ายัง "ไม่มีรูปจริงตัวไหนเป็น primary เลย" (ไม่ว่าจะเพราะ
+ *     ยังไม่มีสื่อเลย หรือมีแต่รูป AI ที่ไม่เคยเป็น primary ได้อยู่แล้ว) รูปจริงที่อัปโหลดใหม่นี้จะถูก
+ *     เลื่อนเป็น primary "แทนที่" ของเดิมทันที (demote รูปเดิมที่เคย primary ก่อนเสมอ ถ้ามี)
+ *   - รูปที่สร้างด้วย AI ("ai"): "ไม่มีทาง" ถูกตั้งเป็น primary อัตโนมัติเด็ดขาด แม้สินค้าจะยังไม่มี
+ *     สื่ออื่นเลยก็ตาม — รูปสินค้าจริงต้องมี priority เหนือ AI เสมอ
+ */
+export function insertProductMedia(params: {
+  productId: number;
+  fileName: string;
+  imageUrl: string;
+  source?: ProductMediaSource;
+  type?: ProductMediaType;
+}): ProductMediaItem {
+  const source: ProductMediaSource = params.source === "ai" ? "ai" : "product";
+  const type: ProductMediaType = params.type === "video" ? "video" : "image";
+
+  const hasPrimaryProduct =
+    source === "product"
+      ? ((
+          db
+            .prepare(
+              `SELECT COUNT(*) as count FROM product_media
+               WHERE product_id = ? AND source = 'product' AND is_primary = 1`
+            )
+            .get(params.productId) as { count: number }
+        ).count > 0)
+      : true; // ไม่เกี่ยวกับ AI — จะไม่ได้ primary อยู่แล้วไม่ว่ากรณีใด
+
+  const shouldBePrimary = source === "product" && !hasPrimaryProduct;
+
+  const insert = db.transaction(() => {
+    if (shouldBePrimary) {
+      // demote รูปที่เคย primary อยู่ก่อน (ถ้ามี — เช่นกรณี edge case ที่ข้อมูลเก่าผิดเพี้ยน)
+      db.prepare(
+        `UPDATE product_media SET is_primary = 0 WHERE product_id = ? AND is_primary = 1`
+      ).run(params.productId);
+    }
+
+    const result = db
+      .prepare(
+        `INSERT INTO product_media (product_id, file_name, image_url, is_primary, source, type)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        params.productId,
+        params.fileName,
+        params.imageUrl,
+        shouldBePrimary ? 1 : 0,
+        source,
+        type
+      );
+
+    return result.lastInsertRowid;
+  });
+
+  const insertedId = insert();
+
+  const row = db
+    .prepare(`SELECT ${SELECT_COLUMNS} FROM product_media WHERE id = ?`)
+    .get(insertedId) as ProductMediaRow;
+
+  return mapRow(row);
+}
+
+/**
+ * ลบสื่อสินค้า 1 รายการ — คืนแถวที่ลบไปแล้ว (เพื่อให้ route เอา fileName ไปลบไฟล์จริงบนดิสก์ต่อ)
+ * หรือ undefined ถ้าไม่พบ (รวมถึงกรณี mediaId มีอยู่จริงแต่เป็นของสินค้าอื่น — กันไม่ให้ลบข้ามสินค้า)
+ *
+ * ถ้ารายการที่ลบเป็น primary อยู่ จะเลื่อนรูปจริง ("product") รูปถัดไปขึ้นเป็น primary ให้อัตโนมัติ
+ * ถ้าไม่มีรูปจริงเหลือเลยจึงค่อยเลื่อนสื่ออื่น (AI) ขึ้นแทนเพื่อไม่ให้สินค้าไม่มี primary เลย
+ */
+export function deleteProductMedia(
+  productId: number,
+  mediaId: number
+): ProductMediaItem | undefined {
+  const existing = getProductMediaById(productId, mediaId);
+
+  if (!existing) {
+    return undefined;
+  }
+
+  const run = db.transaction(() => {
+    db.prepare(`DELETE FROM product_media WHERE id = ?`).run(mediaId);
+
+    if (existing.isPrimary) {
+      const nextReal = db
+        .prepare(
+          `SELECT id FROM product_media
+           WHERE product_id = ? AND source = 'product'
+           ORDER BY created_at ASC, id ASC LIMIT 1`
+        )
+        .get(productId) as { id: number } | undefined;
+
+      const promoteId =
+        nextReal?.id ??
+        (
+          db
+            .prepare(
+              `SELECT id FROM product_media
+               WHERE product_id = ?
+               ORDER BY created_at ASC, id ASC LIMIT 1`
+            )
+            .get(productId) as { id: number } | undefined
+        )?.id;
+
+      if (promoteId) {
+        db.prepare(`UPDATE product_media SET is_primary = 1 WHERE id = ?`).run(
+          promoteId
+        );
+      }
+    }
+  });
+
+  run();
+
+  return existing;
+}
+
+/**
+ * ตั้งสื่อ 1 รายการเป็นรูปหลักของสินค้าด้วยตนเอง (STEP 31 — Product Image Management)
+ *
+ * รักษากติกาเดียวกับ insertProductMedia() ทุกประการ: "รูปที่สร้างด้วย AI ไม่มีทางเป็น primary ได้
+ * เด็ดขาด" — รูปสินค้าจริงต้องมี priority เหนือ AI เสมอ ดังนั้นถ้า mediaId ที่ระบุเป็นรูป AI
+ * (source !== "product") จะ throw Error ทันที ไม่ทำการเปลี่ยนแปลงใดๆ
+ *
+ * คืน undefined ถ้าไม่พบ mediaId นี้สำหรับ productId นี้ (รวมถึงกรณีเป็นของสินค้าอื่น — กันข้ามสินค้า
+ * เหมือน deleteProductMedia) ให้ route ชั้นนอกแปลงเป็น 404 เอง
+ */
+export function setPrimaryProductMedia(
+  productId: number,
+  mediaId: number
+): ProductMediaItem | undefined {
+  const existing = getProductMediaById(productId, mediaId);
+
+  if (!existing) {
+    return undefined;
+  }
+
+  if (existing.source !== "product") {
+    throw new Error(
+      "ตั้งเป็นรูปหลักได้เฉพาะรูปสินค้าจริงเท่านั้น (ไม่ใช่รูปที่สร้างด้วย AI)"
+    );
+  }
+
+  if (!existing.isPrimary) {
+    const run = db.transaction(() => {
+      db.prepare(
+        `UPDATE product_media SET is_primary = 0 WHERE product_id = ? AND is_primary = 1`
+      ).run(productId);
+
+      db.prepare(`UPDATE product_media SET is_primary = 1 WHERE id = ?`).run(
+        mediaId
+      );
+    });
+
+    run();
+  }
+
+  const row = db
+    .prepare(`SELECT ${SELECT_COLUMNS} FROM product_media WHERE id = ?`)
+    .get(mediaId) as ProductMediaRow;
+
+  return mapRow(row);
+}

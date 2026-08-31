@@ -1,0 +1,174 @@
+﻿"use client";
+
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+
+export default function VideoStudioPage() {
+  const searchParams = useSearchParams();
+
+  const [script, setScript] = useState("");
+  const [audioUrl, setAudioUrl] = useState("");
+  const [mediaFiles, setMediaFiles] = useState<File[]>([]);
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    const scriptFromUrl = searchParams.get("script");
+    const audioUrlFromUrl = searchParams.get("audioUrl");
+
+    if (scriptFromUrl) {
+      setScript(scriptFromUrl);
+    }
+
+    if (audioUrlFromUrl) {
+      setAudioUrl(audioUrlFromUrl);
+      setStatus("✅ รับสคริปต์และเสียงพากย์จาก Voice Studio แล้ว");
+    }
+  }, [searchParams]);
+
+  function handleMediaChange(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const files = Array.from(event.target.files || []);
+
+    const validFiles = files.filter(
+      (file) =>
+        file.type.startsWith("image/") ||
+        file.type.startsWith("video/")
+    );
+
+    setMediaFiles(validFiles);
+
+    if (validFiles.length !== files.length) {
+      setStatus("ระบบรับเฉพาะไฟล์รูปภาพหรือวิดีโอ");
+    } else {
+      setStatus("");
+    }
+  }
+
+  return (
+    <main className="min-h-screen bg-black p-6 text-white">
+      <div className="mx-auto max-w-5xl">
+        <h1 className="text-3xl font-bold">
+          🎬 Video Studio
+        </h1>
+
+        <p className="mt-2 text-gray-400">
+          สร้างวิดีโอสำหรับ THAI AMULET TH
+        </p>
+
+        <section className="mt-8 rounded-2xl border border-gray-800 bg-gray-950 p-6">
+          <h2 className="text-xl font-semibold">
+            📝 1. สคริปต์
+          </h2>
+
+          <textarea
+            value={script}
+            onChange={(event) => setScript(event.target.value)}
+            placeholder="ใส่สคริปต์สำหรับวิดีโอ..."
+            className="mt-4 min-h-[220px] w-full rounded-xl border border-gray-700 bg-gray-900 p-4 text-white outline-none focus:border-gray-400"
+          />
+        </section>
+
+        <section className="mt-6 rounded-2xl border border-gray-800 bg-gray-950 p-6">
+          <h2 className="text-xl font-semibold">
+            🎙️ 2. เสียงพากย์
+          </h2>
+
+          <p className="mt-2 text-sm text-gray-400">
+            เสียงพากย์ที่สร้างจาก Voice Studio
+          </p>
+
+          {audioUrl ? (
+            <div className="mt-4 rounded-xl bg-gray-900 p-4">
+              <p className="font-medium">
+                ✅ เชื่อมต่อเสียงพากย์แล้ว
+              </p>
+
+              <audio
+                controls
+                src={audioUrl}
+                className="mt-4 w-full"
+              />
+
+              <p className="mt-3 break-all text-xs text-gray-500">
+                {audioUrl}
+              </p>
+            </div>
+          ) : (
+            <div className="mt-4 rounded-xl border border-dashed border-gray-700 p-6 text-center text-gray-500">
+              ยังไม่มีเสียงพากย์
+              <br />
+              สร้างเสียงจาก Voice Studio แล้วส่งมาที่นี่
+            </div>
+          )}
+        </section>
+
+        <section className="mt-6 rounded-2xl border border-gray-800 bg-gray-950 p-6">
+          <h2 className="text-xl font-semibold">
+            🖼️ 3. รูปภาพ / คลิป
+          </h2>
+
+          <p className="mt-2 text-sm text-gray-400">
+            เลือกรูปภาพหรือวิดีโอสินค้าที่ต้องการนำมาประกอบ
+          </p>
+
+          <input
+            type="file"
+            accept="image/*,video/*"
+            multiple
+            onChange={handleMediaChange}
+            className="mt-4 block w-full rounded-xl border border-gray-700 bg-gray-900 p-3 text-sm"
+          />
+
+          {mediaFiles.length > 0 && (
+            <div className="mt-4">
+              <p className="font-medium">
+                📁 เลือกแล้ว {mediaFiles.length} ไฟล์
+              </p>
+
+              <div className="mt-3 space-y-2">
+                {mediaFiles.map((file) => (
+                  <div
+                    key={`${file.name}-${file.size}`}
+                    className="rounded-lg bg-gray-900 p-3 text-sm"
+                  >
+                    {file.name}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="mt-6 rounded-2xl border border-gray-800 bg-gray-950 p-6">
+          <h2 className="text-xl font-semibold">
+            🎞️ 4. Timeline
+          </h2>
+
+          <div className="mt-4 rounded-xl border border-dashed border-gray-700 p-8 text-center text-gray-500">
+            Timeline จะถูกสร้างอัตโนมัติในขั้นตอนถัดไป
+          </div>
+        </section>
+
+        {status && (
+          <div className="mt-6 rounded-xl border border-gray-700 bg-gray-900 p-4">
+            {status}
+          </div>
+        )}
+
+        <button
+          type="button"
+          disabled={!script.trim() || !audioUrl}
+          onClick={() => {
+            setStatus(
+              "✅ สคริปต์และเสียงพากย์พร้อมสำหรับสร้างวิดีโอแล้ว"
+            );
+          }}
+          className="mt-6 rounded-xl bg-white px-6 py-3 font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          🎬 เตรียมสร้างวิดีโอ
+        </button>
+      </div>
+    </main>
+  );
+}

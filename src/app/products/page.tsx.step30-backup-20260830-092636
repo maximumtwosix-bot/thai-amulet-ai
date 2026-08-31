@@ -1,0 +1,555 @@
+﻿"use client";
+import { useEffect, useRef, useState } from "react";
+type Product = {
+  id: number;
+  name: string;
+  model: string | null;
+  master: string | null;
+  year: string | null;
+  description: string | null;
+  price: number;
+  cost: number;
+  stock: number;
+  category: string | null;
+  status: string;
+};
+// รูปภาพสินค้า — ใช้ API/ตาราง product_media ที่มีอยู่แล้ว (STEP 13/14) ไม่สร้าง route/ตารางใหม่
+// รูปแบบ type ตรงกับ src/app/video-studio/page.tsx (ProductMediaItem) เพื่อความสอดคล้อง
+type ProductMediaItem = {
+  id: number;
+  fileName: string;
+  url: string;
+  type: "image" | "video";
+  source: string;
+  isPrimary: boolean;
+  createdAt: string;
+};
+type FormState = {
+  name: string;
+  model: string;
+  master: string;
+  year: string;
+  description: string;
+  price: string;
+  cost: string;
+  stock: string;
+};
+const emptyForm: FormState = {
+  name: "",
+  model: "",
+  master: "",
+  year: "",
+  description: "",
+  price: "",
+  cost: "",
+  stock: "",
+};
+export default function ProductsPage() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState<FormState>(emptyForm);
+
+  // ===== รูปภาพสินค้า — ใช้ /api/products/[id]/media (list/upload) ที่มีอยู่แล้วเท่านั้น =====
+  const [mediaByProduct, setMediaByProduct] = useState<Record<number, ProductMediaItem[]>>({});
+  const [uploadingId, setUploadingId] = useState<Record<number, boolean>>({});
+  const [uploadErrors, setUploadErrors] = useState<Record<number, string>>({});
+  const loadedMediaIdsRef = useRef<Set<number>>(new Set());
+
+  async function loadProductMedia(productId: number) {
+    try {
+      const response = await fetch(`/api/products/${productId}/media`, {
+        cache: "no-store",
+      });
+      const data = await response.json();
+      if (response.ok && Array.isArray(data.items)) {
+        setMediaByProduct((current) => ({ ...current, [productId]: data.items }));
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      loadedMediaIdsRef.current.add(productId);
+    }
+  }
+
+  // โหลดรูปภาพของสินค้าแต่ละรายการที่ยังไม่เคยโหลด (รวมถึงสินค้าที่เพิ่งเพิ่มใหม่) —
+  // ไม่โหลดซ้ำของรายการที่มีอยู่แล้วใน loadedMediaIdsRef
+  useEffect(() => {
+    const missing = products
+      .map((product) => product.id)
+      .filter((id) => !loadedMediaIdsRef.current.has(id));
+
+    missing.forEach((id) => {
+      loadedMediaIdsRef.current.add(id);
+      loadProductMedia(id);
+    });
+  }, [products]);
+
+  function getPrimaryMedia(productId: number): ProductMediaItem | null {
+    const items = mediaByProduct[productId];
+    if (!items || items.length === 0) {
+      return null;
+    }
+    return items.find((item) => item.isPrimary) || items[0];
+  }
+
+  async function uploadProductImage(productId: number, file: File | undefined) {
+    if (!file) {
+      return;
+    }
+
+    setUploadingId((current) => ({ ...current, [productId]: true }));
+    setUploadErrors((current) => ({ ...current, [productId]: "" }));
+
+    try {
+      const formData = new FormData();
+      formData.append("image", file);
+
+      const response = await fetch(`/api/products/${productId}/media`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error || "ไม่สามารถอัปโหลดรูปภาพได้");
+      }
+
+      await loadProductMedia(productId);
+    } catch (err) {
+      setUploadErrors((current) => ({
+        ...current,
+        [productId]: err instanceof Error ? err.message : "ไม่สามารถอัปโหลดรูปภาพได้",
+      }));
+    } finally {
+      setUploadingId((current) => ({ ...current, [productId]: false }));
+    }
+  }
+
+  async function loadProducts() {
+    try {
+      setLoading(true);
+      setError("");
+      const response = await fetch("/api/products", {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error("ไม่สามารถโหลดข้อมูลสินค้าได้");
+      }
+      const data = await response.json();
+      setProducts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error(err);
+      setError("ไม่สามารถโหลดข้อมูลสินค้าได้");
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    loadProducts();
+  }, []);
+  function updateForm(field: keyof FormState, value: string) {
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+  async function addProduct() {
+    if (!form.name.trim()) {
+      alert("กรุณากรอกชื่อสินค้า");
+      return;
+    }
+    if (!form.price) {
+      alert("กรุณากรอกราคาขาย");
+      return;
+    }
+    try {
+      setSaving(true);
+      setError("");
+      const response = await fetch("/api/products", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: form.name,
+          model: form.model,
+          master: form.master,
+          year: form.year,
+          description: form.description,
+          price: Number(form.price),
+          cost: Number(form.cost || 0),
+          stock: Number(form.stock || 0),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "ไม่สามารถเพิ่มสินค้าได้");
+      }
+      setProducts((current) => [data, ...current]);
+      setForm(emptyForm);
+      setShowForm(false);
+    } catch (err) {
+      console.error(err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "ไม่สามารถเพิ่มสินค้าได้"
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function deleteProduct(id: number) {
+    const confirmed = confirm("ต้องการลบสินค้านี้หรือไม่?");
+    if (!confirmed) {
+      return;
+    }
+    try {
+      setError("");
+      const response = await fetch(`/api/products?id=${id}`, {
+        method: "DELETE",
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "ไม่สามารถลบสินค้าได้");
+      }
+      setProducts((current) =>
+        current.filter((product) => product.id !== id)
+      );
+    } catch (err) {
+      console.error(err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "ไม่สามารถลบสินค้าได้"
+      );
+    }
+  }
+  const totalStock = products.reduce(
+    (sum, product) => sum + product.stock,
+    0
+  );
+  const stockValue = products.reduce(
+    (sum, product) => sum + product.price * product.stock,
+    0
+  );
+  const availableProducts = products.filter(
+    (product) => product.stock > 0
+  ).length;
+  return (
+    <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
+      <div className="mx-auto max-w-7xl">
+        <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-500">
+              THAI AMULET TH
+            </p>
+            <h1 className="text-3xl font-bold">
+              จัดการสินค้า
+            </h1>
+            <p className="mt-1 text-slate-500">
+              เพิ่มและจัดการข้อมูลวัตถุมงคลของร้าน
+            </p>
+          </div>
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white hover:bg-slate-700"
+          >
+            {showForm ? "ปิดแบบฟอร์ม" : "+ เพิ่มสินค้า"}
+          </button>
+        </div>
+        {error && (
+          <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
+            {error}
+          </div>
+        )}
+        {showForm && (
+          <section className="mb-8 rounded-2xl bg-white p-6 shadow-sm">
+            <h2 className="mb-5 text-xl font-bold">
+              เพิ่มสินค้าใหม่
+            </h2>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <input
+                className="rounded-xl border p-3"
+                placeholder="ชื่อสินค้า"
+                value={form.name}
+                onChange={(e) =>
+                  updateForm("name", e.target.value)
+                }
+              />
+              <input
+                className="rounded-xl border p-3"
+                placeholder="รุ่น"
+                value={form.model}
+                onChange={(e) =>
+                  updateForm("model", e.target.value)
+                }
+              />
+              <input
+                className="rounded-xl border p-3"
+                placeholder="พระอาจารย์ / ผู้สร้าง"
+                value={form.master}
+                onChange={(e) =>
+                  updateForm("master", e.target.value)
+                }
+              />
+              <input
+                className="rounded-xl border p-3"
+                placeholder="ปีที่สร้าง"
+                value={form.year}
+                onChange={(e) =>
+                  updateForm("year", e.target.value)
+                }
+              />
+              <input
+                className="rounded-xl border p-3"
+                placeholder="รายละเอียดสินค้า"
+                value={form.description}
+                onChange={(e) =>
+                  updateForm("description", e.target.value)
+                }
+              />
+              <input
+                className="rounded-xl border p-3"
+                type="number"
+                placeholder="ราคาขาย"
+                value={form.price}
+                onChange={(e) =>
+                  updateForm("price", e.target.value)
+                }
+              />
+              <input
+                className="rounded-xl border p-3"
+                type="number"
+                placeholder="ต้นทุน"
+                value={form.cost}
+                onChange={(e) =>
+                  updateForm("cost", e.target.value)
+                }
+              />
+              <input
+                className="rounded-xl border p-3"
+                type="number"
+                placeholder="จำนวนสินค้า"
+                value={form.stock}
+                onChange={(e) =>
+                  updateForm("stock", e.target.value)
+                }
+              />
+            </div>
+            <div className="mt-5 flex gap-3">
+              <button
+                onClick={addProduct}
+                disabled={saving}
+                className="rounded-xl bg-emerald-600 px-5 py-3 font-semibold text-white disabled:opacity-50"
+              >
+                {saving ? "กำลังบันทึก..." : "บันทึกสินค้า"}
+              </button>
+              <button
+                onClick={() => setShowForm(false)}
+                disabled={saving}
+                className="rounded-xl border px-5 py-3 disabled:opacity-50"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          </section>
+        )}
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-2xl bg-white p-5 shadow-sm">
+            <p className="text-sm text-slate-500">
+              สินค้าทั้งหมด
+            </p>
+            <p className="mt-2 text-3xl font-bold">
+              {products.length}
+            </p>
+          </div>
+          <div className="rounded-2xl bg-white p-5 shadow-sm">
+            <p className="text-sm text-slate-500">
+              สินค้าพร้อมขาย
+            </p>
+            <p className="mt-2 text-3xl font-bold">
+              {availableProducts}
+            </p>
+          </div>
+          <div className="rounded-2xl bg-white p-5 shadow-sm">
+            <p className="text-sm text-slate-500">
+              จำนวนคงเหลือ
+            </p>
+            <p className="mt-2 text-3xl font-bold">
+              {totalStock.toLocaleString()}
+            </p>
+          </div>
+          <div className="rounded-2xl bg-white p-5 shadow-sm">
+            <p className="text-sm text-slate-500">
+              มูลค่าสินค้าตามราคาขาย
+            </p>
+            <p className="mt-2 text-3xl font-bold">
+              ฿{stockValue.toLocaleString()}
+            </p>
+          </div>
+        </section>
+        <section className="mt-8 rounded-2xl bg-white p-6 shadow-sm">
+          <h2 className="mb-5 text-xl font-bold">
+            รายการสินค้า
+          </h2>
+          {loading ? (
+            <div className="rounded-xl border border-dashed p-12 text-center text-slate-500">
+              กำลังโหลดข้อมูลสินค้า...
+            </div>
+          ) : products.length === 0 ? (
+            <div className="rounded-xl border border-dashed p-12 text-center text-slate-500">
+              <p className="text-lg">
+                ยังไม่มีสินค้า
+              </p>
+              <p className="mt-2 text-sm">
+                กดปุ่ม &quot;+ เพิ่มสินค้า&quot; เพื่อเริ่มเพิ่มสินค้า
+              </p>
+            </div>
+          ) : (
+                   <div className="overflow-x-auto">
+              <table className="w-full min-w-[1000px] text-left">
+                <thead>
+                  <tr className="border-b text-sm text-slate-500">
+                    <th className="p-3">สินค้า</th>
+                    <th className="p-3">รุ่น</th>
+                    <th className="p-3">หลวงพ่อ/วัด</th>
+                    <th className="p-3">ปี</th>
+                    <th className="p-3">ราคา</th>
+                    <th className="p-3">ต้นทุน</th>
+                    <th className="p-3">คงเหลือ</th>
+                    <th className="p-3">สถานะ</th>
+                    <th className="p-3">จัดการ</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {products.map((product) => (
+                    <tr
+                      key={product.id}
+                      className="border-b last:border-0"
+                    >
+                      <td className="p-3 font-semibold">
+                        <div className="flex items-start gap-3">
+                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border bg-slate-50">
+                            {getPrimaryMedia(product.id) ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={getPrimaryMedia(product.id)!.url}
+                                alt=""
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-300">
+                                ไม่มีรูป
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <p>{product.name}</p>
+                            <label className="mt-1 inline-block cursor-pointer text-xs font-normal text-blue-600 hover:underline">
+                              {uploadingId[product.id]
+                                ? "กำลังอัปโหลด..."
+                                : "+ เพิ่มรูปภาพ"}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                disabled={Boolean(uploadingId[product.id])}
+                                onChange={(e) => {
+                                  const input = e.target;
+                                  const file = input.files?.[0];
+                                  uploadProductImage(product.id, file).finally(() => {
+                                    input.value = "";
+                                  });
+                                }}
+                              />
+                            </label>
+                            {uploadErrors[product.id] && (
+                              <p className="mt-1 text-xs font-normal text-red-600">
+                                {uploadErrors[product.id]}
+                              </p>
+                            )}
+                            {(mediaByProduct[product.id]?.length ?? 0) > 0 && (
+                              <div className="mt-1 flex flex-wrap items-center gap-1">
+                                {mediaByProduct[product.id]!.slice(0, 4).map((item) => (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    key={item.id}
+                                    src={item.url}
+                                    alt=""
+                                    className="h-6 w-6 rounded border object-cover"
+                                  />
+                                ))}
+                                {mediaByProduct[product.id]!.length > 4 && (
+                                  <span className="text-[10px] font-normal text-slate-400">
+                                    +{mediaByProduct[product.id]!.length - 4}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className="p-3">
+                        {product.model || "-"}
+                      </td>
+
+                      <td className="p-3">
+                        {product.master || "-"}
+                      </td>
+
+                      <td className="p-3">
+                        {product.year || "-"}
+                      </td>
+
+                      <td className="p-3">
+                        ฿{Number(product.price || 0).toLocaleString()}
+                      </td>
+
+                      <td className="p-3">
+                        ฿{Number(product.cost || 0).toLocaleString()}
+                      </td>
+
+                      <td className="p-3 font-semibold">
+                        {Number(product.stock || 0).toLocaleString()}
+                      </td>
+
+                      <td className="p-3">
+                        {Number(product.stock || 0) > 0 ? (
+                          <span className="rounded-full bg-emerald-50 px-3 py-1 text-sm text-emerald-700">
+                            พร้อมขาย
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-red-50 px-3 py-1 text-sm text-red-600">
+                            หมด
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="p-3">
+                        <button
+                          onClick={() => deleteProduct(product.id)}
+                          className="rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-100"
+                        >
+                          ลบ
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+      </div>
+    </main>
+  );
+}

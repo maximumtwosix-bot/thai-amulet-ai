@@ -1,0 +1,52 @@
+import { NextResponse } from "next/server";
+import { generateVoice } from "@/lib/voice";
+
+export const runtime = "nodejs";
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const script = String(body.script || "").trim();
+
+    if (!script) {
+      return NextResponse.json(
+        { error: "กรุณาระบุสคริปต์สำหรับสร้างเสียงพากย์" },
+        { status: 400 }
+      );
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { error: "ไม่พบ OPENAI_API_KEY ใน environment variables" },
+        { status: 500 }
+      );
+    }
+
+    const voice = await generateVoice(script);
+
+    console.log("Voice file saved:", voice.filePath);
+
+    return new NextResponse(new Uint8Array(voice.buffer), {
+      status: 200,
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Content-Disposition": 'attachment; filename="voice.mp3"',
+        "Content-Length": String(voice.size),
+        "Cache-Control": "no-store",
+        "X-Audio-Url": voice.audioUrl,
+      },
+    });
+  } catch (error) {
+    console.error("POST /api/voice error:", error);
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "ไม่สามารถสร้างเสียงพากย์ได้",
+      },
+      { status: 500 }
+    );
+  }
+}

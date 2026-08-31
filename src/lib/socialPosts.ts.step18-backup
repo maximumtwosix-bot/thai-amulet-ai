@@ -1,0 +1,262 @@
+import db from "@/lib/db";
+import type { SocialPlatform } from "@/lib/socialContent";
+
+// STEP 12: เพิ่ม "scheduled" และ "cancelled" (สำหรับ Queue) และเปลี่ยน "posting" → "processing"
+// (ชื่อเดิมจาก STEP 10 ไม่เคยถูกส่งออกไปให้ client เห็นเลย เป็นแค่ค่าภายใน DB เท่านั้น จึงเปลี่ยน
+// ให้สอดคล้องกับ status ที่ STEP 12 กำหนดได้โดยไม่กระทบ response contract เดิม)
+export type SocialPostStatus =
+  | "draft"
+  | "scheduled"
+  | "processing"
+  | "published"
+  | "failed"
+  | "cancelled";
+
+export type SocialPostRow = {
+  id: number;
+  productId: number;
+  platform: SocialPlatform;
+  videoUrl: string;
+  caption: string;
+  hashtags: string[];
+  status: SocialPostStatus;
+  scheduledAt: string | null;
+  externalPostId: string | null;
+  errorMessage: string | null;
+  retryCount: number;
+  createdAt: string;
+  updatedAt: string;
+  publishedAt: string | null;
+};
+
+type DbRow = {
+  id: number;
+  product_id: number;
+  platform: string;
+  video_url: string;
+  caption: string;
+  hashtags: string;
+  status: string;
+  scheduled_at: string | null;
+  external_post_id: string | null;
+  error_message: string | null;
+  retry_count: number;
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+};
+
+function parseHashtags(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((tag) => typeof tag === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function toRow(row: DbRow): SocialPostRow {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    platform: row.platform as SocialPlatform,
+    videoUrl: row.video_url,
+    caption: row.caption,
+    hashtags: parseHashtags(row.hashtags),
+    status: row.status as SocialPostStatus,
+    scheduledAt: row.scheduled_at,
+    externalPostId: row.external_post_id,
+    errorMessage: row.error_message,
+    retryCount: row.retry_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    publishedAt: row.published_at,
+  };
+}
+
+export function insertSocialPost(params: {
+  productId: number;
+  platform: SocialPlatform;
+  videoUrl: string;
+  caption: string;
+  hashtags?: string[];
+  status: SocialPostStatus;
+  scheduledAt?: string | null;
+}): SocialPostRow {
+  const result = db
+    .prepare(
+      `INSERT INTO social_posts
+         (product_id, platform, video_url, caption, hashtags, status, scheduled_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      params.productId,
+      params.platform,
+      params.videoUrl,
+      params.caption,
+      JSON.stringify(params.hashtags || []),
+      params.status,
+      params.scheduledAt || null
+    );
+
+  const row = db
+    .prepare("SELECT * FROM social_posts WHERE id = ?")
+    .get(result.lastInsertRowid) as DbRow;
+
+  return toRow(row);
+}
+
+export function getSocialPostById(id: number): SocialPostRow | undefined {
+  const row = db.prepare("SELECT * FROM social_posts WHERE id = ?").get(id) as
+    | DbRow
+    | undefined;
+
+  return row ? toRow(row) : undefined;
+}
+
+export type SocialPostFilters = {
+  platform?: SocialPlatform;
+  status?: SocialPostStatus;
+  productId?: number;
+};
+
+export function listSocialPostRows(
+  filters: SocialPostFilters,
+  pagination: { page: number; pageSize: number }
+): { items: SocialPostRow[]; total: number } {
+  const conditions: string[] = [];
+  const values: Array<string | number> = [];
+
+  if (filters.platform) {
+    conditions.push("platform = ?");
+    values.push(filters.platform);
+  }
+
+  if (filters.status) {
+    conditions.push("status = ?");
+    values.push(filters.status);
+  }
+
+  if (typeof filters.productId === "number") {
+    conditions.push("product_id = ?");
+    values.push(filters.productId);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const total = (
+    db
+      .prepare(`SELECT COUNT(*) as c FROM social_posts ${whereClause}`)
+      .get(...values) as { c: number }
+  ).c;
+
+  const offset = (pagination.page - 1) * pagination.pageSize;
+
+  const rows = db
+    .prepare(
+      `SELECT * FROM social_posts ${whereClause}
+       ORDER BY id DESC
+       LIMIT ? OFFSET ?`
+    )
+    .all(...values, pagination.pageSize, offset) as DbRow[];
+
+  return { items: rows.map(toRow), total };
+}
+
+// ดึง scheduled post ที่ถึงเวลาโพสต์แล้ว — ใช้โดย processScheduledPosts() ใน socialQueue.ts เท่านั้น
+export function findDueSocialPosts(nowIso: string): SocialPostRow[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM social_posts
+       WHERE status = 'scheduled' AND scheduled_at IS NOT NULL AND scheduled_at <= ?
+       ORDER BY scheduled_at ASC`
+    )
+    .all(nowIso) as DbRow[];
+
+  return rows.map(toRow);
+}
+
+export function updateSocialPostFields(
+  id: number,
+  fields: Partial<{
+    status: SocialPostStatus;
+    externalPostId: string | null;
+    errorMessage: string | null;
+    publishedAt: string | null;
+    retryCount: number;
+    scheduledAt: string | null;
+  }>
+): void {
+  const setClauses: string[] = ["updated_at = CURRENT_TIMESTAMP"];
+  const values: Array<string | number | null> = [];
+
+  if (fields.status !== undefined) {
+    setClauses.push("status = ?");
+    values.push(fields.status);
+  }
+
+  if (fields.externalPostId !== undefined) {
+    setClauses.push("external_post_id = ?");
+    values.push(fields.externalPostId);
+  }
+
+  if (fields.errorMessage !== undefined) {
+    setClauses.push("error_message = ?");
+    values.push(fields.errorMessage);
+  }
+
+  if (fields.publishedAt !== undefined) {
+    setClauses.push("published_at = ?");
+    values.push(fields.publishedAt);
+  }
+
+  if (fields.retryCount !== undefined) {
+    setClauses.push("retry_count = ?");
+    values.push(fields.retryCount);
+  }
+
+  if (fields.scheduledAt !== undefined) {
+    setClauses.push("scheduled_at = ?");
+    values.push(fields.scheduledAt);
+  }
+
+  values.push(id);
+
+  db.prepare(`UPDATE social_posts SET ${setClauses.join(", ")} WHERE id = ?`).run(
+    ...values
+  );
+}
+
+// STEP 17 — atomic claim กัน worker 2 ตัวหยิบ post เดียวกันไปประมวลผลซ้ำ (race ระหว่าง
+// findDueSocialPosts() กับตอนที่ processScheduledPosts() มาถึงคิวแต่ละแถวจริงๆ)
+//
+// UPDATE ... WHERE status = 'scheduled' เป็น atomic operation เดียวใน SQLite (better-sqlite3
+// เป็น synchronous, single connection) — ถ้า worker อีกตัวแย่ง claim ไปก่อนแล้ว status จะไม่ใช่
+// 'scheduled' อีกต่อไป ทำให้ WHERE ไม่ match แถวไหนเลย changes จะเป็น 0 — คืน false บอกว่า claim
+// ไม่สำเร็จ (ไม่ใช่ error แค่แปลว่า "อีก worker เอาไปแล้ว" ให้ผู้เรียก skip แถวนี้)
+export function claimSocialPostForProcessing(id: number): boolean {
+  const result = db
+    .prepare(
+      `UPDATE social_posts
+       SET status = 'processing', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'scheduled'`
+    )
+    .run(id);
+
+  return result.changes === 1;
+}
+
+// ใช้โดย /api/social/post (STEP 10 — โพสต์ทันที ไม่ผ่าน queue) เท่านั้น เก็บไว้เพื่อไม่ให้ต้องแก้
+// call site เดิม — ภายในเรียก updateSocialPostFields() ตัวเดียวกับที่ Queue ใช้ ไม่ duplicate logic
+export function markSocialPostPublished(id: number, externalPostId: string): void {
+  updateSocialPostFields(id, {
+    status: "published",
+    externalPostId,
+    publishedAt: new Date().toISOString(),
+    errorMessage: null,
+  });
+}
+
+export function markSocialPostFailed(id: number, errorMessage: string): void {
+  updateSocialPostFields(id, { status: "failed", errorMessage });
+}

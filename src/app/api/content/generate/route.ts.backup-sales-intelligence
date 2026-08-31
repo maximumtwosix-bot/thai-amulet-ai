@@ -1,0 +1,121 @@
+﻿import OpenAI from "openai";
+import { NextResponse } from "next/server";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const product = body.product;
+
+    if (!product || !product.name) {
+      return NextResponse.json(
+        { error: "ไม่พบข้อมูลสินค้า" },
+        { status: 400 }
+      );
+    }
+
+    const tone = String(body.tone || "premium");
+
+    const prompt = [
+      "คุณคือ AI Content Creator ประจำร้าน THAI AMULET TH",
+      "คุณเชี่ยวชาญการทำคอนเทนต์ขายพระเครื่องและวัตถุมงคลไทย",
+      "",
+      "เป้าหมาย:",
+      "สร้างคอนเทนต์ที่นำไปใช้งานจริงบน Facebook, Reels และ TikTok",
+      "เน้นความน่าเชื่อถือ ความพรีเมียม ความน่าสนใจ และการปิดการขายอย่างเป็นธรรมชาติ",
+      "",
+      "แนวทางแบรนด์ THAI AMULET TH:",
+      "- ภาษาไทยเป็นธรรมชาติ อ่านง่าย และดูเป็นมืออาชีพ",
+      "- โทนพรีเมียม สุภาพ น่าเชื่อถือ",
+      "- เคารพความเชื่อและความศรัทธา",
+      "- เขียนเหมือนร้านพระเครื่องมืออาชีพกำลังนำเสนอสินค้าให้ลูกค้า",
+      "- ห้ามใช้ภาษาที่ดูเหมือนข้อความจากระบบ AI",
+      "- ห้ามเขียนแข็งหรือเป็นทางการเกินไป",
+      "",
+      "กฎข้อมูลสินค้า:",
+      "- ใช้เฉพาะข้อมูลที่ได้รับจากสินค้า",
+      "- ห้ามแต่งปีสร้าง พระอาจารย์ รุ่น พิธีปลุกเสก หรือประวัติที่ไม่มีในข้อมูล",
+      "- หากข้อมูลใดไม่มี ให้ละเว้น ไม่ต้องเดา",
+      "- ห้ามกล่าวอ้างสรรพคุณเหนือธรรมชาติเป็นข้อเท็จจริง",
+      "- ไม่ต้องใส่คำเตือนเรื่องความเชื่อยาวๆ ซ้ำในทุกโพสต์",
+      "",
+      "รูปแบบคอนเทนต์:",
+      "- Facebook: โพสต์ขายที่น่าสนใจ มีรายละเอียดสินค้า จุดเด่น และ CTA",
+      "- Reels: Hook + ลำดับฉาก + ข้อความบนจอ + CTA เหมาะกับคลิป 15-30 วินาที",
+      "- TikTok: กระชับ ดึงความสนใจตั้งแต่ประโยคแรก และเหมาะกับคลิปสั้น",
+      "- Script: สคริปต์พูดจริงสำหรับเสียงพากย์ ใช้ภาษาพูดธรรมชาติ",
+      "",
+      "การขาย:",
+      "- สามารถใช้คำว่า น่าสนใจสำหรับนักสะสม หรือ เหมาะสำหรับผู้ที่ชื่นชอบวัตถุมงคล",
+      "- ปิดท้ายด้วย CTA เช่น สอบถามรายละเอียดเพิ่มเติมทาง Inbox",
+      "- ห้ามสร้างคำกล่าวอ้างสรรพคุณเหนือธรรมชาติเป็นข้อเท็จจริง",
+      "",
+      "ข้อมูลสินค้า:",
+      "ชื่อสินค้า: " + String(product.name || "-"),
+      "รุ่น: " + String(product.model || "-"),
+      "พระอาจารย์/สำนัก: " + String(product.master || "-"),
+      "ปี: " + String(product.year || "-"),
+      "รายละเอียด: " + String(product.description || "-"),
+      "ราคา: " + String(product.price || 0) + " บาท",
+      "สต็อก: " + String(product.stock || 0) + " ชิ้น",
+      "โทนภาษา: " + tone,
+      "",
+      "สร้างผลลัพธ์ 4 ส่วน:",
+      "1. Facebook Post",
+      "2. Reels",
+      "3. TikTok",
+      "4. สคริปต์พูด",
+      "",
+      "ตอบเป็น JSON เท่านั้นในรูปแบบ:",
+      '{ "facebook": "...", "reels": "...", "tiktok": "...", "script": "..." }',
+    ].join("\n");
+
+    const response = await openai.responses.create({
+      model: "gpt-5-mini",
+      input: prompt,
+    });
+
+    const text = response.output_text;
+
+    let content: {
+      facebook: string;
+      reels: string;
+      tiktok: string;
+      script: string;
+    };
+
+    try {
+      content = JSON.parse(text);
+    } catch {
+      return NextResponse.json(
+        {
+          error: "AI ส่งข้อมูลกลับมาไม่ใช่ JSON",
+          raw: text,
+        },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      content,
+    });
+  } catch (error) {
+    console.error("POST /api/content/generate error:", error);
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : String(error);
+
+    return NextResponse.json(
+      {
+        error: message,
+      },
+      { status: 500 }
+    );
+  }
+}
+

@@ -1,0 +1,127 @@
+import { NextResponse } from "next/server";
+import db from "@/lib/db";
+import { getVideoProvider } from "@/lib/ai/video";
+import { buildAmuletVideoPrompt } from "@/lib/ai/promptBuilder";
+import { insertAiVideoJob, setAiVideoJobExternalId, markAiVideoJobFailed } from "@/lib/aiVideoJobs";
+
+export const runtime = "nodejs";
+
+type RouteContext = {
+  params: Promise<{ id: string }>;
+};
+
+type Product = {
+  id: number;
+  name: string;
+  category: string | null;
+};
+
+function parseProductId(rawId: string): number | null {
+  const productId = Number(rawId);
+
+  if (!Number.isInteger(productId) || productId <= 0) {
+    return null;
+  }
+
+  return productId;
+}
+
+// POST /api/products/[id]/ai-video/generate — เริ่ม async job สร้างวิดีโอด้วย AI (Replicate)
+// ไม่ block รอผลเสร็จ (video generation ใช้เวลานาน) — คืน jobId ให้ client poll ต่อผ่าน
+// GET /api/products/[id]/ai-video/jobs/[jobId]
+export async function POST(request: Request, context: RouteContext) {
+  try {
+    const { id } = await context.params;
+    const productId = parseProductId(id);
+
+    if (productId === null) {
+      return NextResponse.json(
+        { error: "กรุณาระบุรหัสสินค้าให้ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    const product = db
+      .prepare("SELECT id, name, category FROM products WHERE id = ?")
+      .get(productId) as Product | undefined;
+
+    if (!product) {
+      return NextResponse.json(
+        { error: `ไม่พบสินค้ารหัส ${productId}` },
+        { status: 404 }
+      );
+    }
+
+    const provider = getVideoProvider();
+    const connection = await provider.validateConnection();
+
+    // ห้าม fake success — เช็ค connection จริงก่อนเสมอ ไม่แตะ DB เลยถ้ายังไม่พร้อม
+    if (connection.status === "not_configured") {
+      return NextResponse.json(
+        {
+          success: false,
+          status: "not_configured",
+          error: `ยังไม่ได้ตั้งค่าการเชื่อมต่อ AI Video Generation (${provider.name})`,
+        },
+        { status: 503 }
+      );
+    }
+
+    if (connection.status === "error") {
+      return NextResponse.json(
+        {
+          success: false,
+          status: "error",
+          error: connection.message || `ไม่สามารถเชื่อมต่อ ${provider.name} ได้`,
+        },
+        { status: 502 }
+      );
+    }
+
+    const prompt = buildAmuletVideoPrompt(product);
+
+    const job = insertAiVideoJob({
+      productId,
+      provider: provider.name,
+      prompt,
+    });
+
+    try {
+      const created = await provider.createJob({ prompt });
+
+      setAiVideoJobExternalId(job.id, created.externalJobId);
+
+      return NextResponse.json(
+        {
+          success: true,
+          jobId: job.id,
+          status: "processing",
+          message: "เริ่มสร้างวิดีโอด้วย AI แล้ว — ใช้เวลาสักครู่ ตรวจสถานะได้ที่ jobId นี้",
+        },
+        { status: 202 }
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "ไม่สามารถเริ่มสร้างวิดีโอด้วย AI ได้";
+
+      markAiVideoJobFailed(job.id, message);
+
+      console.error(`POST /api/products/${productId}/ai-video/generate error:`, message);
+
+      return NextResponse.json(
+        { success: false, status: "failed", jobId: job.id, error: message },
+        { status: 502 }
+      );
+    }
+  } catch (error) {
+    console.error("POST /api/products/[id]/ai-video/generate error:", error);
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "ไม่สามารถเริ่มสร้างวิดีโอด้วย AI ได้",
+      },
+      { status: 500 }
+    );
+  }
+}

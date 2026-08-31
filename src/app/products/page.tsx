@@ -1,0 +1,1365 @@
+"use client";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { Noto_Sans_Thai, Noto_Serif_Thai } from "next/font/google";
+
+const serif = Noto_Serif_Thai({
+  subsets: ["thai", "latin"],
+  weight: ["500", "600", "700"],
+  variable: "--font-serif-thai",
+});
+
+const sans = Noto_Sans_Thai({
+  subsets: ["thai", "latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-sans-thai",
+});
+
+type Product = {
+  id: number;
+  name: string;
+  model: string | null;
+  master: string | null;
+  year: string | null;
+  description: string | null;
+  price: number;
+  cost: number;
+  stock: number;
+  low_stock_threshold: number;
+  category: string | null;
+  status: string;
+};
+
+// STEP 23 — out: stock=0 (เดิม "หมด"), low: 0 < stock <= threshold, ok: stock > threshold
+type StockLevel = "out" | "low" | "ok";
+
+function getStockLevel(product: Pick<Product, "stock" | "low_stock_threshold">): StockLevel {
+  const stock = Number(product.stock || 0);
+  const threshold = Number(product.low_stock_threshold || 0);
+
+  if (stock <= 0) return "out";
+  if (stock <= threshold) return "low";
+  return "ok";
+}
+// รูปภาพสินค้า — ใช้ API/ตาราง product_media ที่มีอยู่แล้ว (STEP 13/14) ไม่สร้าง route/ตารางใหม่
+// รูปแบบ type ตรงกับ src/app/video-studio/page.tsx (ProductMediaItem) เพื่อความสอดคล้อง
+type ProductMediaItem = {
+  id: number;
+  fileName: string;
+  url: string;
+  type: "image" | "video";
+  source: string;
+  isPrimary: boolean;
+  createdAt: string;
+};
+type FormState = {
+  name: string;
+  model: string;
+  master: string;
+  year: string;
+  description: string;
+  price: string;
+  cost: string;
+  stock: string;
+  lowStockThreshold: string;
+};
+const emptyForm: FormState = {
+  name: "",
+  model: "",
+  master: "",
+  year: "",
+  description: "",
+  price: "",
+  cost: "",
+  stock: "",
+  lowStockThreshold: "0",
+};
+export default function ProductsPage() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState<FormState>(emptyForm);
+
+  // ===== แก้ไขสินค้า (STEP 30) — แยก state จากฟอร์ม "เพิ่มสินค้า" โดยเจตนา ไม่ใช้ร่วมกัน =====
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState<FormState>(emptyForm);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+
+  // STEP 36.9D — Stock Adjustment UI
+  const [stockAdjustingId, setStockAdjustingId] = useState<number | null>(null);
+  const [stockAdjustValue, setStockAdjustValue] = useState("");
+  const [stockAdjustNote, setStockAdjustNote] = useState("");
+  const [stockAdjustSaving, setStockAdjustSaving] = useState(false);
+  const [stockAdjustError, setStockAdjustError] = useState("");
+
+  // STEP 23 — Low-Stock filter
+  const [showLowStockOnly, setShowLowStockOnly] = useState(false);
+
+  function startEdit(product: Product) {
+    setEditingId(product.id);
+    setEditForm({
+      name: product.name,
+      model: product.model || "",
+      master: product.master || "",
+      year: product.year || "",
+      description: product.description || "",
+      price: String(product.price),
+      cost: String(product.cost),
+      stock: String(product.stock),
+      lowStockThreshold: String(product.low_stock_threshold ?? 0),
+    });
+    setEditError("");
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditForm(emptyForm);
+    setEditError("");
+  }
+
+  function updateEditForm(field: keyof FormState, value: string) {
+    setEditForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  // เก็บ Product ID ของแถวที่กำลังแก้ไขไว้ใน editingId อย่างชัดเจน — PATCH ระบุ id นี้เท่านั้น
+  // ไม่มีทางใช้ชื่อสินค้าเป็นตัวระบุ เพราะไม่เคยส่ง name ไปเป็นตัวระบุแถวเลยตลอดทั้งฟังก์ชันนี้
+  async function saveEdit(productId: number) {
+    if (!editForm.name.trim()) {
+      alert("กรุณากรอกชื่อสินค้า");
+      return;
+    }
+    if (!editForm.price) {
+      alert("กรุณากรอกราคาขาย");
+      return;
+    }
+    try {
+      setEditSaving(true);
+      setEditError("");
+      const response = await fetch(`/api/products?id=${productId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: editForm.name,
+          model: editForm.model,
+          master: editForm.master,
+          year: editForm.year,
+          description: editForm.description,
+          price: Number(editForm.price),
+          cost: Number(editForm.cost || 0),
+          stock: Number(editForm.stock || 0),
+          lowStockThreshold: Number(editForm.lowStockThreshold || 0),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "ไม่สามารถแก้ไขสินค้าได้");
+      }
+      setProducts((current) =>
+        current.map((product) =>
+          product.id === productId ? data.product : product
+        )
+      );
+      setEditingId(null);
+      setEditForm(emptyForm);
+    } catch (err) {
+      console.error(err);
+      setEditError(
+        err instanceof Error ? err.message : "ไม่สามารถแก้ไขสินค้าได้"
+      );
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  // ===== รูปภาพสินค้า — ใช้ /api/products/[id]/media (list/upload) ที่มีอยู่แล้วเท่านั้น =====
+  // STEP 36.9D — Stock Adjustment
+  function startStockAdjustment(product: Product) {
+    setEditingId(null);
+    setStockAdjustingId(product.id);
+    setStockAdjustValue("");
+    setStockAdjustNote("");
+    setStockAdjustError("");
+  }
+
+  function cancelStockAdjustment() {
+    if (stockAdjustSaving) return;
+
+    setStockAdjustingId(null);
+    setStockAdjustValue("");
+    setStockAdjustNote("");
+    setStockAdjustError("");
+  }
+
+  async function saveStockAdjustment(productId: number) {
+    setStockAdjustError("");
+
+    const quantityChange = Number(stockAdjustValue);
+
+    if (!Number.isInteger(quantityChange) || quantityChange === 0) {
+      setStockAdjustError("กรุณาระบุจำนวนเป็นจำนวนเต็ม และห้ามเป็น 0");
+      return;
+    }
+
+    setStockAdjustSaving(true);
+
+    try {
+      const response = await fetch(
+        `/api/products/${productId}/stock-adjustment`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            quantityChange,
+            note: stockAdjustNote.trim() || null,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setStockAdjustError(
+          data?.error === "Insufficient stock"
+            ? "สต็อกไม่เพียงพอ ไม่สามารถลดจำนวนติดลบได้"
+            : data?.error || "ไม่สามารถปรับสต็อกได้"
+        );
+        return;
+      }
+
+      const productsResponse = await fetch("/api/products", {
+        cache: "no-store",
+      });
+
+      if (!productsResponse.ok) {
+        throw new Error("REFRESH_PRODUCTS_FAILED");
+      }
+
+      const productsData = await productsResponse.json();
+
+      const refreshedProducts = Array.isArray(productsData)
+        ? productsData
+        : productsData?.products;
+
+      if (!Array.isArray(refreshedProducts)) {
+        throw new Error("INVALID_PRODUCTS_RESPONSE");
+      }
+
+      setProducts(refreshedProducts);
+      cancelStockAdjustment();
+    } catch (error) {
+      console.error("Stock adjustment error:", error);
+      setStockAdjustError(
+        "เกิดข้อผิดพลาดในการบันทึกหรือโหลดข้อมูลสินค้าใหม่"
+      );
+    } finally {
+      setStockAdjustSaving(false);
+    }
+  }
+
+  const [mediaByProduct, setMediaByProduct] = useState<Record<number, ProductMediaItem[]>>({});
+  const [uploadingId, setUploadingId] = useState<Record<number, boolean>>({});
+  const [uploadErrors, setUploadErrors] = useState<Record<number, string>>({});
+  // STEP 31 — ตั้งรูปหลัก/ลบรูป: เก็บ mediaId ที่กำลังดำเนินการอยู่ (มีได้ทีละ 1 การกระทำในแอปนี้)
+  // และ error ต่อ "สินค้า" (ไม่ใช่ต่อรูป) เพราะข้อความ error แสดงใต้แถบรูปของสินค้านั้นๆ
+  const [mediaActionId, setMediaActionId] = useState<number | null>(null);
+  const [mediaActionErrors, setMediaActionErrors] = useState<Record<number, string>>({});
+  const loadedMediaIdsRef = useRef<Set<number>>(new Set());
+
+  async function loadProductMedia(productId: number) {
+    try {
+      const response = await fetch(`/api/products/${productId}/media`, {
+        cache: "no-store",
+      });
+      const data = await response.json();
+      if (response.ok && Array.isArray(data.items)) {
+        setMediaByProduct((current) => ({ ...current, [productId]: data.items }));
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      loadedMediaIdsRef.current.add(productId);
+    }
+  }
+
+  // โหลดรูปภาพของสินค้าแต่ละรายการที่ยังไม่เคยโหลด (รวมถึงสินค้าที่เพิ่งเพิ่มใหม่) —
+  // ไม่โหลดซ้ำของรายการที่มีอยู่แล้วใน loadedMediaIdsRef
+  useEffect(() => {
+    const missing = products
+      .map((product) => product.id)
+      .filter((id) => !loadedMediaIdsRef.current.has(id));
+
+    missing.forEach((id) => {
+      loadedMediaIdsRef.current.add(id);
+      loadProductMedia(id);
+    });
+  }, [products]);
+
+  function getPrimaryMedia(productId: number): ProductMediaItem | null {
+    const items = mediaByProduct[productId];
+    if (!items || items.length === 0) {
+      return null;
+    }
+    return items.find((item) => item.isPrimary) || items[0];
+  }
+
+  async function uploadProductImage(productId: number, file: File | undefined) {
+    if (!file) {
+      return;
+    }
+
+    setUploadingId((current) => ({ ...current, [productId]: true }));
+    setUploadErrors((current) => ({ ...current, [productId]: "" }));
+
+    try {
+      const formData = new FormData();
+      formData.append("image", file);
+
+      const response = await fetch(`/api/products/${productId}/media`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error || "ไม่สามารถอัปโหลดรูปภาพได้");
+      }
+
+      await loadProductMedia(productId);
+    } catch (err) {
+      setUploadErrors((current) => ({
+        ...current,
+        [productId]: err instanceof Error ? err.message : "ไม่สามารถอัปโหลดรูปภาพได้",
+      }));
+    } finally {
+      setUploadingId((current) => ({ ...current, [productId]: false }));
+    }
+  }
+
+  // ตั้งรูปนี้เป็นรูปหลักของ "สินค้ารายการนี้เท่านั้น" — productId มาจาก column สินค้าที่กดอยู่เสมอ
+  // (ไม่มีทางข้ามไปตั้งรูปหลักให้สินค้าอื่น เพราะ URL ผูก productId+mediaId คู่กันที่ฝั่ง API อยู่แล้ว)
+  async function setPrimaryImage(productId: number, mediaId: number) {
+    setMediaActionId(mediaId);
+    setMediaActionErrors((current) => ({ ...current, [productId]: "" }));
+
+    try {
+      const response = await fetch(
+        `/api/products/${productId}/media/${mediaId}`,
+        { method: "PATCH" }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error || "ไม่สามารถตั้งรูปหลักได้");
+      }
+
+      await loadProductMedia(productId);
+    } catch (err) {
+      setMediaActionErrors((current) => ({
+        ...current,
+        [productId]: err instanceof Error ? err.message : "ไม่สามารถตั้งรูปหลักได้",
+      }));
+    } finally {
+      setMediaActionId(null);
+    }
+  }
+
+  async function deleteMediaItem(productId: number, mediaId: number) {
+    const confirmed = confirm("ต้องการลบรูปนี้หรือไม่?");
+    if (!confirmed) {
+      return;
+    }
+
+    setMediaActionId(mediaId);
+    setMediaActionErrors((current) => ({ ...current, [productId]: "" }));
+
+    try {
+      const response = await fetch(
+        `/api/products/${productId}/media/${mediaId}`,
+        { method: "DELETE" }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error || "ไม่สามารถลบรูปภาพได้");
+      }
+
+      await loadProductMedia(productId);
+    } catch (err) {
+      setMediaActionErrors((current) => ({
+        ...current,
+        [productId]: err instanceof Error ? err.message : "ไม่สามารถลบรูปภาพได้",
+      }));
+    } finally {
+      setMediaActionId(null);
+    }
+  }
+
+  // ===== Product Image Viewer (STEP 33) — modal/lightbox ดูรูปขนาดใหญ่ ต่อยอดจาก STEP 31 =====
+  // อ้างอิงด้วย product.id เสมอ (viewerProductId) — viewerIndex เป็นแค่ "ตำแหน่งปัจจุบันในแถบรูปของ
+  // สินค้ารายการนี้เท่านั้น" ไม่เคยถูกใช้เป็นตัวระบุสินค้า/รูปสำหรับ mutation ใดๆ — ทุก action
+  // (ตั้งรูปหลัก/ลบ) ยังคงเรียก setPrimaryImage/deleteMediaItem ด้วย productId+media.id จริงเสมอ
+  // เหมือนเดิมทุกประการ ไม่มี logic ใหม่ซ้ำซ้อน
+  const [viewerProductId, setViewerProductId] = useState<number | null>(null);
+  const [viewerIndex, setViewerIndex] = useState(0);
+
+  function openViewer(productId: number, mediaId: number) {
+    const items = mediaByProduct[productId] || [];
+    const index = items.findIndex((item) => item.id === mediaId);
+    setViewerProductId(productId);
+    setViewerIndex(index >= 0 ? index : 0);
+  }
+
+  function closeViewer() {
+    setViewerProductId(null);
+  }
+
+  const viewerItems = viewerProductId !== null ? mediaByProduct[viewerProductId] || [] : [];
+  const viewerProduct =
+    viewerProductId !== null ? products.find((p) => p.id === viewerProductId) || null : null;
+  const viewerItem = viewerItems[viewerIndex] || null;
+
+  // ปิด modal อัตโนมัติถ้ารูปที่ดูอยู่หายไปหมด (เช่นลบรูปสุดท้าย) กันไม่ให้หน้า crash จากการ render
+  // รูปที่ไม่มีอยู่จริง — และ clamp index ให้อยู่ในขอบเขตเสมอถ้าจำนวนรูปลดลงจากการลบ
+  useEffect(() => {
+    if (viewerProductId === null) {
+      return;
+    }
+    if (viewerItems.length === 0) {
+      setViewerProductId(null);
+      return;
+    }
+    if (viewerIndex > viewerItems.length - 1) {
+      setViewerIndex(viewerItems.length - 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerProductId, viewerItems.length]);
+
+  // ปิดด้วยปุ่ม Escape — ผูก listener เฉพาะตอน modal เปิดอยู่เท่านั้น และคืนค่า (cleanup) เสมอ
+  useEffect(() => {
+    if (viewerProductId === null) {
+      return;
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        closeViewer();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [viewerProductId]);
+
+  function showPreviousImage() {
+    if (viewerItems.length === 0) {
+      return;
+    }
+    setViewerIndex((current) => (current - 1 + viewerItems.length) % viewerItems.length);
+  }
+
+  function showNextImage() {
+    if (viewerItems.length === 0) {
+      return;
+    }
+    setViewerIndex((current) => (current + 1) % viewerItems.length);
+  }
+
+  async function loadProducts() {
+    try {
+      setLoading(true);
+      setError("");
+      const response = await fetch("/api/products", {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error("ไม่สามารถโหลดข้อมูลสินค้าได้");
+      }
+      const data = await response.json();
+      setProducts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error(err);
+      setError("ไม่สามารถโหลดข้อมูลสินค้าได้");
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    loadProducts();
+  }, []);
+  function updateForm(field: keyof FormState, value: string) {
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+  async function addProduct() {
+    if (!form.name.trim()) {
+      alert("กรุณากรอกชื่อสินค้า");
+      return;
+    }
+    if (!form.price) {
+      alert("กรุณากรอกราคาขาย");
+      return;
+    }
+    try {
+      setSaving(true);
+      setError("");
+      const response = await fetch("/api/products", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: form.name,
+          model: form.model,
+          master: form.master,
+          year: form.year,
+          description: form.description,
+          price: Number(form.price),
+          cost: Number(form.cost || 0),
+          stock: Number(form.stock || 0),
+          lowStockThreshold: Number(form.lowStockThreshold || 0),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "ไม่สามารถเพิ่มสินค้าได้");
+      }
+      setProducts((current) => [data, ...current]);
+      setForm(emptyForm);
+      setShowForm(false);
+    } catch (err) {
+      console.error(err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "ไม่สามารถเพิ่มสินค้าได้"
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function deleteProduct(id: number) {
+    const confirmed = confirm("ต้องการลบสินค้านี้หรือไม่?");
+    if (!confirmed) {
+      return;
+    }
+    try {
+      setError("");
+      const response = await fetch(`/api/products?id=${id}`, {
+        method: "DELETE",
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "ไม่สามารถลบสินค้าได้");
+      }
+      setProducts((current) =>
+        current.filter((product) => product.id !== id)
+      );
+    } catch (err) {
+      console.error(err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "ไม่สามารถลบสินค้าได้"
+      );
+    }
+  }
+  const totalStock = products.reduce(
+    (sum, product) => sum + product.stock,
+    0
+  );
+  const stockValue = products.reduce(
+    (sum, product) => sum + product.price * product.stock,
+    0
+  );
+  const availableProducts = products.filter(
+    (product) => product.stock > 0
+  ).length;
+  // STEP 23 — "ใกล้หมด" นับเฉพาะ 0 < stock <= threshold (ไม่รวม stock=0 ซึ่งนับเป็น "หมด" แยกต่างหาก
+  // อยู่แล้วในสถิติ availableProducts/totalStock ด้านบน) ให้การ์ดสถิติ 3 ใบไม่ทับซ้อนกัน
+  const lowStockProducts = products.filter(
+    (product) => getStockLevel(product) === "low"
+  );
+  const visibleProducts = showLowStockOnly
+    ? products.filter((product) => getStockLevel(product) !== "ok")
+    : products;
+  return (
+    <main
+      className={`${serif.variable} ${sans.variable} min-h-screen bg-[#F1E9D8] p-6 text-[#2A2118]`}
+      style={{ fontFamily: "var(--font-sans-thai)" }}
+    >
+      <div className="mx-auto max-w-7xl">
+        <div className="mb-8 h-1 w-full rounded-full bg-gradient-to-r from-[#9C7A3C] via-[#C9A868] to-[#9C7A3C]" />
+        <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#9C7A3C]">
+              THAI AMULET TH
+            </p>
+            <h1
+              className="mt-1 text-3xl font-bold text-[#2A2118]"
+              style={{ fontFamily: "var(--font-serif-thai)" }}
+            >
+              จัดการสินค้า
+            </h1>
+            <p className="mt-1 text-[#8A7D68]">
+              เพิ่มและจัดการข้อมูลวัตถุมงคลของร้าน
+            </p>
+          </div>
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="rounded-md bg-[#2A2118] px-5 py-3 font-semibold text-[#F1E9D8] transition-colors hover:bg-[#3D3122]"
+          >
+            {showForm ? "ปิดแบบฟอร์ม" : "+ เพิ่มสินค้า"}
+          </button>
+        </div>
+        {error && (
+          <div className="mb-6 rounded-md border border-[#8B3A3A]/30 bg-[#8B3A3A]/5 p-4 text-[#8B3A3A]">
+            {error}
+          </div>
+        )}
+        {showForm && (
+          <section className="mb-8 rounded-md border border-[#DDD0B8] bg-[#FBF8F1] p-6 shadow-sm">
+            <h2
+              className="mb-5 text-xl font-bold text-[#2A2118]"
+              style={{ fontFamily: "var(--font-serif-thai)" }}
+            >
+              เพิ่มสินค้าใหม่
+            </h2>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <input
+                className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] placeholder:text-[#8A7D68]/70 focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                placeholder="ชื่อสินค้า"
+                value={form.name}
+                onChange={(e) =>
+                  updateForm("name", e.target.value)
+                }
+              />
+              <input
+                className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] placeholder:text-[#8A7D68]/70 focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                placeholder="รุ่น"
+                value={form.model}
+                onChange={(e) =>
+                  updateForm("model", e.target.value)
+                }
+              />
+              <input
+                className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] placeholder:text-[#8A7D68]/70 focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                placeholder="พระอาจารย์ / ผู้สร้าง"
+                value={form.master}
+                onChange={(e) =>
+                  updateForm("master", e.target.value)
+                }
+              />
+              <input
+                className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] placeholder:text-[#8A7D68]/70 focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                placeholder="ปีที่สร้าง"
+                value={form.year}
+                onChange={(e) =>
+                  updateForm("year", e.target.value)
+                }
+              />
+              <input
+                className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] placeholder:text-[#8A7D68]/70 focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                placeholder="รายละเอียดสินค้า"
+                value={form.description}
+                onChange={(e) =>
+                  updateForm("description", e.target.value)
+                }
+              />
+              <input
+                className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] tabular-nums placeholder:text-[#8A7D68]/70 focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                type="number"
+                placeholder="ราคาขาย"
+                value={form.price}
+                onChange={(e) =>
+                  updateForm("price", e.target.value)
+                }
+              />
+              <input
+                className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] tabular-nums placeholder:text-[#8A7D68]/70 focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                type="number"
+                placeholder="ต้นทุน"
+                value={form.cost}
+                onChange={(e) =>
+                  updateForm("cost", e.target.value)
+                }
+              />
+              <input
+                className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] tabular-nums placeholder:text-[#8A7D68]/70 focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                type="number"
+                placeholder="จำนวนสินค้า"
+                value={form.stock}
+                onChange={(e) =>
+                  updateForm("stock", e.target.value)
+                }
+              />
+              <input
+                className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] tabular-nums placeholder:text-[#8A7D68]/70 focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                type="number"
+                min="0"
+                placeholder="เกณฑ์แจ้งเตือนสต็อกต่ำ (ค่าเริ่มต้น 0)"
+                value={form.lowStockThreshold}
+                onChange={(e) =>
+                  updateForm("lowStockThreshold", e.target.value)
+                }
+              />
+            </div>
+            <div className="mt-5 flex gap-3">
+              <button
+                onClick={addProduct}
+                disabled={saving}
+                className="rounded-md bg-[#3F6355] px-5 py-3 font-semibold text-white transition-colors hover:bg-[#345144] disabled:opacity-50"
+              >
+                {saving ? "กำลังบันทึก..." : "บันทึกสินค้า"}
+              </button>
+              <button
+                onClick={() => setShowForm(false)}
+                disabled={saving}
+                className="rounded-md border border-[#DDD0B8] px-5 py-3 text-[#2A2118] transition-colors hover:bg-[#2A2118]/5 disabled:opacity-50"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          </section>
+        )}
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="rounded-md border border-[#DDD0B8] bg-[#FBF8F1] p-5 shadow-sm">
+            <p className="text-sm text-[#8A7D68]">
+              สินค้าทั้งหมด
+            </p>
+            <p
+              className="mt-2 text-3xl font-bold tabular-nums text-[#2A2118]"
+              style={{ fontFamily: "var(--font-serif-thai)" }}
+            >
+              {products.length}
+            </p>
+          </div>
+          <div className="rounded-md border border-[#DDD0B8] bg-[#FBF8F1] p-5 shadow-sm">
+            <p className="text-sm text-[#8A7D68]">
+              สินค้าพร้อมขาย
+            </p>
+            <p
+              className="mt-2 text-3xl font-bold tabular-nums text-[#3F6355]"
+              style={{ fontFamily: "var(--font-serif-thai)" }}
+            >
+              {availableProducts}
+            </p>
+          </div>
+          <div className="rounded-md border border-[#DDD0B8] bg-[#FBF8F1] p-5 shadow-sm">
+            <p className="text-sm text-[#8A7D68]">
+              จำนวนคงเหลือ
+            </p>
+            <p
+              className="mt-2 text-3xl font-bold tabular-nums text-[#2A2118]"
+              style={{ fontFamily: "var(--font-serif-thai)" }}
+            >
+              {totalStock.toLocaleString()}
+            </p>
+          </div>
+          <div className="rounded-md border border-[#DDD0B8] bg-[#FBF8F1] p-5 shadow-sm">
+            <p className="text-sm text-[#8A7D68]">
+              มูลค่าสินค้าตามราคาขาย
+            </p>
+            <p
+              className="mt-2 text-3xl font-bold tabular-nums text-[#9C7A3C]"
+              style={{ fontFamily: "var(--font-serif-thai)" }}
+            >
+              ฿{stockValue.toLocaleString()}
+            </p>
+          </div>
+          <div className="rounded-md border border-[#DDD0B8] bg-[#FBF8F1] p-5 shadow-sm">
+            <p className="text-sm text-[#8A7D68]">
+              สินค้าใกล้หมด
+            </p>
+            <p
+              className="mt-2 text-3xl font-bold tabular-nums text-[#9C6B1F]"
+              style={{ fontFamily: "var(--font-serif-thai)" }}
+            >
+              {lowStockProducts.length}
+            </p>
+          </div>
+        </section>
+        <section className="mt-8 overflow-hidden rounded-md border border-[#DDD0B8] bg-[#FBF8F1] shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#DDD0B8] px-6 py-4">
+            <h2
+              className="text-xl font-bold text-[#2A2118]"
+              style={{ fontFamily: "var(--font-serif-thai)" }}
+            >
+              รายการสินค้า
+            </h2>
+            <button
+              onClick={() => setShowLowStockOnly((current) => !current)}
+              className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+                showLowStockOnly
+                  ? "border-[#9C6B1F] bg-[#9C6B1F]/10 text-[#9C6B1F]"
+                  : "border-[#DDD0B8] text-[#2A2118] hover:bg-[#2A2118]/5"
+              }`}
+            >
+              {showLowStockOnly
+                ? "✓ แสดงเฉพาะสินค้าใกล้หมด/หมด"
+                : "แสดงเฉพาะสินค้าใกล้หมด/หมด"}
+            </button>
+          </div>
+          {loading ? (
+            <div className="p-12 text-center text-[#8A7D68]">
+              กำลังโหลดข้อมูลสินค้า...
+            </div>
+          ) : products.length === 0 ? (
+            <div className="p-12 text-center text-[#8A7D68]">
+              <p className="text-lg">
+                ยังไม่มีสินค้า
+              </p>
+              <p className="mt-2 text-sm">
+                กดปุ่ม &quot;+ เพิ่มสินค้า&quot; เพื่อเริ่มเพิ่มสินค้า
+              </p>
+            </div>
+          ) : visibleProducts.length === 0 ? (
+            <div className="p-12 text-center text-[#8A7D68]">
+              <p className="text-lg">
+                ไม่มีสินค้าที่ใกล้หมดหรือหมด
+              </p>
+            </div>
+          ) : (
+                   <div className="overflow-x-auto border-l-4 border-[#9C7A3C]">
+              <table className="w-full min-w-[1000px] text-left">
+                <thead>
+                  <tr className="border-b border-[#DDD0B8] text-sm text-[#8A7D68]">
+                    <th className="p-3 font-semibold">สินค้า</th>
+                    <th className="p-3 font-semibold">รุ่น</th>
+                    <th className="p-3 font-semibold">หลวงพ่อ/วัด</th>
+                    <th className="p-3 font-semibold">ปี</th>
+                    <th className="p-3 text-right font-semibold">ราคา</th>
+                    <th className="p-3 text-right font-semibold">ต้นทุน</th>
+                    <th className="p-3 text-right font-semibold">คงเหลือ</th>
+                    <th className="p-3 font-semibold">สถานะ</th>
+                    <th className="p-3 font-semibold">จัดการ</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {visibleProducts.map((product) => (
+                    <Fragment key={product.id}>
+                    <tr
+                      className="border-b border-[#DDD0B8] last:border-0 hover:bg-[#9C7A3C]/5"
+                    >
+                      <td className="p-3 font-semibold">
+                        <div className="flex items-start gap-3">
+                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-[#DDD0B8] bg-white">
+                            {getPrimaryMedia(product.id) ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openViewer(product.id, getPrimaryMedia(product.id)!.id)
+                                }
+                                title="ดูรูปขนาดใหญ่"
+                                className="h-full w-full cursor-pointer"
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={getPrimaryMedia(product.id)!.url}
+                                  alt=""
+                                  className="h-full w-full object-cover"
+                                />
+                              </button>
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-[10px] text-[#8A7D68]/60">
+                                ไม่มีรูป
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <p
+                              className="text-[#2A2118]"
+                              style={{ fontFamily: "var(--font-serif-thai)" }}
+                            >
+                              {product.name}
+                            </p>
+                            <label className="mt-1 inline-block cursor-pointer text-xs font-normal text-[#9C7A3C] hover:underline">
+                              {uploadingId[product.id]
+                                ? "กำลังอัปโหลด..."
+                                : "+ เพิ่มรูปภาพ"}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                disabled={Boolean(uploadingId[product.id])}
+                                onChange={(e) => {
+                                  const input = e.target;
+                                  const file = input.files?.[0];
+                                  uploadProductImage(product.id, file).finally(() => {
+                                    input.value = "";
+                                  });
+                                }}
+                              />
+                            </label>
+                            {uploadErrors[product.id] && (
+                              <p className="mt-1 text-xs font-normal text-[#8B3A3A]">
+                                {uploadErrors[product.id]}
+                              </p>
+                            )}
+                            {(mediaByProduct[product.id]?.length ?? 0) > 0 && (
+                              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                {mediaByProduct[product.id]!.slice(0, 4).map((item) => (
+                                  <div key={item.id} className="group relative">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        item.source === "product" &&
+                                        setPrimaryImage(product.id, item.id)
+                                      }
+                                      disabled={
+                                        mediaActionId === item.id ||
+                                        item.source !== "product"
+                                      }
+                                      title={
+                                        item.isPrimary
+                                          ? "รูปหลัก"
+                                          : item.source === "product"
+                                          ? "ตั้งเป็นรูปหลัก"
+                                          : "รูปที่สร้างด้วย AI (ตั้งเป็นรูปหลักไม่ได้)"
+                                      }
+                                      className={`h-6 w-6 overflow-hidden rounded border object-cover disabled:cursor-not-allowed ${
+                                        item.isPrimary
+                                          ? "border-[#9C7A3C] ring-1 ring-[#9C7A3C]"
+                                          : "border-[#DDD0B8]"
+                                      } ${
+                                        item.source === "product"
+                                          ? "cursor-pointer"
+                                          : "cursor-not-allowed opacity-70"
+                                      }`}
+                                    >
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img
+                                        src={item.url}
+                                        alt=""
+                                        className="h-full w-full object-cover"
+                                      />
+                                    </button>
+                                    {item.isPrimary && (
+                                      <span className="pointer-events-none absolute -left-1.5 -top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[#9C7A3C] text-[7px] leading-none text-white shadow-sm">
+                                        ★
+                                      </span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => deleteMediaItem(product.id, item.id)}
+                                      disabled={mediaActionId === item.id}
+                                      title="ลบรูปนี้"
+                                      className="absolute -right-1 -top-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-[#8B3A3A] text-[9px] leading-none text-white group-hover:flex disabled:opacity-50"
+                                    >
+                                      ×
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openViewer(product.id, item.id)}
+                                      title="ดูรูปขนาดใหญ่"
+                                      className="absolute -bottom-1 -left-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-[#2A2118] text-[8px] leading-none text-white group-hover:flex"
+                                    >
+                                      🔍
+                                    </button>
+                                  </div>
+                                ))}
+                                {mediaByProduct[product.id]!.length > 4 && (
+                                  <span className="text-[10px] font-normal text-[#8A7D68]">
+                                    +{mediaByProduct[product.id]!.length - 4}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            {mediaActionErrors[product.id] && (
+                              <p className="mt-1 text-xs font-normal text-[#8B3A3A]">
+                                {mediaActionErrors[product.id]}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className="p-3 text-[#2A2118]">
+                        {product.model || "-"}
+                      </td>
+
+                      <td className="p-3 text-[#2A2118]">
+                        {product.master || "-"}
+                      </td>
+
+                      <td className="p-3 text-[#2A2118]">
+                        {product.year || "-"}
+                      </td>
+
+                      <td className="p-3 text-right tabular-nums text-[#2A2118]">
+                        ฿{Number(product.price || 0).toLocaleString()}
+                      </td>
+
+                      <td className="p-3 text-right tabular-nums text-[#8A7D68]">
+                        ฿{Number(product.cost || 0).toLocaleString()}
+                      </td>
+
+                      <td className="p-3 text-right font-semibold tabular-nums text-[#2A2118]">
+                        {Number(product.stock || 0).toLocaleString()}
+                        {product.low_stock_threshold > 0 && (
+                          <span className="ml-1 text-xs font-normal text-[#8A7D68]">
+                            / เกณฑ์ {product.low_stock_threshold}
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="p-3">
+                        {(() => {
+                          const level = getStockLevel(product);
+
+                          if (level === "ok") {
+                            return (
+                              <span className="rounded-full bg-[#3F6355]/10 px-3 py-1 text-sm text-[#3F6355]">
+                                พร้อมขาย
+                              </span>
+                            );
+                          }
+
+                          if (level === "low") {
+                            return (
+                              <span className="rounded-full bg-[#9C6B1F]/10 px-3 py-1 text-sm font-medium text-[#9C6B1F]">
+                                ⚠️ ใกล้หมด
+                              </span>
+                            );
+                          }
+
+                          return (
+                            <span className="rounded-full bg-[#8B3A3A]/10 px-3 py-1 text-sm text-[#8B3A3A]">
+                              หมด
+                            </span>
+                          );
+                        })()}
+                      </td>
+
+                      <td className="p-3">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => startEdit(product)}
+                            className="rounded-md border border-[#2A2118]/15 px-3 py-2 text-sm font-medium text-[#2A2118] transition-colors hover:bg-[#2A2118]/5"
+                          >
+                            แก้ไข
+                          </button>
+                          <button
+                            onClick={() => startStockAdjustment(product)}
+                            className="rounded-md bg-[#9C7A3C]/10 px-3 py-2 text-sm font-medium text-[#7C5F2C] transition-colors hover:bg-[#9C7A3C]/20"
+                          >
+                            ปรับสต็อก
+                          </button>
+                          <button
+                            onClick={() => deleteProduct(product.id)}
+                            className="rounded-md bg-[#8B3A3A]/10 px-3 py-2 text-sm font-medium text-[#8B3A3A] transition-colors hover:bg-[#8B3A3A]/20"
+                          >
+                            ลบ
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {editingId === product.id && (
+                      <tr className="border-b border-[#DDD0B8] bg-[#9C7A3C]/5 last:border-0">
+                        <td colSpan={9} className="p-4">
+                          <p className="mb-3 text-sm font-semibold text-[#2A2118]">
+                            แก้ไขสินค้า: {product.name} (ID {product.id})
+                          </p>
+                          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                            <input
+                              className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                              placeholder="ชื่อสินค้า"
+                              value={editForm.name}
+                              onChange={(e) => updateEditForm("name", e.target.value)}
+                            />
+                            <input
+                              className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                              placeholder="รุ่น"
+                              value={editForm.model}
+                              onChange={(e) => updateEditForm("model", e.target.value)}
+                            />
+                            <input
+                              className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                              placeholder="พระอาจารย์ / ผู้สร้าง"
+                              value={editForm.master}
+                              onChange={(e) => updateEditForm("master", e.target.value)}
+                            />
+                            <input
+                              className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                              placeholder="ปีที่สร้าง"
+                              value={editForm.year}
+                              onChange={(e) => updateEditForm("year", e.target.value)}
+                            />
+                            <input
+                              className="rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                              placeholder="รายละเอียดสินค้า"
+                              value={editForm.description}
+                              onChange={(e) => updateEditForm("description", e.target.value)}
+                            />
+                            <input
+                              className="rounded-md border border-[#DDD0B8] bg-white p-3 tabular-nums text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                              type="number"
+                              placeholder="ราคาขาย"
+                              value={editForm.price}
+                              onChange={(e) => updateEditForm("price", e.target.value)}
+                            />
+                            <input
+                              className="rounded-md border border-[#DDD0B8] bg-white p-3 tabular-nums text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                              type="number"
+                              placeholder="ต้นทุน"
+                              value={editForm.cost}
+                              onChange={(e) => updateEditForm("cost", e.target.value)}
+                            />
+                            <input
+                              className="rounded-md border border-[#DDD0B8] bg-white p-3 tabular-nums text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                              type="number"
+                              placeholder="จำนวนสินค้า"
+                              value={editForm.stock}
+                              onChange={(e) => updateEditForm("stock", e.target.value)}
+                            />
+                            <input
+                              className="rounded-md border border-[#DDD0B8] bg-white p-3 tabular-nums text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                              type="number"
+                              min="0"
+                              placeholder="เกณฑ์แจ้งเตือนสต็อกต่ำ"
+                              value={editForm.lowStockThreshold}
+                              onChange={(e) => updateEditForm("lowStockThreshold", e.target.value)}
+                            />
+                          </div>
+                          {editError && (
+                            <p className="mt-3 text-sm text-[#8B3A3A]">{editError}</p>
+                          )}
+                          <div className="mt-4 flex gap-3">
+                            <button
+                              onClick={() => saveEdit(product.id)}
+                              disabled={editSaving}
+                              className="rounded-md bg-[#3F6355] px-5 py-2.5 font-semibold text-white transition-colors hover:bg-[#345144] disabled:opacity-50"
+                            >
+                              {editSaving ? "กำลังบันทึก..." : "บันทึก"}
+                            </button>
+                            <button
+                              onClick={cancelEdit}
+                              disabled={editSaving}
+                              className="rounded-md border border-[#DDD0B8] px-5 py-2.5 text-[#2A2118] transition-colors hover:bg-[#2A2118]/5 disabled:opacity-50"
+                            >
+                              ยกเลิก
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+
+                    {stockAdjustingId === product.id && (
+                      <tr className="border-b border-[#DDD0B8] bg-[#9C7A3C]/5 last:border-0">
+                        <td colSpan={9} className="p-4">
+                          <div className="rounded-md border border-[#9C7A3C]/30 bg-white p-4">
+                            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-semibold text-[#2A2118]">
+                                  ปรับสต็อก: {product.name}
+                                </p>
+                                <p className="mt-1 text-sm text-[#8A7D68]">
+                                  Stock ปัจจุบัน:{" "}
+                                  <span className="font-semibold tabular-nums text-[#2A2118]">
+                                    {Number(product.stock || 0).toLocaleString()}
+                                  </span>{" "}
+                                  ชิ้น
+                                </p>
+                              </div>
+
+                              <span className="rounded-full bg-[#9C7A3C]/10 px-3 py-1 text-xs font-medium text-[#7C5F2C]">
+                                บันทึกเป็น Inventory Movement
+                              </span>
+                            </div>
+
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div>
+                                <label className="mb-1 block text-sm font-medium text-[#8A7D68]">
+                                  จำนวนที่ปรับ
+                                </label>
+                                <input
+                                  className="w-full rounded-md border border-[#DDD0B8] bg-white p-3 tabular-nums text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                                  type="number"
+                                  step="1"
+                                  placeholder="เช่น 5 หรือ -2"
+                                  value={stockAdjustValue}
+                                  onChange={(e) =>
+                                    setStockAdjustValue(e.target.value)
+                                  }
+                                  disabled={stockAdjustSaving}
+                                />
+                                <p className="mt-1 text-xs text-[#8A7D68]">
+                                  ใช้ค่าบวกเพื่อเพิ่ม และค่าลบเพื่อลด
+                                </p>
+                              </div>
+
+                              <div>
+                                <label className="mb-1 block text-sm font-medium text-[#8A7D68]">
+                                  หมายเหตุ / เหตุผล
+                                </label>
+                                <input
+                                  className="w-full rounded-md border border-[#DDD0B8] bg-white p-3 text-[#2A2118] focus:border-[#9C7A3C] focus:outline-none focus:ring-1 focus:ring-[#9C7A3C]"
+                                  placeholder="เช่น รับสินค้าเข้า / ตรวจนับสต็อก"
+                                  value={stockAdjustNote}
+                                  onChange={(e) =>
+                                    setStockAdjustNote(e.target.value)
+                                  }
+                                  disabled={stockAdjustSaving}
+                                />
+                              </div>
+                            </div>
+
+                            {stockAdjustError && (
+                              <p className="mt-3 text-sm font-medium text-[#8B3A3A]">
+                                {stockAdjustError}
+                              </p>
+                            )}
+
+                            <div className="mt-4 flex gap-3">
+                              <button
+                                onClick={() => saveStockAdjustment(product.id)}
+                                disabled={stockAdjustSaving}
+                                className="rounded-md bg-[#9C7A3C] px-5 py-2.5 font-semibold text-white transition-colors hover:bg-[#7C5F2C] disabled:opacity-50"
+                              >
+                                {stockAdjustSaving
+                                  ? "กำลังบันทึก..."
+                                  : "บันทึกการปรับสต็อก"}
+                              </button>
+
+                              <button
+                                onClick={cancelStockAdjustment}
+                                disabled={stockAdjustSaving}
+                                className="rounded-md border border-[#DDD0B8] px-5 py-2.5 text-[#2A2118] transition-colors hover:bg-[#2A2118]/5 disabled:opacity-50"
+                              >
+                                ยกเลิก
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+      </div>
+
+      {/* ===== Product Image Viewer (STEP 33) — modal ดูรูปขนาดใหญ่ ===== */}
+      {viewerProduct && viewerItem && (
+        <div
+          role="presentation"
+          onClick={closeViewer}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#2A2118]/85 p-4"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`รูปสินค้า: ${viewerProduct.name}`}
+            onClick={(e) => e.stopPropagation()}
+            className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-md bg-[#FBF8F1]"
+          >
+            <div className="flex items-center justify-between border-b border-[#DDD0B8] p-4">
+              <div>
+                <p
+                  className="font-semibold text-[#2A2118]"
+                  style={{ fontFamily: "var(--font-serif-thai)" }}
+                >
+                  {viewerProduct.name}
+                </p>
+                {viewerItems.length > 1 && (
+                  <p className="text-sm tabular-nums text-[#8A7D68]">
+                    {viewerIndex + 1} / {viewerItems.length}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={closeViewer}
+                aria-label="ปิด"
+                className="rounded-md px-3 py-1.5 text-[#8A7D68] transition-colors hover:bg-[#2A2118]/5"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="relative flex flex-1 items-center justify-center bg-[#2A2118] p-2">
+              {viewerItems.length > 1 && (
+                <button
+                  type="button"
+                  onClick={showPreviousImage}
+                  aria-label="รูปก่อนหน้า"
+                  className="absolute left-2 rounded-full bg-[#FBF8F1]/85 px-3 py-2 text-lg text-[#2A2118] hover:bg-[#FBF8F1]"
+                >
+                  ‹
+                </button>
+              )}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={viewerItem.url}
+                alt={viewerProduct.name}
+                className="max-h-[65vh] w-full object-contain"
+              />
+              {viewerItems.length > 1 && (
+                <button
+                  type="button"
+                  onClick={showNextImage}
+                  aria-label="รูปถัดไป"
+                  className="absolute right-2 rounded-full bg-[#FBF8F1]/85 px-3 py-2 text-lg text-[#2A2118] hover:bg-[#FBF8F1]"
+                >
+                  ›
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#DDD0B8] p-4">
+              <p className="text-sm text-[#8A7D68]">
+                {viewerItem.isPrimary
+                  ? "★ รูปหลัก"
+                  : viewerItem.source === "ai"
+                  ? "รูปที่สร้างด้วย AI"
+                  : "รูปสินค้า"}
+              </p>
+              <div className="flex gap-2">
+                {!viewerItem.isPrimary && viewerItem.source === "product" && (
+                  <button
+                    type="button"
+                    onClick={() => setPrimaryImage(viewerProduct.id, viewerItem.id)}
+                    disabled={mediaActionId === viewerItem.id}
+                    className="rounded-md bg-[#3F6355]/10 px-3 py-2 text-sm font-medium text-[#3F6355] transition-colors hover:bg-[#3F6355]/20 disabled:opacity-50"
+                  >
+                    ตั้งเป็นรูปหลัก
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => deleteMediaItem(viewerProduct.id, viewerItem.id)}
+                  disabled={mediaActionId === viewerItem.id}
+                  className="rounded-md bg-[#8B3A3A]/10 px-3 py-2 text-sm font-medium text-[#8B3A3A] transition-colors hover:bg-[#8B3A3A]/20 disabled:opacity-50"
+                >
+                  ลบรูปนี้
+                </button>
+              </div>
+            </div>
+            {mediaActionErrors[viewerProduct.id] && (
+              <p className="border-t border-[#DDD0B8] p-3 text-sm text-[#8B3A3A]">
+                {mediaActionErrors[viewerProduct.id]}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}

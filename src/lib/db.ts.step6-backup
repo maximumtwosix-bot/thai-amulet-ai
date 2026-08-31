@@ -1,0 +1,100 @@
+﻿import Database from "better-sqlite3";
+import path from "path";
+import fs from "fs";
+
+const dataDir = path.join(process.cwd(), "data");
+
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const dbPath = path.join(dataDir, "thai-amulet.db");
+
+const db = new Database(dbPath);
+
+db.pragma("journal_mode = WAL");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    model TEXT,
+    master TEXT,
+    year TEXT,
+    description TEXT,
+    price REAL NOT NULL DEFAULT 0,
+    cost REAL NOT NULL DEFAULT 0,
+    stock INTEGER NOT NULL DEFAULT 0,
+    category TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS customers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    phone TEXT,
+    address TEXT,
+    district TEXT,
+    province TEXT,
+    postal_code TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_number TEXT NOT NULL UNIQUE,
+    customer_id INTEGER,
+    channel TEXT,
+    payment_method TEXT,
+    subtotal REAL NOT NULL DEFAULT 0,
+    shipping_fee REAL NOT NULL DEFAULT 0,
+    discount REAL NOT NULL DEFAULT 0,
+    total REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES customers(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS order_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    price REAL NOT NULL DEFAULT 0,
+    cost REAL NOT NULL DEFAULT 0,
+    FOREIGN KEY (order_id) REFERENCES orders(id),
+    FOREIGN KEY (product_id) REFERENCES products(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS content (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    content_type TEXT,
+    platform TEXT,
+    caption TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+const columns = db
+  .prepare("PRAGMA table_info(products)")
+  .all() as Array<{ name: string }>;
+
+const columnNames = new Set(columns.map((column) => column.name));
+
+if (!columnNames.has("model")) {
+  db.exec("ALTER TABLE products ADD COLUMN model TEXT");
+}
+
+if (!columnNames.has("master")) {
+  db.exec("ALTER TABLE products ADD COLUMN master TEXT");
+}
+
+if (!columnNames.has("year")) {
+  db.exec("ALTER TABLE products ADD COLUMN year TEXT");
+}
+
+export default db;

@@ -1,0 +1,41 @@
+export type MediaItem = {
+  type: "image" | "video";
+  url: string;
+  fileName: string;
+  source: "product" | "upload" | "ai" | "generated";
+};
+
+export type PrepareMediaResult = {
+  items: MediaItem[];
+  count: number;
+  status: "ready" | "no_media";
+};
+
+type ProductForMedia = {
+  id: number;
+};
+
+/**
+ * เตรียมข้อมูลสื่อ (รูปภาพ/วิดีโอ) ของสินค้าสำหรับขั้นตอนถัดไปของ pipeline (create-timeline)
+ *
+ * สถานะปัจจุบัน (STEP 4): โปรเจกต์นี้ยังไม่มีระบบเก็บรูปภาพ/สื่อของสินค้าเลย — ตาราง products
+ * ไม่มีคอลัมน์ image/media, ไม่มี upload API, ไม่มีโฟลเดอร์เก็บไฟล์ต่อสินค้า (ตรวจสอบแล้วก่อนเขียนไฟล์นี้)
+ * จึงคืนค่า no_media อย่างตรงไปตรงมา ไม่สร้างข้อมูลปลอมขึ้นมา
+ *
+ * ฟังก์ชันนี้เตรียมโครงไว้ให้ STEP ถัดไปเสียบแหล่งข้อมูลจริงได้โดยไม่ต้องแก้ pipeline ใน
+ * /api/video/auto อีก เช่น รูปภาพสินค้าที่อัปโหลดจริง (source: "product"/"upload"),
+ * รูปที่สร้างด้วย AI (source: "ai"/"generated"), หรือวิดีโอสินค้า (type: "video")
+ */
+export async function prepareProductMedia(
+  product: ProductForMedia
+): Promise<PrepareMediaResult> {
+  void product; // ยังไม่มีแหล่งข้อมูลจริงให้ query ในตอนนี้ — เก็บพารามิเตอร์ไว้เพื่อให้ signature พร้อมใช้งานจริงใน STEP ถัดไป
+
+  const items: MediaItem[] = [];
+
+  return {
+    items,
+    count: items.length,
+    status: items.length > 0 ? "ready" : "no_media",
+  };
+}

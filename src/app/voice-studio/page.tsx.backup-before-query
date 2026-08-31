@@ -1,0 +1,95 @@
+﻿"use client";
+
+import { useState } from "react";
+
+export default function VoiceStudioPage() {
+  const [script, setScript] = useState("");
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function prepareVoice() {
+    if (!script.trim()) {
+      setStatus("กรุณาใส่สคริปต์ก่อน");
+      return;
+    }
+
+    setLoading(true);
+    setStatus("");
+
+    try {
+      const response = await fetch("/api/voice", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          script,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "ไม่สามารถเตรียมเสียงพากย์ได้"
+        );
+      }
+
+      setStatus(
+        "✅ รับสคริปต์เรียบร้อยแล้ว พร้อมเข้าสู่ขั้นตอนสร้างเสียงพากย์"
+      );
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? error.message
+          : "เกิดข้อผิดพลาด"
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="min-h-screen bg-black text-white p-6">
+      <div className="mx-auto max-w-4xl">
+        <h1 className="text-3xl font-bold">
+          🎙️ Voice Studio
+        </h1>
+
+        <p className="mt-2 text-gray-400">
+          เตรียมสคริปต์สำหรับสร้างเสียงพากย์ THAI AMULET TH
+        </p>
+
+        <div className="mt-8">
+          <label className="mb-2 block font-medium">
+            สคริปต์เสียงพากย์
+          </label>
+
+          <textarea
+            value={script}
+            onChange={(event) => setScript(event.target.value)}
+            placeholder="นำสคริปต์จาก Content Studio มาวางที่นี่..."
+            className="min-h-[300px] w-full rounded-xl border border-gray-700 bg-gray-900 p-4 text-white outline-none focus:border-gray-400"
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={prepareVoice}
+          disabled={loading}
+          className="mt-4 rounded-xl bg-white px-6 py-3 font-semibold text-black disabled:opacity-50"
+        >
+          {loading
+            ? "กำลังประมวลผล..."
+            : "🎙️ เตรียมเสียงพากย์"}
+        </button>
+
+        {status && (
+          <div className="mt-6 rounded-xl border border-gray-700 bg-gray-900 p-4">
+            {status}
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}

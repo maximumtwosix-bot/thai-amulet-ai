@@ -1,0 +1,97 @@
+import db from "@/lib/db";
+
+type ProductMediaRow = {
+  id: number;
+  product_id: number;
+  file_name: string;
+  image_url: string;
+  is_primary: number;
+  source: string;
+  created_at: string;
+};
+
+export type ProductMediaSource = "product" | "ai";
+
+export type ProductMediaItem = {
+  id: number;
+  fileName: string;
+  url: string;
+  type: "image";
+  source: ProductMediaSource;
+  isPrimary: boolean;
+  createdAt: string;
+};
+
+function mapRow(row: ProductMediaRow): ProductMediaItem {
+  return {
+    id: row.id,
+    fileName: row.file_name,
+    url: row.image_url,
+    type: "image",
+    source: row.source === "ai" ? "ai" : "product",
+    isPrimary: row.is_primary === 1,
+    createdAt: row.created_at,
+  };
+}
+
+/**
+ * รายการรูปภาพจริงของสินค้า เรียงลำดับ primary ก่อน แล้วตามด้วยเวลาที่อัปโหลด (เก่าไปใหม่)
+ * — ลำดับนี้คือลำดับที่ /api/video/auto ใช้สร้าง Timeline โดยตรง ไม่ต้องเรียงซ้ำที่อื่น
+ */
+export function listProductMedia(productId: number): ProductMediaItem[] {
+  const rows = db
+    .prepare(
+      `
+      SELECT id, product_id, file_name, image_url, is_primary, source, created_at
+      FROM product_media
+      WHERE product_id = ?
+      ORDER BY is_primary DESC, created_at ASC, id ASC
+    `
+    )
+    .all(productId) as ProductMediaRow[];
+
+  return rows.map(mapRow);
+}
+
+/**
+ * บันทึกรูปภาพสินค้าใหม่ (ไฟล์ต้องถูกเขียนลงดิสก์เรียบร้อยแล้วก่อนเรียกฟังก์ชันนี้)
+ *
+ * รูปอัปโหลดจริง ("product") รูปแรกของสินค้าแต่ละชิ้นจะถูกตั้งเป็น primary image โดยอัตโนมัติ
+ * รูปที่สร้างด้วย AI ("ai" — STEP 13) จะ "ไม่มีทาง" ถูกตั้งเป็น primary อัตโนมัติเด็ดขาด แม้สินค้า
+ * จะยังไม่มีรูปอื่นเลยก็ตาม — เพื่อให้รูปสินค้าจริงยังคงเป็นตัวเลือกหลักเสมอเมื่อมีการอัปโหลดจริงตามมา
+ */
+export function insertProductMedia(params: {
+  productId: number;
+  fileName: string;
+  imageUrl: string;
+  source?: ProductMediaSource;
+}): ProductMediaItem {
+  const source: ProductMediaSource = params.source === "ai" ? "ai" : "product";
+
+  const existing = db
+    .prepare(`SELECT COUNT(*) as count FROM product_media WHERE product_id = ?`)
+    .get(params.productId) as { count: number };
+
+  const isPrimary = existing.count === 0 && source === "product" ? 1 : 0;
+
+  const result = db
+    .prepare(
+      `
+      INSERT INTO product_media (product_id, file_name, image_url, is_primary, source)
+      VALUES (?, ?, ?, ?, ?)
+    `
+    )
+    .run(params.productId, params.fileName, params.imageUrl, isPrimary, source);
+
+  const row = db
+    .prepare(
+      `
+      SELECT id, product_id, file_name, image_url, is_primary, source, created_at
+      FROM product_media
+      WHERE id = ?
+    `
+    )
+    .get(result.lastInsertRowid) as ProductMediaRow;
+
+  return mapRow(row);
+}

@@ -1,0 +1,568 @@
+﻿# THAI AMULET AI — PROJECT STATUS
+# Last updated: 2026-08-29
+# Project path: C:\Users\maxim\thai-amulet-ai
+
+---
+
+## 1. PROJECT OVERVIEW
+
+Project: THAI AMULET AI
+
+เป้าหมาย:
+สร้างระบบ AI ภายในสำหรับ THAI AMULET TH
+ตั้งแต่จัดการสินค้า → สร้าง Content → สร้าง Voice → สร้าง Video → Export MP4
+และต่อยอดไปสู่ระบบ Automation สำหรับการโพสต์
+
+Current workflow:
+
+Product
+  ↓
+Content Studio
+  ↓
+Content Library
+  ↓
+Voice Studio
+  ↓
+Video Studio
+  ↓
+Video Render API
+  ↓
+MP4 พร้อมเสียง
+  ↓
+เตรียมระบบโพสต์อัตโนมัติ
+
+---
+
+## 2. CURRENT TECH STACK
+
+- Windows
+- PowerShell
+- Node.js v24.19.0
+- npm 11.17.0
+- pnpm
+- Next.js 16.3.2
+- TypeScript
+- SQLite
+- better-sqlite3
+- Tailwind CSS
+
+Database:
+
+C:\Users\maxim\thai-amulet-ai\data\thai-amulet.db
+
+---
+
+## 3. DATABASE STATUS
+
+SQLite database exists and is working.
+
+Database file:
+
+data/thai-amulet.db
+
+Confirmed tables:
+
+- content
+- customers
+- order_items
+- orders
+- products
+- sqlite_sequence
+
+Confirmed content table columns:
+
+- id
+- title
+- content_type
+- platform
+- caption
+- status
+- created_at
+
+---
+
+## 4. APP PAGES
+
+Confirmed app directories:
+
+src/app/
+
+- api
+- content
+- content-studio
+- orders
+- products
+- video-studio
+- voice-studio
+
+---
+
+## 5. CONTENT STUDIO
+
+File:
+
+src/app/content-studio/page.tsx
+
+Current status:
+
+WORKING
+
+Features:
+
+- Select product
+- Select content type
+- Select language tone
+- Generate content
+- Display generated result
+- Copy content
+- Send Script to Voice Studio
+- Save generated content to database
+
+Content types currently include:
+
+- facebook
+- reels
+- tiktok
+- script
+
+---
+
+## 6. CONTENT SAVE API
+
+File:
+
+src/app/api/content/save/route.ts
+
+Status:
+
+WORKING
+
+Endpoint:
+
+POST /api/content/save
+
+Purpose:
+
+บันทึก Content Studio result ลง SQLite table `content`
+
+Validated:
+
+- title
+- contentType
+- platform
+- caption
+- status = draft
+
+---
+
+## 7. CONTENT LIST API
+
+File:
+
+src/app/api/content/list/route.ts
+
+Status:
+
+WORKING
+
+Endpoint:
+
+GET /api/content/list
+
+Purpose:
+
+โหลดรายการ Content จาก SQLite
+
+Confirmed API response:
+
+success: true
+
+สามารถอ่านข้อมูล Content ที่บันทึกไว้ได้
+
+---
+
+## 8. CONTENT LIBRARY
+
+File:
+
+src/app/content/page.tsx
+
+Status:
+
+WORKING
+
+Features:
+
+- Load saved content
+- Search content
+- Filter by platform/content type
+- Display content cards
+- Open content
+- Copy content
+- Link back to Content Studio
+
+Important:
+
+ก่อนหน้านี้ directory `src/app/content` ไม่มี page.tsx
+แต่ตอนนี้มีแล้วและตรวจสอบโค้ดเรียบร้อย
+
+---
+
+## 9. TEST DATA
+
+Database currently contains at least:
+
+Content ID 1:
+
+TITLE:
+TEST - Content Studio
+
+Content ID 2:
+
+TITLE:
+เบี้ยแก้ - facebook
+
+ทั้งสองรายการสามารถอ่านจาก `/api/content/list` ได้
+
+---
+
+## 10. VOICE STUDIO
+
+Directory:
+
+src/app/voice-studio
+
+File:
+
+src/app/voice-studio/page.tsx
+
+Current status:
+
+PARTIALLY CONNECTED / NEXT DEVELOPMENT TARGET
+
+Current functionality:
+
+- รับ Script จาก URL
+- อ่าน query parameter `script`
+- ใส่ Script ลง textarea
+- มีระบบเรียก API สำหรับสร้างเสียง
+- มีการส่ง script ไปยัง API
+
+Important existing integration:
+
+Content Studio มี function:
+
+sendToVoiceStudio()
+
+และส่ง Script ไป:
+
+/voice-studio?script=...
+
+ดังนั้น:
+
+Content Studio
+→ Voice Studio
+
+เชื่อมต่อแล้ว
+
+---
+
+## 11. VIDEO STUDIO
+
+Directory:
+
+src/app/video-studio
+
+Current status:
+
+EXISTS
+
+ต้องตรวจสอบรายละเอียด implementation ก่อนพัฒนาเพิ่ม
+
+เป้าหมาย:
+
+รับ
+
+- Script
+- Audio
+- Product images
+- Scene information
+
+แล้วสร้าง Timeline สำหรับ Video Render
+
+---
+
+## 12. VIDEO RENDER API
+
+File:
+
+src/app/api/video/render/route.ts
+
+Status:
+
+EXISTS
+
+Current response structure includes:
+
+success: true
+
+videoUrl:
+ /generated/video/[filename]
+
+fileName
+
+scenes
+
+duration
+
+message:
+สร้างวิดีโอ MP4 พร้อมเสียงพากย์สำเร็จ
+
+Error handling และ workDir cleanup มีอยู่แล้ว
+
+---
+
+## 13. IMPORTANT TEST
+
+TypeScript test:
+
+pnpm.cmd exec tsc --noEmit
+
+ล่าสุด:
+
+PASSED
+
+ไม่มี TypeScript Error
+
+---
+
+## 14. IMPORTANT POWERSELL ISSUE
+
+เดิม:
+
+pnpm exec tsc --noEmit
+
+อาจถูก PowerShell Execution Policy block
+
+Error:
+
+pnpm.ps1 cannot be loaded because running scripts is disabled
+
+วิธีที่ผ่าน:
+
+pnpm.cmd exec tsc --noEmit
+
+ดังนั้นเวลาทดสอบ TypeScript ให้ใช้:
+
+pnpm.cmd exec tsc --noEmit
+
+---
+
+## 15. DATABASE INSPECTION
+
+better-sqlite3 ใช้งานได้
+
+ตัวอย่างวิธีตรวจ database ที่ผ่านแล้ว:
+
+สร้างไฟล์ .cjs ชั่วคราวแล้วรันด้วย:
+
+node .\check-db.cjs
+
+หากสร้างไฟล์ตรวจ database ใหม่ ให้ลบไฟล์ชั่วคราวภายหลังเมื่อไม่จำเป็น
+
+---
+
+## 16. ENCODING NOTE
+
+เคยพบ output จาก PowerShell/API ที่แสดงภาษาไทยเป็นลักษณะ:
+
+à¹...
+â€¦
+
+แต่เมื่ออ่านข้อมูลโดยตรงจาก database ด้วยวิธีที่ถูกต้อง ภาษาไทยในข้อมูลยังถูกต้อง
+
+ต้องระวังเรื่อง UTF-8 / PowerShell output encoding
+ก่อนแก้ database หรือข้อมูลจริง
+
+---
+
+## 17. CURRENT DEVELOPMENT CHECKPOINT
+
+DONE:
+
+[✓] Project structure
+[✓] SQLite database
+[✓] Product data
+[✓] Content table
+[✓] Content Studio
+[✓] Generate Content
+[✓] Save Content API
+[✓] Content List API
+[✓] Content Library
+[✓] Content Studio → Voice Studio Script transfer
+[✓] Video Render API exists
+[✓] TypeScript check passes
+
+CURRENT:
+
+[→] Voice Studio → Audio output verification
+[→] Voice Studio → Video Studio integration
+
+NEXT:
+
+[ ] Verify Voice API output
+[ ] Verify generated audio file location
+[ ] Add audio player to Voice Studio
+[ ] Add "ส่งไป Video Studio" button
+[ ] Pass audio URL + script to Video Studio
+[ ] Make Video Studio receive incoming data
+[ ] Product image → Video Scene
+[ ] Scene timeline
+[ ] Subtitle
+[ ] Background music
+[ ] Video effects
+[ ] Connect Video Studio to Render API
+[ ] Render real MP4
+[ ] Verify generated MP4
+[ ] Final Automation Pipeline
+[ ] Publishing automation
+
+---
+
+## 18. NEXT STEP — DO NOT SKIP
+
+Before modifying Voice Studio:
+
+Inspect:
+
+src/app/voice-studio/page.tsx
+
+and:
+
+src/app/api/voice/
+
+Need to determine:
+
+1. How voice generation works
+2. What API returns
+3. Where generated audio is stored
+4. Whether audio URL is directly accessible
+5. Whether Video Studio can consume that audio URL
+
+After verification:
+
+Implement:
+
+Voice Studio
+→ Generate Audio
+→ Preview Audio
+→ Send to Video Studio
+
+Do NOT redesign the whole project.
+Do NOT replace working code unnecessarily.
+Make incremental changes and run TypeScript check after each major change.
+
+---
+
+## 19. DEVELOPMENT RULE
+
+Every major change should follow:
+
+1. Inspect existing code
+2. Backup file
+3. Make smallest required change
+4. Run:
+
+pnpm.cmd exec tsc --noEmit
+
+5. Test API/UI
+6. Confirm success
+7. Update this PROJECT_STATUS.md
+
+---
+
+## 21. STEP 21 — AI COST TRACKING (LEDGER + DASHBOARD)
+
+Status:
+
+DONE — ตรวจสอบและทดสอบแล้ว (2026-08-29)
+
+เป้าหมาย:
+
+บันทึกทุกครั้งที่มีการเรียก AI generation จริง (text/image/video/voice) เพื่อดูภาพรวมต้นทุน
+เป็น accounting/observability layer เท่านั้น — ไม่มีกลไก quota/limit ใดๆ
+
+Schema:
+
+- ตาราง `ai_cost_ledger` (src/lib/db.ts) — two-phase pattern เดียวกับ social_worker_runs (STEP 18)
+  บันทึก status='processing' ก่อนยิง provider แล้ว finalize เป็น succeeded/failed ทีหลัง
+
+Service layer:
+
+- src/lib/costLedger.ts — recordAiGeneration / finalizeAiGenerationCost /
+  finalizeAiGenerationCostByAiVideoJobId / linkLedgerToContentPlan / getCostSummary /
+  getProductAiCost / getContentPlanAiCost / getClipAiCost / listClipAiCostsForProduct
+
+Pricing config:
+
+- src/lib/costConfig.ts — ห้าม hardcode ราคา ต้องตั้งผ่าน environment variable เท่านั้น
+  (ไม่ตั้งค่า = cost: null, reason: "pricing_not_configured") ดู .env.example ส่วน STEP 21
+
+จุดที่เรียก ledger ครบแล้ว (record ก่อนยิง provider + finalize หลังรู้ผล):
+
+- src/app/api/voice/route.ts
+- src/app/api/video/auto/route.ts
+- src/app/api/products/[id]/ai-video/generate/route.ts (create job)
+- src/app/api/products/[id]/ai-video/jobs/[jobId]/route.ts (finalize ตอน poll)
+- src/app/api/products/[id]/media/generate/route.ts
+- src/app/api/content/generate/route.ts
+- src/app/api/content/plan/route.ts
+- src/app/api/content/calendar/plan/route.ts
+
+API endpoints (ทดสอบยิงจริงผ่าน dev server แล้ว — ตอบถูกต้อง):
+
+- GET /api/costs/summary
+- GET /api/costs
+- GET /api/costs/products/[id]
+- GET /api/costs/content-plans/[id]
+
+UI:
+
+- src/app/costs/page.tsx — AI Cost Dashboard หน้าใหม่ (โหลดได้ HTTP 200)
+- src/app/video-studio/page.tsx — panel "💰 Product AI Cost" ต่อสินค้า
+- src/app/page.tsx — ลิงก์ไปหน้า /costs
+
+Verified:
+
+- pnpm.cmd exec tsc --noEmit → PASSED ไม่มี error
+- ไม่มี TODO/FIXME ค้างในโค้ดที่เกี่ยวข้อง
+- ทดสอบยิง API จริงผ่าน dev server (curl) — /api/costs/summary, /api/costs/products/[id], /costs
+  ทำงานถูกต้องทั้งหมด (ยังไม่มี actual_cost เพราะไม่มี provider ใดคืนค่า billing จริงให้ — ตามที่ตั้งใจ)
+
+หมายเหตุ:
+
+ยังไม่ได้ตั้งค่า pricing environment variables จริง (OPENAI_TEXT_PRICE_INPUT_PER_1K ฯลฯ) — ถ้าต้องการ
+เห็นตัวเลข estimated cost จริงในหน้า dashboard ต้องตั้งค่าตาม .env.example ส่วน STEP 21 ก่อน
+ไม่ใช่บั๊ก เป็น "unconfigured by design" ตามที่ costConfig.ts ระบุไว้
+
+---
+
+## 20. RECOVERY IN A NEW CHAT
+
+If this chat reaches its limit:
+
+Open a new ChatGPT chat and say:
+
+"ทำโปรเจกต์ THAI AMULET AI ต่อจาก PROJECT_STATUS.md
+โปรเจกต์อยู่ที่ C:\Users\maxim\thai-amulet-ai
+อย่าเริ่มใหม่ ให้ตรวจสถานะจากไฟล์ก่อน"
+
+Then provide the current PROJECT_STATUS.md if needed.
+
+The next development target is:
+
+VOICE STUDIO → VIDEO STUDIO
+
+---
+
+END OF PROJECT STATUS

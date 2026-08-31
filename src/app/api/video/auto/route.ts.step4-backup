@@ -1,0 +1,189 @@
+﻿import { NextResponse } from "next/server";
+import db from "@/lib/db";
+import { generateVoice } from "@/lib/voice";
+
+export const runtime = "nodejs";
+
+type AutoVideoRequest = {
+  productId?: number;
+  script?: string;
+  tone?: string;
+};
+
+type Product = {
+  id: number;
+  name: string;
+  model: string | null;
+  master: string | null;
+  year: string | null;
+  description: string | null;
+  price: number;
+  stock: number;
+  category: string | null;
+  status: string | null;
+};
+
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json()) as AutoVideoRequest;
+
+    const productId = Number(body.productId || 0);
+    const manualScript = String(body.script || "").trim();
+    const tone = String(body.tone || "premium");
+
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return NextResponse.json(
+        { error: "กรุณาระบุรหัสสินค้าให้ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    const product = db
+      .prepare(`
+        SELECT
+          id,
+          name,
+          model,
+          master,
+          year,
+          description,
+          price,
+          stock,
+          category,
+          status
+        FROM products
+        WHERE id = ?
+      `)
+      .get(productId) as Product | undefined;
+
+    if (!product) {
+      return NextResponse.json(
+        { error: `ไม่พบสินค้ารหัส ${productId}` },
+        { status: 404 }
+      );
+    }
+
+    let content: {
+      facebook: string;
+      reels: string;
+      tiktok: string;
+      script: string;
+    };
+
+    if (manualScript) {
+      content = {
+        facebook: "",
+        reels: "",
+        tiktok: "",
+        script: manualScript,
+      };
+    } else {
+      const contentUrl = new URL(
+        "/api/content/generate",
+        request.url
+      );
+
+      const contentResponse = await fetch(contentUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          product: {
+            id: product.id,
+            name: product.name,
+            model: product.model || "",
+            master: product.master || "",
+            year: product.year || "",
+            description: product.description || "",
+            price: product.price,
+            stock: product.stock,
+            category: product.category || "",
+            status: product.status || "",
+          },
+          tone,
+        }),
+        cache: "no-store",
+      });
+
+      const contentData = await contentResponse.json();
+
+      if (!contentResponse.ok) {
+        throw new Error(
+          contentData?.error ||
+            "ไม่สามารถสร้างคอนเทนต์จากสินค้าได้"
+        );
+      }
+
+      if (!contentData?.content) {
+        throw new Error(
+          "Content Generate API ไม่ได้ส่ง content กลับมา"
+        );
+      }
+
+      content = contentData.content;
+    }
+
+    const script = String(content.script || "").trim();
+
+    if (!script) {
+      return NextResponse.json(
+        { error: "ไม่พบ script สำหรับสร้างเสียงพากย์" },
+        { status: 400 }
+      );
+    }
+
+    const voice = await generateVoice(script);
+
+    return NextResponse.json({
+      success: true,
+
+      pipeline: {
+        status: "voice_ready",
+        step: "generate-voice",
+        productId: product.id,
+      },
+
+      product: {
+        id: product.id,
+        name: product.name,
+        model: product.model,
+        master: product.master,
+        year: product.year,
+        price: product.price,
+        stock: product.stock,
+      },
+
+      content: {
+        facebook: content.facebook || "",
+        reels: content.reels || "",
+        tiktok: content.tiktok || "",
+        script: content.script || "",
+      },
+
+      voice: {
+        audioUrl: voice.audioUrl,
+        fileName: voice.fileName,
+      },
+
+      nextStep: "prepare-media",
+
+      message: "สร้าง AI Content และเสียงพากย์สำเร็จแล้ว",
+    });
+  } catch (error) {
+    console.error(
+      "POST /api/video/auto error:",
+      error
+    );
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "ไม่สามารถเริ่ม Auto Video Pipeline ได้",
+      },
+      { status: 500 }
+    );
+  }
+}

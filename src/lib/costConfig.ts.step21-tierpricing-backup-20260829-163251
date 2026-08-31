@@ -1,0 +1,225 @@
+// Cost Configuration — STEP 21
+//
+// แยก pricing ออกจาก business logic ทั้งหมดตามที่ STEP 21 กำหนด — ไม่มี route หรือ lib generation
+// ไฟล์ไหน hardcode ราคาเอง ทุกที่ต้องเรียกผ่าน getProviderPricing()/calculateEstimatedCost() ในไฟล์นี้
+// เท่านั้น
+//
+// กฎสำคัญที่สุด: ห้ามเดาราคา — ณ ตอนเขียนโค้ดนี้ (2026) ไม่มีทางยืนยัน pricing ปัจจุบันของ OpenAI
+// (gpt-5-mini / gpt-image-1 / tts-1-hd) และ Replicate (โมเดลกำหนดได้ผ่าน REPLICATE_VIDEO_MODEL ซึ่ง
+// แต่ละโมเดลราคาต่างกัน) ได้จากภายใน repo นี้เลย ดังนั้นทุกราคาในไฟล์นี้ "ไม่มีค่า default เป็นตัวเลข"
+// ต้องตั้งค่าผ่าน environment variable เองเสมอ — ถ้าไม่ตั้งค่า calculateEstimatedCost() จะคืน
+// cost: null พร้อมเหตุผล "pricing_not_configured" แทนที่จะเดาตัวเลขใดๆ ทั้งสิ้น
+//
+// ทุกตัวเลขที่คำนวณได้จากไฟล์นี้คือ "estimated" (ประมาณการ) เท่านั้น — ไม่ใช่ actual billing จริง
+// actual_cost ต้องมาจาก billing API จริงของ provider เท่านั้น (ดู src/lib/costLedger.ts)
+
+export type AiCostCurrency = string;
+
+function readPriceEnv(name: string): number | null {
+  const raw = process.env[name];
+
+  if (raw === undefined || raw === null) return null;
+
+  const trimmed = raw.trim();
+
+  if (trimmed === "") return null;
+
+  const value = Number(trimmed);
+
+  if (!Number.isFinite(value) || value < 0) return null;
+
+  return value;
+}
+
+/** สกุลเงินที่ราคาทั้งหมดในไฟล์นี้อ้างอิงถึง — ตั้งค่าได้ผ่าน COST_CURRENCY (default "USD") */
+export function getCostCurrency(): AiCostCurrency {
+  const raw = process.env.COST_CURRENCY;
+  const trimmed = raw ? raw.trim() : "";
+
+  return trimmed || "USD";
+}
+
+export type OpenAiTextPricing = {
+  configured: boolean;
+  inputPerThousandTokens: number | null;
+  outputPerThousandTokens: number | null;
+};
+
+export type OpenAiImagePricing = {
+  configured: boolean;
+  perImage: number | null;
+};
+
+export type OpenAiVoicePricing = {
+  configured: boolean;
+  perThousandCharacters: number | null;
+};
+
+export type ReplicateVideoPricing = {
+  configured: boolean;
+  perGeneration: number | null;
+  perSecond: number | null;
+};
+
+export type ProviderPricing =
+  | ({ provider: "openai"; operation: "text" } & OpenAiTextPricing)
+  | ({ provider: "openai"; operation: "image" } & OpenAiImagePricing)
+  | ({ provider: "openai"; operation: "voice" } & OpenAiVoicePricing)
+  | ({ provider: "replicate"; operation: "video" } & ReplicateVideoPricing);
+
+/**
+ * อ่านราคาที่ตั้งค่าไว้จาก environment สำหรับ provider/operation ที่ระบุ — ไม่มี network call,
+ * ไม่มี side effect อ่านค่า environment variable ตรงๆ เท่านั้น
+ *
+ * Environment variables ที่รองรับ (ทั้งหมด optional — ไม่ตั้งค่า = configured: false):
+ *   OPENAI_TEXT_PRICE_INPUT_PER_1K   ราคาต่อ 1,000 input tokens (USD หรือหน่วยที่ COST_CURRENCY ระบุ)
+ *   OPENAI_TEXT_PRICE_OUTPUT_PER_1K  ราคาต่อ 1,000 output tokens
+ *   OPENAI_IMAGE_PRICE_PER_IMAGE     ราคาต่อภาพ (gpt-image-1)
+ *   OPENAI_TTS_PRICE_PER_1K_CHARS    ราคาต่อ 1,000 ตัวอักษร input (tts-1-hd)
+ *   REPLICATE_VIDEO_PRICE_PER_GENERATION  ราคาประมาณการต่อการสร้างวิดีโอ 1 ครั้ง (flat)
+ *   REPLICATE_VIDEO_PRICE_PER_SECOND      ราคาต่อวินาทีของวิดีโอที่สร้างเสร็จจริง (ถ้าทราบ duration)
+ */
+export function getProviderPricing(
+  provider: "openai",
+  operation: "text"
+): OpenAiTextPricing;
+export function getProviderPricing(
+  provider: "openai",
+  operation: "image"
+): OpenAiImagePricing;
+export function getProviderPricing(
+  provider: "openai",
+  operation: "voice"
+): OpenAiVoicePricing;
+export function getProviderPricing(
+  provider: "replicate",
+  operation: "video"
+): ReplicateVideoPricing;
+export function getProviderPricing(
+  provider: "openai" | "replicate",
+  operation: "text" | "image" | "voice" | "video"
+):
+  | OpenAiTextPricing
+  | OpenAiImagePricing
+  | OpenAiVoicePricing
+  | ReplicateVideoPricing {
+  if (provider === "openai" && operation === "text") {
+    const inputPerThousandTokens = readPriceEnv("OPENAI_TEXT_PRICE_INPUT_PER_1K");
+    const outputPerThousandTokens = readPriceEnv("OPENAI_TEXT_PRICE_OUTPUT_PER_1K");
+
+    return {
+      configured: inputPerThousandTokens !== null && outputPerThousandTokens !== null,
+      inputPerThousandTokens,
+      outputPerThousandTokens,
+    };
+  }
+
+  if (provider === "openai" && operation === "image") {
+    const perImage = readPriceEnv("OPENAI_IMAGE_PRICE_PER_IMAGE");
+
+    return { configured: perImage !== null, perImage };
+  }
+
+  if (provider === "openai" && operation === "voice") {
+    const perThousandCharacters = readPriceEnv("OPENAI_TTS_PRICE_PER_1K_CHARS");
+
+    return { configured: perThousandCharacters !== null, perThousandCharacters };
+  }
+
+  // provider === "replicate" && operation === "video"
+  const perGeneration = readPriceEnv("REPLICATE_VIDEO_PRICE_PER_GENERATION");
+  const perSecond = readPriceEnv("REPLICATE_VIDEO_PRICE_PER_SECOND");
+
+  return {
+    configured: perGeneration !== null || perSecond !== null,
+    perGeneration,
+    perSecond,
+  };
+}
+
+export type EstimatedCostResult = {
+  cost: number | null;
+  currency: AiCostCurrency;
+  reason?: "pricing_not_configured" | "insufficient_usage_data";
+};
+
+/**
+ * คำนวณ estimated cost จาก usage จริงเท่านั้น (input/output tokens, จำนวนภาพ, จำนวนตัวอักษร,
+ * duration วินาที) — ห้ามเรียกด้วยตัวเลขที่แต่งขึ้น ถ้าไม่มี usage จริงหรือไม่ได้ตั้งราคาไว้ จะคืน
+ * cost: null พร้อมเหตุผลเสมอ ไม่มีทาง "เดา" ตัวเลขออกมา
+ */
+export function calculateEstimatedCost(
+  params:
+    | { provider: "openai"; operation: "text"; inputTokens: number | null; outputTokens: number | null }
+    | { provider: "openai"; operation: "image"; imageCount: number | null }
+    | { provider: "openai"; operation: "voice"; characterCount: number | null }
+    | { provider: "replicate"; operation: "video"; durationSeconds: number | null }
+): EstimatedCostResult {
+  const currency = getCostCurrency();
+
+  if (params.provider === "openai" && params.operation === "text") {
+    const pricing = getProviderPricing("openai", "text");
+
+    if (!pricing.configured) {
+      return { cost: null, currency, reason: "pricing_not_configured" };
+    }
+
+    if (params.inputTokens === null || params.outputTokens === null) {
+      return { cost: null, currency, reason: "insufficient_usage_data" };
+    }
+
+    const cost =
+      (params.inputTokens / 1000) * (pricing.inputPerThousandTokens as number) +
+      (params.outputTokens / 1000) * (pricing.outputPerThousandTokens as number);
+
+    return { cost, currency };
+  }
+
+  if (params.provider === "openai" && params.operation === "image") {
+    const pricing = getProviderPricing("openai", "image");
+
+    if (!pricing.configured) {
+      return { cost: null, currency, reason: "pricing_not_configured" };
+    }
+
+    if (params.imageCount === null || params.imageCount <= 0) {
+      return { cost: null, currency, reason: "insufficient_usage_data" };
+    }
+
+    return { cost: params.imageCount * (pricing.perImage as number), currency };
+  }
+
+  if (params.provider === "openai" && params.operation === "voice") {
+    const pricing = getProviderPricing("openai", "voice");
+
+    if (!pricing.configured) {
+      return { cost: null, currency, reason: "pricing_not_configured" };
+    }
+
+    if (params.characterCount === null || params.characterCount <= 0) {
+      return { cost: null, currency, reason: "insufficient_usage_data" };
+    }
+
+    return {
+      cost: (params.characterCount / 1000) * (pricing.perThousandCharacters as number),
+      currency,
+    };
+  }
+
+  // params.provider === "replicate" && params.operation === "video"
+  const pricing = getProviderPricing("replicate", "video");
+
+  if (!pricing.configured) {
+    return { cost: null, currency, reason: "pricing_not_configured" };
+  }
+
+  if (params.durationSeconds !== null && pricing.perSecond !== null) {
+    return { cost: params.durationSeconds * pricing.perSecond, currency };
+  }
+
+  if (pricing.perGeneration !== null) {
+    return { cost: pricing.perGeneration, currency };
+  }
+
+  return { cost: null, currency, reason: "insufficient_usage_data" };
+}

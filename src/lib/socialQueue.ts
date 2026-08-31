@@ -1,0 +1,326 @@
+// Social Post Queue — STEP 12
+//
+// ต่อยอดจาก social_posts (STEP 10) และ provider architecture (STEP 10, src/lib/social/) ทั้งหมด
+// ไม่สร้าง table หรือ provider architecture ซ้ำ — ไฟล์นี้เป็นชั้น business logic เดียวที่ครอบ
+// src/lib/socialPosts.ts (raw DB access) เพื่อไม่ให้ query/DB logic กระจายซ้ำในหลายที่
+//
+// ยังไม่มี background worker จริง (setInterval/cron) — ตามคำสั่ง STEP 12.5 ที่ห้ามใช้ setInterval
+// เพราะทำให้ Next.js dev server ทำงานผิดปกติ — processScheduledPosts() เป็นแค่ฟังก์ชันที่ worker
+// ในอนาคต (เช่น cron job หรือ scheduled task ภายนอก) จะเรียกใช้ได้ทันที ไม่ได้ถูกเรียกอัตโนมัติที่ไหน
+
+import { isValidPlatform, type SocialPlatform } from "@/lib/socialContent";
+import { getProvider } from "@/lib/social";
+import {
+  claimSocialPostForProcessing,
+  findDueSocialPosts,
+  findStaleProcessingSocialPosts,
+  getSocialPostById,
+  insertSocialPost,
+  listSocialPostRows,
+  updateSocialPostFields,
+  type SocialPostFilters,
+  type SocialPostRow,
+  type SocialPostStatus,
+} from "@/lib/socialPosts";
+
+export const MAX_RETRY_COUNT = 3;
+
+// ถ้าโพสต์ล้มเหลวแบบชั่วคราว (เช่น network error) แต่ยังไม่ครบ MAX_RETRY_COUNT ให้เลื่อนไปลองใหม่
+// อีกครั้งในอีก 5 นาที แทนที่จะ retry ทันที (กัน hammer API ปลายทางซ้ำๆ ในเวลาสั้นๆ)
+const RETRY_BACKOFF_MS = 5 * 60 * 1000;
+
+export class SocialQueueError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "SocialQueueError";
+    this.status = status;
+  }
+}
+
+export type CreateSocialPostParams = {
+  productId: number;
+  platform: SocialPlatform;
+  videoUrl: string;
+  caption: string;
+  hashtags: string[];
+};
+
+/** สร้างแถวใหม่แบบ draft — ยังไม่ผูกเวลาโพสต์ ใช้เป็น base ให้ scheduleSocialPost() ต่อยอด */
+export function createSocialPost(params: CreateSocialPostParams): SocialPostRow {
+  return insertSocialPost({
+    productId: params.productId,
+    platform: params.platform,
+    videoUrl: params.videoUrl,
+    caption: params.caption,
+    hashtags: params.hashtags,
+    status: "draft",
+  });
+}
+
+export type ScheduleSocialPostParams = CreateSocialPostParams & {
+  scheduledAt: string; // ISO string — validate ที่ route ก่อนเรียกฟังก์ชันนี้แล้ว
+};
+
+/** สร้างแถวใหม่พร้อม status = scheduled ทันที (ใช้จาก POST /api/social/queue) */
+export function scheduleSocialPost(params: ScheduleSocialPostParams): SocialPostRow {
+  return insertSocialPost({
+    productId: params.productId,
+    platform: params.platform,
+    videoUrl: params.videoUrl,
+    caption: params.caption,
+    hashtags: params.hashtags,
+    status: "scheduled",
+    scheduledAt: params.scheduledAt,
+  });
+}
+
+/** ยกเลิก scheduled post — ไม่ลบ record ทิ้ง แค่เปลี่ยน status เป็น cancelled */
+export function cancelSocialPost(id: number): SocialPostRow {
+  const existing = getSocialPostById(id);
+
+  if (!existing) {
+    throw new SocialQueueError(`ไม่พบ Post คิวรหัส ${id}`, 404);
+  }
+
+  if (existing.status !== "draft" && existing.status !== "scheduled") {
+    throw new SocialQueueError(
+      `ไม่สามารถยกเลิกได้ — สถานะปัจจุบันคือ "${existing.status}" (ยกเลิกได้เฉพาะ draft/scheduled)`,
+      409
+    );
+  }
+
+  updateSocialPostFields(id, { status: "cancelled" });
+
+  return getSocialPostById(id) as SocialPostRow;
+}
+
+export function getSocialPost(id: number): SocialPostRow | undefined {
+  return getSocialPostById(id);
+}
+
+export function listSocialPosts(
+  filters: SocialPostFilters,
+  pagination: { page: number; pageSize: number }
+): { items: SocialPostRow[]; total: number; page: number; pageSize: number } {
+  const { items, total } = listSocialPostRows(filters, pagination);
+
+  return { items, total, page: pagination.page, pageSize: pagination.pageSize };
+}
+
+export function markProcessing(id: number): void {
+  updateSocialPostFields(id, { status: "processing" });
+}
+
+export function markPublished(id: number, externalPostId: string): void {
+  updateSocialPostFields(id, {
+    status: "published",
+    externalPostId,
+    publishedAt: new Date().toISOString(),
+    errorMessage: null,
+  });
+}
+
+/**
+ * markFailed — จัดการ retry logic ตรงนี้ที่เดียว (ไม่กระจาย logic การนับ retry ไปที่อื่น)
+ *   - allowRetry=false (เช่น provider ยัง not_configured): mark failed ถาวรทันที ไม่เพิ่ม retryCount
+ *     เพราะ retry โดยไม่มี credential ไม่มีทางสำเร็จ เสียเวลาเปล่า
+ *   - allowRetry=true: เพิ่ม retryCount แล้วเช็คว่าครบ MAX_RETRY_COUNT หรือยัง
+ *       - ยังไม่ครบ → เปลี่ยนกลับเป็น scheduled พร้อมเลื่อน scheduledAt ออกไป (backoff) ให้ลองใหม่
+ *       - ครบแล้ว → mark failed ถาวร ไม่ retry อีก
+ */
+export function markFailed(
+  id: number,
+  errorMessage: string,
+  options: { allowRetry: boolean } = { allowRetry: true }
+): void {
+  if (!options.allowRetry) {
+    updateSocialPostFields(id, { status: "failed", errorMessage });
+    return;
+  }
+
+  const existing = getSocialPostById(id);
+  const nextRetryCount = (existing?.retryCount ?? 0) + 1;
+
+  if (nextRetryCount >= MAX_RETRY_COUNT) {
+    updateSocialPostFields(id, {
+      status: "failed",
+      errorMessage,
+      retryCount: nextRetryCount,
+    });
+    return;
+  }
+
+  updateSocialPostFields(id, {
+    status: "scheduled",
+    errorMessage,
+    retryCount: nextRetryCount,
+    scheduledAt: new Date(Date.now() + RETRY_BACKOFF_MS).toISOString(),
+  });
+}
+
+const DEFAULT_PROCESSING_TIMEOUT_MINUTES = 15;
+
+function getProcessingTimeoutMinutes(): number {
+  const raw = Number(process.env.SOCIAL_PROCESSING_TIMEOUT_MINUTES);
+
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PROCESSING_TIMEOUT_MINUTES;
+}
+
+export type StaleRecoveryResult = {
+  recovered: number;
+  ids: number[];
+};
+
+/**
+ * STEP 18.4 — Stale Processing Recovery
+ *
+ * เหตุผล: ถ้า worker claim post (scheduled → processing) แล้ว process ตายกลางคัน (crash/kill)
+ * ก่อนเรียก markPublished()/markFailed() แถวนั้นจะค้างอยู่ใน 'processing' ตลอดไป ไม่มีทาง
+ * ถูกหยิบไปประมวลผลต่อเพราะ findDueSocialPosts()/claimSocialPostForProcessing() มองหาแค่
+ * status='scheduled' เท่านั้น — ฟังก์ชันนี้แก้ปัญหานั้นโดยค้นหาแถวที่ค้าง 'processing' นานเกิน
+ * SOCIAL_PROCESSING_TIMEOUT_MINUTES (default 15 นาที, ตั้งค่าได้ผ่าน env)
+ *
+ * นโยบายความปลอดภัย (สำคัญที่สุด: ห้ามเกิด duplicate publish):
+ *   - เรียก markFailed(..., { allowRetry: false }) เสมอ ไม่ว่า retryCount จะเท่าไหร่ — ไม่ auto-retry
+ *     ให้กลับไป 'scheduled' อัตโนมัติ เพราะเราไม่มีทางรู้แน่ชัดว่า createPost()/publishPost() ที่ค้าง
+ *     อยู่ตอน crash ไปถึงขั้นไหนแล้วจริงๆ (อาจจะโพสต์สำเร็จไปแล้วที่ฝั่ง platform แต่ crash ก่อนบันทึก
+ *     ผลกลับมา) — ปล่อยให้ status สุดท้ายเป็น 'failed' เสมอ รอให้มนุษย์ตรวจสอบเองก่อนตัดสินใจ
+ *     เอาเข้าคิวใหม่ (ไม่ auto-retry แบบ transient error ทั่วไป)
+ *   - ไม่แตะ external_post_id เลย (updateSocialPostFields() ไม่ set field ที่ไม่ได้ pass ให้อยู่แล้ว
+ *     — markFailed()/updateSocialPostFields() ไม่เคย pass externalPostId ในเส้นทางนี้)
+ */
+export function recoverStaleProcessingPosts(): StaleRecoveryResult {
+  const timeoutMinutes = getProcessingTimeoutMinutes();
+  const cutoffIso = new Date(Date.now() - timeoutMinutes * 60 * 1000).toISOString();
+
+  const staleposts = findStaleProcessingSocialPosts(cutoffIso);
+  const ids: number[] = [];
+
+  for (const post of staleposts) {
+    markFailed(
+      post.id,
+      `ค้างอยู่ในสถานะ processing เกิน ${timeoutMinutes} นาที (worker อาจถูกปิดกลางคัน) ` +
+        `— ไม่ทราบผลลัพธ์จริงจากแพลตฟอร์ม ต้องตรวจสอบด้วยตนเองก่อนส่งเข้าคิวใหม่`,
+      { allowRetry: false }
+    );
+    ids.push(post.id);
+  }
+
+  return { recovered: ids.length, ids };
+}
+
+export type ProcessScheduledPostsSummary = {
+  processed: number;
+  published: number;
+  failed: number;
+  retried: number;
+  skipped: number;
+};
+
+/**
+ * processScheduledPosts — ฟังก์ชันสำหรับ worker ในอนาคตเรียกใช้ (cron/scheduled task ภายนอก)
+ * ไม่มีการเรียกอัตโนมัติจากที่ไหนในโค้ดนี้ ไม่ผูกกับ setInterval ใดๆ
+ *
+ * หา scheduled post ที่ถึงเวลาแล้ว → claim แบบ atomic (STEP 17 — กัน worker 2 ตัวชนกัน) →
+ * processing → เช็ค provider connection จริง → ถ้า not_configured/error → failed ทันที (ไม่ retry)
+ * → ถ้า connected → เรียก provider จริง → สำเร็จ → published, ล้มเหลว → markFailed()
+ * (retry ตาม backoff จนครบ MAX_RETRY_COUNT)
+ */
+export async function processScheduledPosts(): Promise<ProcessScheduledPostsSummary> {
+  const nowIso = new Date().toISOString();
+  const duePosts = findDueSocialPosts(nowIso);
+
+  const summary: ProcessScheduledPostsSummary = {
+    processed: 0,
+    published: 0,
+    failed: 0,
+    retried: 0,
+    skipped: 0,
+  };
+
+  for (const post of duePosts) {
+    // STEP 17: atomic claim — ถ้า worker อีกตัว (หรือ processScheduledPosts() อีกรอบที่ทำงาน
+    // ซ้อนกัน) claim แถวนี้ไปก่อนแล้ว WHERE status='scheduled' จะไม่ match เลย changes=0 →
+    // ข้ามแถวนี้ทันที ไม่แตะต้องอะไรต่อ ไม่นับเป็น processed (เพราะ worker นี้ไม่ได้ทำอะไรกับมันจริง)
+    const claimed = claimSocialPostForProcessing(post.id);
+
+    if (!claimed) {
+      summary.skipped += 1;
+      continue;
+    }
+
+    summary.processed += 1;
+
+    if (!isValidPlatform(post.platform)) {
+      // ไม่ควรเกิดขึ้นจริง (validate ตั้งแต่ตอนสร้างคิวแล้ว) แต่กันไว้ไม่ให้ throw ทำให้ loop หยุด
+      markFailed(post.id, "platform ในคิวไม่ถูกต้อง", { allowRetry: false });
+      summary.failed += 1;
+      continue;
+    }
+
+    const provider = getProvider(post.platform);
+    const connection = await provider.validateConnection();
+
+    if (connection.status === "not_configured") {
+      markFailed(post.id, `${post.platform} provider ยังไม่ได้เชื่อมต่อ`, {
+        allowRetry: false,
+      });
+      summary.failed += 1;
+      continue;
+    }
+
+    if (connection.status === "error") {
+      markFailed(
+        post.id,
+        connection.message || `ไม่สามารถเชื่อมต่อ ${post.platform} ได้`,
+        { allowRetry: false }
+      );
+      summary.failed += 1;
+      continue;
+    }
+
+    try {
+      const videoAbsoluteUrl = new URL(
+        post.videoUrl,
+        process.env.APP_BASE_URL || "http://localhost:3000"
+      ).toString();
+
+      const created = await provider.createPost({
+        videoUrl: videoAbsoluteUrl,
+        caption: post.caption,
+        hashtags: post.hashtags,
+      });
+
+      const published = await provider.publishPost(created.externalPostId);
+
+      if (published.status !== "published") {
+        markFailed(post.id, "แพลตฟอร์มยังไม่ยืนยันสถานะเผยแพร่ (อยู่ระหว่างประมวลผล)");
+        summary.retried += 1;
+        continue;
+      }
+
+      markPublished(post.id, published.externalPostId);
+      summary.published += 1;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "ไม่สามารถโพสต์ไปยังแพลตฟอร์มได้";
+
+      const beforeRetryCount = post.retryCount;
+      markFailed(post.id, message);
+
+      const after = getSocialPostById(post.id);
+
+      if (after?.status === "scheduled" && after.retryCount > beforeRetryCount) {
+        summary.retried += 1;
+      } else {
+        summary.failed += 1;
+      }
+    }
+  }
+
+  return summary;
+}
+
+export type { SocialPostRow, SocialPostStatus, SocialPostFilters } from "@/lib/socialPosts";

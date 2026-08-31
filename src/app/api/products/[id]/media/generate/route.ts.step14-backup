@@ -1,0 +1,123 @@
+import { NextResponse } from "next/server";
+import db from "@/lib/db";
+import { generateProductImage, isAiImageGenerationConfigured } from "@/lib/ai/imageGeneration";
+import { insertProductMedia } from "@/lib/productMedia";
+
+export const runtime = "nodejs";
+
+type RouteContext = {
+  params: Promise<{ id: string }>;
+};
+
+type Product = {
+  id: number;
+  name: string;
+  category: string | null;
+};
+
+function parseProductId(rawId: string): number | null {
+  const productId = Number(rawId);
+
+  if (!Number.isInteger(productId) || productId <= 0) {
+    return null;
+  }
+
+  return productId;
+}
+
+/**
+ * สร้าง prompt แบบ "ภาพสไตล์โปรโมท" ทั่วไป ไม่ใช้ชื่อรุ่น/สำนัก/ปีของสินค้าจริงมาอ้างในภาพ
+ * — เพราะ AI ไม่มีทางรู้ว่าของจริงชิ้นนั้นหน้าตาเป็นอย่างไร การให้ AI "วาดตาม" ชื่อรุ่น/วัดที่ระบุ
+ * จะกลายเป็นภาพที่ดูเหมือนอ้างความถูกต้องแม่นยำทั้งที่ไม่ใช่ของจริง ซึ่งไม่เหมาะกับสินค้าประเภท
+ * วัตถุมงคลที่ลูกค้าให้ความสำคัญกับความแท้ — ใช้แค่หมวดหมู่สินค้า (category) เป็นแนวทางภาพเท่านั้น
+ */
+function buildImagePrompt(product: Product): string {
+  const category = product.category?.trim() || "วัตถุมงคลไทย";
+
+  return (
+    `Professional product photography of a Thai amulet (${category}), studio lighting, ` +
+    `dark elegant background, centered composition, no text, no watermark, no people, ` +
+    `high detail, realistic style — generic promotional visual, not a depiction of any ` +
+    `specific real item`
+  );
+}
+
+export async function POST(request: Request, context: RouteContext) {
+  try {
+    const { id } = await context.params;
+    const productId = parseProductId(id);
+
+    if (productId === null) {
+      return NextResponse.json(
+        { error: "กรุณาระบุรหัสสินค้าให้ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    const product = db
+      .prepare("SELECT id, name, category FROM products WHERE id = ?")
+      .get(productId) as Product | undefined;
+
+    if (!product) {
+      return NextResponse.json(
+        { error: `ไม่พบสินค้ารหัส ${productId}` },
+        { status: 404 }
+      );
+    }
+
+    // ห้าม fake success — เช็ค credential ก่อนเสมอ ไม่ยิง network request ถ้ายังไม่พร้อม
+    if (!isAiImageGenerationConfigured()) {
+      return NextResponse.json(
+        {
+          success: false,
+          status: "not_configured",
+          error: "ยังไม่ได้ตั้งค่า OPENAI_API_KEY สำหรับสร้างภาพด้วย AI",
+        },
+        { status: 503 }
+      );
+    }
+
+    const prompt = buildImagePrompt(product);
+
+    let generated;
+
+    try {
+      generated = await generateProductImage(prompt);
+    } catch (error) {
+      console.error(`POST /api/products/${productId}/media/generate error:`, error);
+
+      return NextResponse.json(
+        {
+          success: false,
+          status: "error",
+          error:
+            error instanceof Error ? error.message : "ไม่สามารถสร้างภาพด้วย AI ได้",
+        },
+        { status: 502 }
+      );
+    }
+
+    const media = insertProductMedia({
+      productId,
+      fileName: generated.fileName,
+      imageUrl: generated.imageUrl,
+      source: "ai",
+    });
+
+    return NextResponse.json({
+      success: true,
+      media,
+      message: "สร้างภาพด้วย AI สำเร็จ (ภาพนี้เป็นภาพประกอบสไตล์ทั่วไป ไม่ใช่ภาพของจริง)",
+    });
+  } catch (error) {
+    console.error("POST /api/products/[id]/media/generate error:", error);
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "ไม่สามารถสร้างภาพด้วย AI ได้",
+      },
+      { status: 500 }
+    );
+  }
+}

@@ -1,0 +1,229 @@
+﻿import OpenAI from "openai";
+import { NextResponse } from "next/server";
+import db from "@/lib/db";
+import { calculateEstimatedCost } from "@/lib/costConfig";
+import { finalizeAiGenerationCost, recordAiGeneration } from "@/lib/costLedger";
+
+const TEXT_MODEL = "gpt-5-mini";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+export async function POST(request: Request) {
+  let ledgerId: number | null = null;
+  let ledgerFinalized = false;
+
+  try {
+    let body: any;
+
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: "รูปแบบคำขอไม่ถูกต้อง (ต้องเป็น JSON)" },
+        { status: 400 }
+      );
+    }
+
+    const product = body.product;
+
+    if (!product || !product.name) {
+      return NextResponse.json(
+        { error: "ไม่พบข้อมูลสินค้า" },
+        { status: 400 }
+      );
+    }
+
+    const tone = String(body.tone || "premium");
+
+    const prompt = [
+      "คุณคือ AI Content & Sales Assistant ประจำร้าน THAI AMULET TH",
+      "คุณเชี่ยวชาญการตลาดออนไลน์ การเขียนคอนเทนต์ และการขายพระเครื่องและวัตถุมงคลไทย",
+      "",
+      "BRAND VOICE:",
+      "- ภาพลักษณ์ THAI AMULET TH คือ พรีเมียม สุภาพ จริงใจ และเป็นมืออาชีพ",
+      "- ภาษาไทยต้องเป็นธรรมชาติ เหมือนเจ้าของร้านหรือเซลส์มืออาชีพกำลังคุยกับลูกค้า",
+      "- อ่านแล้วต้องรู้สึกน่าเชื่อถือ แต่ไม่แข็ง ไม่เป็นภาษาราชการ และไม่เหมือน AI",
+      "- ใช้คำที่สร้างความสนใจโดยไม่โอ้อวด",
+      "- เคารพความเชื่อของลูกค้า",
+      "",
+      "SALES INTELLIGENCE:",
+      "- เริ่มด้วย Hook ที่เหมาะกับสินค้าและช่องทาง",
+      "- ดึงความสนใจจากข้อมูลจริงของสินค้า",
+      "- อธิบายว่าทำไมสินค้าน่าสนใจสำหรับนักสะสมหรือผู้ที่ชื่นชอบวัตถุมงคล",
+      "- แสดงราคาอย่างชัดเจน",
+      "- หากมีสต็อก ให้ใช้ข้อมูลสต็อกตามจริง",
+      "- ปิดท้ายด้วย CTA ที่ชัดเจน เช่น ทัก Inbox เพื่อสอบถามรายละเอียดหรือเช็กสต็อก",
+      "- หลีกเลี่ยงการใช้คำขายซ้ำๆ เช่น เพียง, ห้ามพลาด, ด่วน, รีบซื้อ ในทุกโพสต์",
+      "- ห้ามสร้างความเร่งด่วนปลอม เช่น เหลือชิ้นสุดท้าย หากข้อมูลไม่ได้ระบุ",
+      "",
+      "กฎสำคัญเกี่ยวกับข้อมูล:",
+      "- ใช้เฉพาะข้อมูลที่ได้รับจากสินค้า",
+      "- ห้ามแต่งปีสร้าง พระอาจารย์ รุ่น พิธีปลุกเสก ประวัติ หรือแหล่งที่มา",
+      "- ห้ามระบุว่าแท้ ของแท้ รับรองแท้ หรือผ่านการตรวจสอบ หากข้อมูลไม่ได้ระบุ",
+      "- ห้ามระบุว่าหายาก มีจำนวนจำกัด หรือเป็นที่นิยม หากข้อมูลไม่ได้ระบุ",
+      "- ห้ามเรียกวัดหรือสำนักว่า น่าเชื่อถือ ดีที่สุด หรือมีชื่อเสียง หากข้อมูลไม่ได้ระบุ",
+      "- ห้ามแต่งสรรพคุณ พุทธคุณ อิทธิฤทธิ์ หรือผลลัพธ์เหนือธรรมชาติเป็นข้อเท็จจริง",
+      "- หากข้อมูลใดไม่มี ให้ละเว้น ไม่ต้องเดา",
+      "- ห้ามอนุมานหรือสร้างเหตุผลใหม่ว่าทำไมสินค้าจึงน่าสะสม หากข้อมูลนั้นไม่ได้ระบุไว้",
+      "- ห้ามสร้างจุดเด่น คุณสมบัติ ลักษณะพิเศษ หรือประโยชน์ของสินค้าเองจากชื่อรุ่นหรือชื่อสินค้า",
+      "- ห้ามตีความชื่อรุ่น เช่น หนังเหนียว ว่าหมายถึงคุณสมบัติหรือสรรพคุณของสินค้า",
+      "- ห้ามกล่าวว่าสินค้าเหมาะกับการใช้งาน การจัดเก็บ หรือวัตถุประสงค์ใดเป็นพิเศษ หากข้อมูลสินค้าไม่ได้ระบุ",
+      "- คำว่า น่าสนใจสำหรับนักสะสม สามารถใช้เป็นคำเชิงการตลาดทั่วไปได้ แต่ห้ามสร้างเหตุผลประกอบขึ้นมาเอง",
+      "- ห้ามใช้คำว่า เช็กสต็อกแบบเรียลไทม์ เว้นแต่ระบบจะส่งข้อมูลว่าเป็นสต็อกแบบเรียลไทม์",
+      "- หากต้องการกระตุ้นการขาย ให้ใช้ข้อมูลจริง เช่น ราคา จำนวนสต็อก หรือช่องทางติดต่อ",
+      "- ไม่ต้องใส่คำเตือนเรื่องความเชื่อยาวๆ ซ้ำในทุกโพสต์",
+      "",
+      "การนำเสนอ:",
+      "- Facebook: เขียนโพสต์ขายพร้อม Hook, รายละเอียด, จุดน่าสนใจ และ CTA",
+      "- Reels: สร้าง Hook, Scene 1-4, ข้อความบนจอ และ CTA สำหรับคลิปประมาณ 15-30 วินาที",
+      "- TikTok: เขียน Hook สั้นและน่าสนใจ เนื้อหากระชับ และ CTA",
+      "- Script: เขียนสคริปต์พูดจริงสำหรับเสียงพากย์ ภาษาพูดเป็นธรรมชาติ",
+      "",
+      "การใช้คำ:",
+      "- ใช้คำว่า นักสะสม, ผู้ที่ชื่นชอบวัตถุมงคล, ผู้ศรัทธา ได้ตามความเหมาะสม",
+      "- ใช้คำว่า น่าสนใจสำหรับการสะสม เมื่อสอดคล้องกับข้อมูล",
+      "- ห้ามใช้คำว่า ของแท้, หายาก, พุทธคุณ, กันภัย, เมตตามหานิยม หรือคำกล่าวอ้างอื่น หากไม่มีข้อมูลรองรับ",
+      "",
+      "ข้อมูลสินค้า:",
+      "ชื่อสินค้า: " + String(product.name || "-"),
+      "รุ่น: " + String(product.model || "-"),
+      "พระอาจารย์/สำนัก: " + String(product.master || "-"),
+      "ปี: " + String(product.year || "-"),
+      "รายละเอียด: " + String(product.description || "-"),
+      "ราคา: " + String(product.price || 0) + " บาท",
+      "สต็อก: " + String(product.stock || 0) + " ชิ้น",
+      "โทนภาษา: " + tone,
+      "",
+      "สร้างผลลัพธ์ 4 ส่วน:",
+      "1. Facebook Post",
+      "2. Reels",
+      "3. TikTok",
+      "4. สคริปต์พูด",
+      "",
+      "ตอบเป็น JSON เท่านั้นในรูปแบบ:",
+      '{ "facebook": "...", "reels": "...", "tiktok": "...", "script": "..." }',
+    ].join("\n");
+
+    // STEP 21: productId เป็น optional — body.product ที่ส่งมาบางที่ (เช่น video/auto) มี id จริง
+    // จากฐานข้อมูล แต่บางที่ (เช่น content-studio ก่อน STEP 21) อาจไม่ได้ส่ง id มาด้วย — trace ได้
+    // เฉพาะกรณีมี id จริงเท่านั้น ไม่เดา
+    const productIdForLedger =
+      typeof product.id === "number" && Number.isInteger(product.id) && product.id > 0
+        ? product.id
+        : null;
+
+    // STEP 26.9 fix: ถ้ามี productId ส่งมาแต่ไม่มีสินค้านั้นจริงใน DB ต้องหยุดตรงนี้ก่อนเสมอ —
+    // ไม่ปล่อยให้ recordAiGeneration() ไปชน FOREIGN KEY constraint (ai_cost_ledger.product_id
+    // REFERENCES products(id)) แล้วโยน error ดิบออกไปเป็น 500 และห้ามเรียก OpenAI ก่อนรู้ว่าสินค้า
+    // มีอยู่จริงด้วย (กันเสียเงินโดยเปล่าประโยชน์)
+    if (productIdForLedger !== null) {
+      const productExists = db
+        .prepare("SELECT id FROM products WHERE id = ?")
+        .get(productIdForLedger);
+
+      if (!productExists) {
+        return NextResponse.json(
+          { error: `ไม่พบสินค้ารหัส ${productIdForLedger}` },
+          { status: 404 }
+        );
+      }
+    }
+
+    const ledger = recordAiGeneration({
+      productId: productIdForLedger,
+      provider: "openai",
+      model: TEXT_MODEL,
+      operation: "text_generate",
+    });
+
+    ledgerId = ledger.id;
+
+    const response = await openai.responses.create({
+      model: TEXT_MODEL,
+      input: prompt,
+    });
+
+    const usage = {
+      inputTokens: response.usage?.input_tokens ?? null,
+      outputTokens: response.usage?.output_tokens ?? null,
+    };
+
+    const estimate = calculateEstimatedCost({
+      provider: "openai",
+      operation: "text",
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+    });
+
+    const text = response.output_text;
+
+    let content: {
+      facebook: string;
+      reels: string;
+      tiktok: string;
+      script: string;
+    };
+
+    try {
+      content = JSON.parse(text);
+    } catch {
+      finalizeAiGenerationCost(ledger.id, {
+        status: "failed",
+        inputUnits: usage.inputTokens,
+        outputUnits: usage.outputTokens,
+        estimatedCost: estimate.cost,
+        metadataPatch: { error: "AI ส่งข้อมูลกลับมาไม่ใช่ JSON", pricingReason: estimate.reason },
+      });
+      ledgerFinalized = true;
+
+      return NextResponse.json(
+        {
+          error: "AI ส่งข้อมูลกลับมาไม่ใช่ JSON",
+          raw: text,
+        },
+        { status: 500 }
+      );
+    }
+
+    finalizeAiGenerationCost(ledger.id, {
+      status: "succeeded",
+      inputUnits: usage.inputTokens,
+      outputUnits: usage.outputTokens,
+      estimatedCost: estimate.cost,
+      metadataPatch: { pricingReason: estimate.reason },
+    });
+    ledgerFinalized = true;
+
+    return NextResponse.json({
+      content,
+    });
+  } catch (error) {
+    console.error("POST /api/content/generate error:", error);
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : String(error);
+
+    // STEP 21: ถ้า ledger ถูกสร้างไว้แล้วแต่ยังไม่ finalize (เช่น openai.responses.create เอง throw
+    // ก่อนรู้ผล) ต้องปิดเป็น failed เสมอ ไม่ปล่อยค้างสถานะ 'processing' ทิ้งไว้
+    if (ledgerId !== null && !ledgerFinalized) {
+      finalizeAiGenerationCost(ledgerId, {
+        status: "failed",
+        metadataPatch: { error: message },
+      });
+    }
+
+    return NextResponse.json(
+      {
+        error: message,
+      },
+      { status: 500 }
+    );
+  }
+}
+
+
+

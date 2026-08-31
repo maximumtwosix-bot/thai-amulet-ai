@@ -1,0 +1,680 @@
+import db from "@/lib/db";
+import { getCostCurrency } from "@/lib/costConfig";
+
+// created_at ในตาราง ai_cost_ledger ถูกเขียนด้วย SQLite CURRENT_TIMESTAMP ซึ่งคืนรูปแบบ
+// "YYYY-MM-DD HH:MM:SS" (เว้นวรรค ไม่มี "T"/"Z", เวลา UTC) ไม่ใช่ ISO 8601 เต็มรูปแบบที่
+// Date.prototype.toISOString() คืนมา ("YYYY-MM-DDTHH:mm:ss.sssZ") — ถ้าเทียบ string กันตรงๆ คนละ
+// รูปแบบ การเปรียบเทียบ >= / <= จะผิดพลาด (เช่น " " < "T" ทำให้แถวเวลาเดียวกันดูเหมือน "น้อยกว่า"
+// เสมอ) ทุกจุดที่ query ช่วงเวลาใน ai_cost_ledger ต้องแปลงผ่านฟังก์ชันนี้ก่อนเทียบกับ created_at เสมอ
+export function toSqliteTimestamp(date: Date): string {
+  return date.toISOString().slice(0, 19).replace("T", " ");
+}
+
+// AI Cost Ledger service — STEP 21
+//
+// นี่คือ accounting/observability layer เท่านั้น — ห้ามใช้ตาราง/ฟังก์ชันในไฟล์นี้เพื่อจำกัดจำนวนการ
+// สร้าง AI ไม่ว่ากรณีใด (ไม่มี quota, ไม่มี limit, ไม่มี rate limit ในไฟล์นี้)
+//
+// รูปแบบการใช้งาน (two-phase เดียวกับ social_worker_runs — STEP 18):
+//   1) recordAiGeneration()        — เรียกก่อนยิง provider จริง สร้างแถว status='processing'
+//   2) finalizeAiGenerationCost()  — เรียกหลังรู้ผลจริง (สำเร็จ/ล้มเหลว) อัปเดต status/usage/cost
+//
+// ห้าม overwrite actual_cost ด้วย estimated_cost เด็ดขาด — สองคอลัมน์นี้แยกกันโดยสิ้นเชิงเสมอ
+
+export type AiCostProvider = "openai" | "replicate";
+export const AI_COST_PROVIDERS: AiCostProvider[] = ["openai", "replicate"];
+
+export function isValidAiCostProvider(value: string): value is AiCostProvider {
+  return (AI_COST_PROVIDERS as string[]).includes(value);
+}
+
+export type AiCostOperation =
+  | "text_generate"
+  | "content_plan_generate"
+  | "weekly_plan_generate"
+  | "image_generate"
+  | "video_generate"
+  | "voice_generate";
+
+export const AI_COST_OPERATIONS: AiCostOperation[] = [
+  "text_generate",
+  "content_plan_generate",
+  "weekly_plan_generate",
+  "image_generate",
+  "video_generate",
+  "voice_generate",
+];
+
+export function isValidAiCostOperation(value: string): value is AiCostOperation {
+  return (AI_COST_OPERATIONS as string[]).includes(value);
+}
+
+export type AiCostStatus = "processing" | "succeeded" | "failed";
+export const AI_COST_STATUSES: AiCostStatus[] = ["processing", "succeeded", "failed"];
+
+export function isValidAiCostStatus(value: string): value is AiCostStatus {
+  return (AI_COST_STATUSES as string[]).includes(value);
+}
+
+export type AiCostLedgerRow = {
+  id: number;
+  productId: number | null;
+  contentPlanId: number | null;
+  mediaId: number | null;
+  aiVideoJobId: number | null;
+  provider: string;
+  model: string | null;
+  operation: string;
+  status: AiCostStatus;
+  inputUnits: number | null;
+  outputUnits: number | null;
+  durationSeconds: number | null;
+  estimatedCost: number | null;
+  actualCost: number | null;
+  currency: string;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+  completedAt: string | null;
+};
+
+type DbRow = {
+  id: number;
+  product_id: number | null;
+  content_plan_id: number | null;
+  media_id: number | null;
+  ai_video_job_id: number | null;
+  provider: string;
+  model: string | null;
+  operation: string;
+  status: string;
+  input_units: number | null;
+  output_units: number | null;
+  duration_seconds: number | null;
+  estimated_cost: number | null;
+  actual_cost: number | null;
+  currency: string;
+  metadata: string | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
+function parseMetadata(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function toRow(row: DbRow): AiCostLedgerRow {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    contentPlanId: row.content_plan_id,
+    mediaId: row.media_id,
+    aiVideoJobId: row.ai_video_job_id,
+    provider: row.provider,
+    model: row.model,
+    operation: row.operation,
+    status: row.status as AiCostStatus,
+    inputUnits: row.input_units,
+    outputUnits: row.output_units,
+    durationSeconds: row.duration_seconds,
+    estimatedCost: row.estimated_cost,
+    actualCost: row.actual_cost,
+    currency: row.currency,
+    metadata: parseMetadata(row.metadata),
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+  };
+}
+
+function getById(id: number): AiCostLedgerRow | undefined {
+  const row = db.prepare("SELECT * FROM ai_cost_ledger WHERE id = ?").get(id) as
+    | DbRow
+    | undefined;
+
+  return row ? toRow(row) : undefined;
+}
+
+/**
+ * สร้าง ledger record ตอนเริ่ม AI generation จริง — เรียกก่อนยิง provider เสมอ (ไม่ใช่หลัง)
+ * เพื่อให้แม้ request ตายกลางคัน ก็ยังมีหลักฐานว่ามีความพยายามสร้าง AI เกิดขึ้นจริง
+ *
+ * ห้าม fabricate ค่าใดๆ ที่ยังไม่รู้จริง ณ จุดนี้ (เช่น output_units, actual_cost) — ค่าที่ยังไม่รู้
+ * ให้เว้นว่าง (undefined → NULL) แล้วค่อยเติมทีหลังผ่าน finalizeAiGenerationCost()
+ */
+export function recordAiGeneration(params: {
+  productId?: number | null;
+  contentPlanId?: number | null;
+  mediaId?: number | null;
+  aiVideoJobId?: number | null;
+  provider: AiCostProvider;
+  model?: string | null;
+  operation: AiCostOperation;
+  inputUnits?: number | null;
+  estimatedCost?: number | null;
+  currency?: string;
+  metadata?: Record<string, unknown> | null;
+}): AiCostLedgerRow {
+  const result = db
+    .prepare(
+      `INSERT INTO ai_cost_ledger
+         (product_id, content_plan_id, media_id, ai_video_job_id, provider, model,
+          operation, status, input_units, estimated_cost, currency, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?)`
+    )
+    .run(
+      params.productId ?? null,
+      params.contentPlanId ?? null,
+      params.mediaId ?? null,
+      params.aiVideoJobId ?? null,
+      params.provider,
+      params.model ?? null,
+      params.operation,
+      params.inputUnits ?? null,
+      params.estimatedCost ?? null,
+      params.currency ?? getCostCurrency(),
+      params.metadata ? JSON.stringify(params.metadata) : null
+    );
+
+  const row = getById(Number(result.lastInsertRowid));
+
+  if (!row) {
+    throw new Error("ไม่สามารถบันทึก AI cost ledger ได้");
+  }
+
+  return row;
+}
+
+/**
+ * อัปเดตผลลัพธ์จริงของ generation ที่บันทึกไว้แล้ว — ตั้ง completed_at เสมอไม่ว่าผลจะเป็นอย่างไร
+ *
+ * กฎเหล็ก: ห้าม overwrite actual_cost ด้วย estimated_cost — สองพารามิเตอร์นี้มาจากคนละแหล่งเสมอ
+ * (estimatedCost มาจากการคำนวณ, actualCost ต้องมาจาก billing API จริงของ provider เท่านั้น
+ * ในสถาปัตยกรรมปัจจุบันยังไม่มี provider ไหนคืนค่านี้ได้จริง จึงไม่ควรถูกส่งเข้ามาเลย — คงเป็น NULL)
+ *
+ * ค่าที่ไม่ส่งเข้ามา (undefined) จะไม่ถูกแก้ไข (คงค่าเดิมไว้) ยกเว้น status ที่ต้องระบุเสมอ
+ */
+export function finalizeAiGenerationCost(
+  id: number,
+  updates: {
+    status: Exclude<AiCostStatus, "processing">;
+    mediaId?: number | null;
+    inputUnits?: number | null;
+    outputUnits?: number | null;
+    durationSeconds?: number | null;
+    estimatedCost?: number | null;
+    actualCost?: number | null;
+    metadataPatch?: Record<string, unknown> | null;
+  }
+): AiCostLedgerRow | undefined {
+  const existing = getById(id);
+
+  if (!existing) return undefined;
+
+  const setClauses: string[] = ["status = ?", "completed_at = CURRENT_TIMESTAMP"];
+  const values: Array<string | number | null> = [updates.status];
+
+  if (updates.mediaId !== undefined) {
+    setClauses.push("media_id = ?");
+    values.push(updates.mediaId);
+  }
+
+  if (updates.inputUnits !== undefined) {
+    setClauses.push("input_units = ?");
+    values.push(updates.inputUnits);
+  }
+
+  if (updates.outputUnits !== undefined) {
+    setClauses.push("output_units = ?");
+    values.push(updates.outputUnits);
+  }
+
+  if (updates.durationSeconds !== undefined) {
+    setClauses.push("duration_seconds = ?");
+    values.push(updates.durationSeconds);
+  }
+
+  if (updates.estimatedCost !== undefined) {
+    setClauses.push("estimated_cost = ?");
+    values.push(updates.estimatedCost);
+  }
+
+  if (updates.actualCost !== undefined) {
+    setClauses.push("actual_cost = ?");
+    values.push(updates.actualCost);
+  }
+
+  if (updates.metadataPatch) {
+    const merged = { ...(existing.metadata || {}), ...updates.metadataPatch };
+    setClauses.push("metadata = ?");
+    values.push(JSON.stringify(merged));
+  }
+
+  values.push(id);
+
+  db.prepare(`UPDATE ai_cost_ledger SET ${setClauses.join(", ")} WHERE id = ?`).run(
+    ...values
+  );
+
+  return getById(id);
+}
+
+/**
+ * ผูก ledger แถวที่บันทึกไว้ก่อนรู้ content_plan_id (เช่นตอนเริ่ม generation ที่ยังไม่มีแผนถูกสร้าง)
+ * เข้ากับ content_plan ที่เพิ่ง insert สำเร็จภายหลัง — ใช้กับ /api/content/plan เท่านั้น (ดูที่นั่น
+ * สำหรับเหตุผลที่ต้อง "แตก" ledger 1 แถวเป็นหลายแถวต่อแผนหลัง insert)
+ */
+export function linkLedgerToContentPlan(
+  id: number,
+  contentPlanId: number,
+  model?: string | null,
+  inputUnits?: number | null
+): void {
+  db.prepare(
+    "UPDATE ai_cost_ledger SET content_plan_id = ?, model = COALESCE(?, model), input_units = COALESCE(?, input_units) WHERE id = ?"
+  ).run(contentPlanId, model ?? null, inputUnits ?? null, id);
+}
+
+/**
+ * ใช้เฉพาะ flow แบบ async job (AI Video / Replicate) ที่ finalize เกิดขึ้นตอน poll สถานะทีหลัง
+ * (คนละ request จากตอน create job) — หา ledger แถวที่ยัง 'processing' ของ job นี้แล้ว finalize ให้
+ */
+export function finalizeAiGenerationCostByAiVideoJobId(
+  aiVideoJobId: number,
+  updates: {
+    status: Exclude<AiCostStatus, "processing">;
+    mediaId?: number | null;
+    inputUnits?: number | null;
+    outputUnits?: number | null;
+    durationSeconds?: number | null;
+    estimatedCost?: number | null;
+    actualCost?: number | null;
+    metadataPatch?: Record<string, unknown> | null;
+  }
+): AiCostLedgerRow | undefined {
+  const row = db
+    .prepare(
+      `SELECT id FROM ai_cost_ledger
+       WHERE ai_video_job_id = ? AND status = 'processing'
+       ORDER BY id DESC LIMIT 1`
+    )
+    .get(aiVideoJobId) as { id: number } | undefined;
+
+  if (!row) return undefined;
+
+  return finalizeAiGenerationCost(row.id, updates);
+}
+
+export type AiCostLedgerFilters = {
+  productId?: number;
+  contentPlanId?: number;
+  aiVideoJobId?: number;
+  provider?: AiCostProvider;
+  operation?: AiCostOperation;
+  status?: AiCostStatus;
+  startDate?: string; // ISO — created_at >=
+  endDate?: string; // ISO — created_at <=
+};
+
+function buildWhereClause(filters: AiCostLedgerFilters): {
+  clause: string;
+  values: Array<string | number>;
+} {
+  const conditions: string[] = [];
+  const values: Array<string | number> = [];
+
+  if (typeof filters.productId === "number") {
+    conditions.push("product_id = ?");
+    values.push(filters.productId);
+  }
+
+  if (typeof filters.contentPlanId === "number") {
+    conditions.push("content_plan_id = ?");
+    values.push(filters.contentPlanId);
+  }
+
+  if (typeof filters.aiVideoJobId === "number") {
+    conditions.push("ai_video_job_id = ?");
+    values.push(filters.aiVideoJobId);
+  }
+
+  if (filters.provider) {
+    conditions.push("provider = ?");
+    values.push(filters.provider);
+  }
+
+  if (filters.operation) {
+    conditions.push("operation = ?");
+    values.push(filters.operation);
+  }
+
+  if (filters.status) {
+    conditions.push("status = ?");
+    values.push(filters.status);
+  }
+
+  if (filters.startDate) {
+    conditions.push("created_at >= ?");
+    values.push(filters.startDate);
+  }
+
+  if (filters.endDate) {
+    conditions.push("created_at <= ?");
+    values.push(filters.endDate);
+  }
+
+  return {
+    clause: conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "",
+    values,
+  };
+}
+
+/** ทุก query ในไฟล์นี้ใช้ parameterized statement (better-sqlite3 `?` placeholder) เท่านั้น —
+ * ห้าม string-interpolate ค่าที่มาจาก user input ลงใน SQL โดยเด็ดขาด (กัน SQL injection) */
+export function listAiCostLedger(
+  filters: AiCostLedgerFilters,
+  pagination: { page: number; pageSize: number }
+): { items: AiCostLedgerRow[]; total: number } {
+  const { clause, values } = buildWhereClause(filters);
+
+  const total = (
+    db.prepare(`SELECT COUNT(*) as c FROM ai_cost_ledger ${clause}`).get(...values) as {
+      c: number;
+    }
+  ).c;
+
+  const offset = (pagination.page - 1) * pagination.pageSize;
+
+  const rows = db
+    .prepare(
+      `SELECT * FROM ai_cost_ledger ${clause} ORDER BY id DESC LIMIT ? OFFSET ?`
+    )
+    .all(...values, pagination.pageSize, offset) as DbRow[];
+
+  return { items: rows.map(toRow), total };
+}
+
+export type CostCategory = "content" | "image" | "video" | "voice" | "other";
+
+function categoryForOperation(operation: string): CostCategory {
+  switch (operation) {
+    case "text_generate":
+    case "content_plan_generate":
+    case "weekly_plan_generate":
+      return "content";
+    case "image_generate":
+      return "image";
+    case "video_generate":
+      return "video";
+    case "voice_generate":
+      return "voice";
+    default:
+      return "other";
+  }
+}
+
+export type CostBreakdown = {
+  generationCount: number;
+  estimatedTotal: number | null;
+  actualTotal: number | null;
+};
+
+function emptyBreakdown(): CostBreakdown {
+  return { generationCount: 0, estimatedTotal: null, actualTotal: null };
+}
+
+function accumulate(breakdown: CostBreakdown, row: AiCostLedgerRow): void {
+  breakdown.generationCount += 1;
+
+  if (row.estimatedCost !== null) {
+    breakdown.estimatedTotal = (breakdown.estimatedTotal ?? 0) + row.estimatedCost;
+  }
+
+  if (row.actualCost !== null) {
+    breakdown.actualTotal = (breakdown.actualTotal ?? 0) + row.actualCost;
+  }
+}
+
+export type CategoryCostBreakdown = Record<CostCategory, CostBreakdown> & {
+  total: CostBreakdown;
+};
+
+function newCategoryBreakdown(): CategoryCostBreakdown {
+  return {
+    content: emptyBreakdown(),
+    image: emptyBreakdown(),
+    video: emptyBreakdown(),
+    voice: emptyBreakdown(),
+    other: emptyBreakdown(),
+    total: emptyBreakdown(),
+  };
+}
+
+function summarizeByCategory(rows: AiCostLedgerRow[]): CategoryCostBreakdown {
+  const result = newCategoryBreakdown();
+
+  for (const row of rows) {
+    const category = categoryForOperation(row.operation);
+    accumulate(result[category], row);
+    accumulate(result.total, row);
+  }
+
+  return result;
+}
+
+/** รวมทุก generation (text/image/video/voice) ที่ trace กลับไปยัง product นี้ได้ — ไม่ deduplicate
+ * และไม่คิดเฉพาะไฟล์สุดท้าย รวมทุกครั้งที่เคยเรียก AI จริงสำหรับสินค้านี้ */
+export function getProductAiCost(productId: number): CategoryCostBreakdown {
+  const rows = db
+    .prepare("SELECT * FROM ai_cost_ledger WHERE product_id = ?")
+    .all(productId) as DbRow[];
+
+  return summarizeByCategory(rows.map(toRow));
+}
+
+export function getContentPlanAiCost(contentPlanId: number): CategoryCostBreakdown {
+  const rows = db
+    .prepare("SELECT * FROM ai_cost_ledger WHERE content_plan_id = ?")
+    .all(contentPlanId) as DbRow[];
+
+  return summarizeByCategory(rows.map(toRow));
+}
+
+export type ClipAiCost = CategoryCostBreakdown & {
+  aiVideoJobId: number;
+  contentPlanId: number | null;
+};
+
+/**
+ * ต้นทุนของ "คลิป" หนึ่งชิ้น (Script + Image + Video + Voice) — นิยาม "คลิป" คือ 1 ai_video_job
+ * บวกกับ generation อื่น (text/image/voice) ที่ผูกกับ content_plan เดียวกันกับ video job นั้น (ถ้ามี)
+ *
+ * ถ้า video job นี้ไม่ได้ถูกสร้างจาก content plan ใด (contentPlanId เป็น NULL) จะรวมเฉพาะ
+ * generation ที่ ai_video_job_id ตรงกันเท่านั้น — ไม่เดาความเชื่อมโยงที่ไม่มีอยู่จริงใน DB
+ */
+export function getClipAiCost(aiVideoJobId: number): ClipAiCost | undefined {
+  const videoRows = db
+    .prepare("SELECT * FROM ai_cost_ledger WHERE ai_video_job_id = ?")
+    .all(aiVideoJobId) as DbRow[];
+
+  if (videoRows.length === 0) return undefined;
+
+  const contentPlanId = videoRows.find((r) => r.content_plan_id !== null)?.content_plan_id ?? null;
+
+  let allRows = videoRows;
+
+  if (contentPlanId !== null) {
+    const planRows = db
+      .prepare(
+        "SELECT * FROM ai_cost_ledger WHERE content_plan_id = ? AND ai_video_job_id IS NULL"
+      )
+      .all(contentPlanId) as DbRow[];
+
+    allRows = [...videoRows, ...planRows];
+  }
+
+  const breakdown = summarizeByCategory(allRows.map(toRow));
+
+  return { ...breakdown, aiVideoJobId, contentPlanId };
+}
+
+/** รายการ clip (ai_video_job) ทั้งหมดของสินค้าหนึ่งชิ้น พร้อมต้นทุนแยกราย clip */
+export function listClipAiCostsForProduct(productId: number): ClipAiCost[] {
+  const jobIds = db
+    .prepare(
+      "SELECT DISTINCT ai_video_job_id as id FROM ai_cost_ledger WHERE product_id = ? AND ai_video_job_id IS NOT NULL"
+    )
+    .all(productId) as Array<{ id: number }>;
+
+  return jobIds
+    .map((row) => getClipAiCost(row.id))
+    .filter((clip): clip is ClipAiCost => clip !== undefined);
+}
+
+export type CostSummaryPeriod = {
+  estimatedCost: number | null;
+  actualCost: number | null;
+  generationCount: number;
+};
+
+export type ProviderBreakdownEntry = { provider: string; generationCount: number; estimatedCost: number | null; actualCost: number | null };
+export type OperationBreakdownEntry = { operation: string; generationCount: number; estimatedCost: number | null; actualCost: number | null };
+
+export type CostSummary = {
+  today: CostSummaryPeriod;
+  month: CostSummaryPeriod;
+  averageCostPerProduct: number | null;
+  averageCostPerClip: number | null;
+  providerBreakdown: ProviderBreakdownEntry[];
+  operationBreakdown: OperationBreakdownEntry[];
+};
+
+function periodBounds(now: Date): { todayStart: string; monthStart: string } {
+  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+
+  return {
+    todayStart: toSqliteTimestamp(todayStart),
+    monthStart: toSqliteTimestamp(monthStart),
+  };
+}
+
+function summarizePeriod(sinceIso: string): CostSummaryPeriod {
+  const rows = db
+    .prepare("SELECT * FROM ai_cost_ledger WHERE created_at >= ?")
+    .all(sinceIso) as DbRow[];
+
+  const breakdown = emptyBreakdown();
+
+  for (const row of rows.map(toRow)) {
+    accumulate(breakdown, row);
+  }
+
+  return {
+    estimatedCost: breakdown.estimatedTotal,
+    actualCost: breakdown.actualTotal,
+    generationCount: breakdown.generationCount,
+  };
+}
+
+/**
+ * สรุปภาพรวมต้นทุน AI ทั้งระบบ — สำหรับ AI Cost Dashboard
+ *
+ * averageCostPerClip คำนวณเฉพาะ generation ที่ผูกกับ ai_video_job_id โดยตรง (ไม่รวม script/voice
+ * ของ content plan เดียวกัน) เพื่อให้เป็นตัวเลขที่คำนวณได้เร็วและไม่ซับซ้อนเกินไปสำหรับหน้าสรุป —
+ * ถ้าต้องการต้นทุนคลิปแบบเต็ม (รวม script/image/voice) ให้ใช้ getClipAiCost() ต่อคลิป
+ */
+export function getCostSummary(): CostSummary {
+  const { todayStart, monthStart } = periodBounds(new Date());
+
+  const today = summarizePeriod(todayStart);
+  const month = summarizePeriod(monthStart);
+
+  const productGroups = db
+    .prepare(
+      `SELECT product_id, SUM(estimated_cost) as est, COUNT(*) as cnt
+       FROM ai_cost_ledger
+       WHERE product_id IS NOT NULL AND estimated_cost IS NOT NULL
+       GROUP BY product_id`
+    )
+    .all() as Array<{ product_id: number; est: number; cnt: number }>;
+
+  const averageCostPerProduct =
+    productGroups.length > 0
+      ? productGroups.reduce((sum, g) => sum + g.est, 0) / productGroups.length
+      : null;
+
+  const clipGroups = db
+    .prepare(
+      `SELECT ai_video_job_id, SUM(estimated_cost) as est
+       FROM ai_cost_ledger
+       WHERE ai_video_job_id IS NOT NULL AND estimated_cost IS NOT NULL
+       GROUP BY ai_video_job_id`
+    )
+    .all() as Array<{ ai_video_job_id: number; est: number }>;
+
+  const averageCostPerClip =
+    clipGroups.length > 0
+      ? clipGroups.reduce((sum, g) => sum + g.est, 0) / clipGroups.length
+      : null;
+
+  const providerRows = db
+    .prepare(
+      `SELECT provider, COUNT(*) as cnt, SUM(estimated_cost) as est, SUM(actual_cost) as act,
+              SUM(CASE WHEN estimated_cost IS NOT NULL THEN 1 ELSE 0 END) as est_cnt,
+              SUM(CASE WHEN actual_cost IS NOT NULL THEN 1 ELSE 0 END) as act_cnt
+       FROM ai_cost_ledger GROUP BY provider ORDER BY provider ASC`
+    )
+    .all() as Array<{
+    provider: string;
+    cnt: number;
+    est: number | null;
+    act: number | null;
+    est_cnt: number;
+    act_cnt: number;
+  }>;
+
+  const providerBreakdown: ProviderBreakdownEntry[] = providerRows.map((r) => ({
+    provider: r.provider,
+    generationCount: r.cnt,
+    estimatedCost: r.est_cnt > 0 ? r.est : null,
+    actualCost: r.act_cnt > 0 ? r.act : null,
+  }));
+
+  const operationRows = db
+    .prepare(
+      `SELECT operation, COUNT(*) as cnt, SUM(estimated_cost) as est, SUM(actual_cost) as act,
+              SUM(CASE WHEN estimated_cost IS NOT NULL THEN 1 ELSE 0 END) as est_cnt,
+              SUM(CASE WHEN actual_cost IS NOT NULL THEN 1 ELSE 0 END) as act_cnt
+       FROM ai_cost_ledger GROUP BY operation ORDER BY operation ASC`
+    )
+    .all() as Array<{
+    operation: string;
+    cnt: number;
+    est: number | null;
+    act: number | null;
+    est_cnt: number;
+    act_cnt: number;
+  }>;
+
+  const operationBreakdown: OperationBreakdownEntry[] = operationRows.map((r) => ({
+    operation: r.operation,
+    generationCount: r.cnt,
+    estimatedCost: r.est_cnt > 0 ? r.est : null,
+    actualCost: r.act_cnt > 0 ? r.act : null,
+  }));
+
+  return {
+    today,
+    month,
+    averageCostPerProduct,
+    averageCostPerClip,
+    providerBreakdown,
+    operationBreakdown,
+  };
+}

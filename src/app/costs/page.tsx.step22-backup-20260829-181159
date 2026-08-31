@@ -1,0 +1,274 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+// AI Cost Dashboard — STEP 21
+//
+// หน้าใหม่แยกต่างหาก (ไม่ใช่ tab ซ้อนใน Video Studio หรือ Dashboard เดิม) เพราะ Dashboard เดิม
+// (src/app/page.tsx) เป็น static placeholder ที่ยังไม่ต่อ backend จริง และ Video Studio เป็น
+// production surface ที่ผูกกับสินค้าเดียว ณ ขณะหนึ่งอยู่แล้ว (ดู panel "💰 Product AI Cost" ในนั้น
+// สำหรับมุมมองต่อสินค้า) — หน้านี้คือมุมมองภาพรวมทั้งระบบ ไม่ผูกกับสินค้าใดสินค้าหนึ่ง
+//
+// เป็น accounting/observability เท่านั้น — ไม่มี action ใดในหน้านี้ที่จำกัดหรือหยุดการสร้าง AI
+
+type CostSummaryPeriod = {
+  estimatedCost: number | null;
+  actualCost: number | null;
+  generationCount: number;
+};
+
+type ProviderBreakdownEntry = {
+  provider: string;
+  generationCount: number;
+  estimatedCost: number | null;
+  actualCost: number | null;
+};
+
+type OperationBreakdownEntry = {
+  operation: string;
+  generationCount: number;
+  estimatedCost: number | null;
+  actualCost: number | null;
+};
+
+type CostSummary = {
+  today: CostSummaryPeriod;
+  month: CostSummaryPeriod;
+  averageCostPerProduct: number | null;
+  averageCostPerClip: number | null;
+  providerBreakdown: ProviderBreakdownEntry[];
+  operationBreakdown: OperationBreakdownEntry[];
+};
+
+const OPERATION_LABELS: Record<string, string> = {
+  text_generate: "📝 Text (Content Studio)",
+  content_plan_generate: "🧠 Content Plan",
+  weekly_plan_generate: "🗓️ Weekly Planner",
+  image_generate: "🖼️ Image",
+  video_generate: "🎬 Video",
+  voice_generate: "🔊 Voice",
+};
+
+function formatCost(value: number | null, currency: string): string {
+  if (value === null) return "-";
+
+  return `${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} ${currency}`;
+}
+
+function PeriodCard({
+  title,
+  period,
+  currency,
+}: {
+  title: string;
+  period: CostSummaryPeriod;
+  currency: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-gray-800 bg-gray-950 p-6">
+      <p className="text-sm text-gray-400">{title}</p>
+
+      <div className="mt-4 grid grid-cols-2 gap-4">
+        <div>
+          <p className="text-xs text-gray-500">📊 Estimated (ประมาณการ)</p>
+          <p className="mt-1 text-2xl font-bold">{formatCost(period.estimatedCost, currency)}</p>
+        </div>
+
+        <div>
+          <p className="text-xs text-gray-500">💰 Actual (ต้นทุนจริง)</p>
+          <p className="mt-1 text-2xl font-bold">
+            {period.actualCost === null ? (
+              <span className="text-base font-normal text-yellow-500">
+                ยังไม่มีข้อมูลต้นทุนจริง
+              </span>
+            ) : (
+              formatCost(period.actualCost, currency)
+            )}
+          </p>
+        </div>
+      </div>
+
+      <p className="mt-4 text-xs text-gray-500">
+        จำนวน generations: {period.generationCount.toLocaleString("th-TH")} ครั้ง
+      </p>
+    </div>
+  );
+}
+
+export default function CostsDashboardPage() {
+  const [summary, setSummary] = useState<CostSummary | null>(null);
+  const [currency, setCurrency] = useState("USD");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setError("");
+
+      try {
+        const response = await fetch("/api/costs/summary", { cache: "no-store" });
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data?.error || "ไม่สามารถโหลดสรุปต้นทุน AI ได้");
+        }
+
+        if (!cancelled) {
+          setSummary(data.summary);
+          setCurrency(data.currency || "USD");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "เกิดข้อผิดพลาด");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <main className="min-h-screen bg-black p-6 text-white">
+      <div className="mx-auto max-w-6xl">
+        <h1 className="text-2xl font-bold">💰 AI Cost Dashboard</h1>
+        <p className="mt-2 text-sm text-gray-400">
+          บันทึกทุก AI generation (Content / Image / Video / Voice) จริง — ไม่จำกัดจำนวนการสร้าง AI
+          หน้านี้เป็น accounting เท่านั้น
+        </p>
+
+        {loading && <p className="mt-8 text-gray-400">กำลังโหลด...</p>}
+
+        {error && (
+          <p className="mt-8 rounded-xl border border-red-800 bg-red-950/30 p-4 text-red-400">
+            {error}
+          </p>
+        )}
+
+        {summary && (
+          <>
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+              <PeriodCard title="วันนี้" period={summary.today} currency={currency} />
+              <PeriodCard title="เดือนนี้" period={summary.month} currency={currency} />
+            </div>
+
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div className="rounded-2xl border border-gray-800 bg-gray-950 p-6">
+                <p className="text-sm text-gray-400">ต้นทุนเฉลี่ยต่อสินค้า (estimated)</p>
+                <p className="mt-2 text-xl font-bold">
+                  {formatCost(summary.averageCostPerProduct, currency)}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-gray-800 bg-gray-950 p-6">
+                <p className="text-sm text-gray-400">ต้นทุนเฉลี่ยต่อคลิป (estimated)</p>
+                <p className="mt-2 text-xl font-bold">
+                  {formatCost(summary.averageCostPerClip, currency)}
+                </p>
+                <p className="mt-1 text-xs text-gray-500">
+                  เฉพาะต้นทุนการสร้างวิดีโอ (AI Video Job) โดยตรง — ดูต้นทุนคลิปแบบเต็ม
+                  (รวม script/image/voice) ได้ที่หน้า Video Studio ต่อสินค้า
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-4 lg:grid-cols-2">
+              <div className="rounded-2xl border border-gray-800 bg-gray-950 p-6">
+                <h2 className="font-semibold text-gray-200">Provider Breakdown</h2>
+
+                <table className="mt-3 w-full text-left text-sm">
+                  <thead>
+                    <tr className="text-xs text-gray-500">
+                      <th className="pb-2">Provider</th>
+                      <th className="pb-2">Generations</th>
+                      <th className="pb-2">📊 Estimated</th>
+                      <th className="pb-2">💰 Actual</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.providerBreakdown.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="py-3 text-gray-500">
+                          ยังไม่มีข้อมูล
+                        </td>
+                      </tr>
+                    )}
+
+                    {summary.providerBreakdown.map((row) => (
+                      <tr key={row.provider} className="border-t border-gray-800">
+                        <td className="py-2">{row.provider}</td>
+                        <td className="py-2">{row.generationCount}</td>
+                        <td className="py-2">{formatCost(row.estimatedCost, currency)}</td>
+                        <td className="py-2">
+                          {row.actualCost === null ? (
+                            <span className="text-xs text-yellow-500">ไม่มีข้อมูล</span>
+                          ) : (
+                            formatCost(row.actualCost, currency)
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="rounded-2xl border border-gray-800 bg-gray-950 p-6">
+                <h2 className="font-semibold text-gray-200">Operation Breakdown</h2>
+
+                <table className="mt-3 w-full text-left text-sm">
+                  <thead>
+                    <tr className="text-xs text-gray-500">
+                      <th className="pb-2">Operation</th>
+                      <th className="pb-2">Generations</th>
+                      <th className="pb-2">📊 Estimated</th>
+                      <th className="pb-2">💰 Actual</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.operationBreakdown.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="py-3 text-gray-500">
+                          ยังไม่มีข้อมูล
+                        </td>
+                      </tr>
+                    )}
+
+                    {summary.operationBreakdown.map((row) => (
+                      <tr key={row.operation} className="border-t border-gray-800">
+                        <td className="py-2">{OPERATION_LABELS[row.operation] || row.operation}</td>
+                        <td className="py-2">{row.generationCount}</td>
+                        <td className="py-2">{formatCost(row.estimatedCost, currency)}</td>
+                        <td className="py-2">
+                          {row.actualCost === null ? (
+                            <span className="text-xs text-yellow-500">ไม่มีข้อมูล</span>
+                          ) : (
+                            formatCost(row.actualCost, currency)
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <p className="mt-6 text-xs text-gray-600">
+              หมายเหตุ: estimated cost คำนวณจาก usage จริง (token/ภาพ/วินาที) คูณราคาที่ตั้งค่าไว้ผ่าน
+              environment variables — เป็นค่าประมาณการเท่านั้น ไม่ใช่ยอดเงินจริง actual cost
+              ต้องมาจาก billing API จริงของ provider เท่านั้น (ปัจจุบันยังไม่มี provider ใดคืนค่านี้ได้
+              จึงแสดง &quot;ยังไม่มีข้อมูลต้นทุนจริง&quot; เสมอ)
+            </p>
+          </>
+        )}
+      </div>
+    </main>
+  );
+}

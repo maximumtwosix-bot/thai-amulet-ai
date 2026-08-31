@@ -1,0 +1,35 @@
+﻿import { NextResponse } from "next/server";
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+
+    const script = String(body.script || "").trim();
+
+    if (!script) {
+      return NextResponse.json(
+        { error: "กรุณาระบุสคริปต์สำหรับสร้างเสียงพากย์" },
+        { status: 400 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      status: "ready",
+      script,
+      message: "รับสคริปต์เรียบร้อยแล้ว พร้อมเข้าสู่ขั้นตอนสร้างเสียงพากย์",
+    });
+  } catch (error) {
+    console.error("POST /api/voice error:", error);
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "ไม่สามารถประมวลผลสคริปต์ได้",
+      },
+      { status: 500 }
+    );
+  }
+}

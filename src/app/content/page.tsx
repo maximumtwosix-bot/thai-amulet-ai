@@ -1,0 +1,284 @@
+﻿"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type ContentItem = {
+  id: number;
+  title: string;
+  content_type: string | null;
+  platform: string | null;
+  caption: string | null;
+  status: string;
+  created_at: string;
+};
+
+export default function ContentPage() {
+  const [contents, setContents] = useState<ContentItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [selected, setSelected] = useState<ContentItem | null>(null);
+  const [message, setMessage] = useState("");
+
+  async function loadContents() {
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/content/list", {
+        cache: "no-store",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error || "ไม่สามารถโหลดคอนเทนต์ได้"
+        );
+      }
+
+      setContents(data.contents || []);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "ไม่สามารถโหลดคอนเทนต์ได้"
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(function () {
+    loadContents();
+  }, []);
+
+  const filteredContents = useMemo(function () {
+    const keyword = search.trim().toLowerCase();
+
+    return contents.filter(function (item) {
+      const matchesSearch =
+        !keyword ||
+        item.title.toLowerCase().includes(keyword) ||
+        (item.caption || "").toLowerCase().includes(keyword);
+
+      const matchesFilter =
+        filter === "all" ||
+        (item.platform || "").toLowerCase() === filter ||
+        (item.content_type || "").toLowerCase() === filter;
+
+      return matchesSearch && matchesFilter;
+    });
+  }, [contents, search, filter]);
+
+  async function copyContent(content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      setMessage("คัดลอกคอนเทนต์แล้ว");
+    } catch {
+      setMessage("ไม่สามารถคัดลอกคอนเทนต์ได้");
+    }
+  }
+
+  function sendToVoiceStudio(content: string) {
+    const script = content.trim();
+
+    if (!script) {
+      setMessage("ไม่พบเนื้อหาสำหรับส่งไป Voice Studio");
+      return;
+    }
+
+    const encodedScript = encodeURIComponent(script);
+
+    window.location.href =
+      "/voice-studio?script=" + encodedScript;
+  }
+
+  function formatDate(value: string) {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+
+    return date.toLocaleString("th-TH");
+  }
+
+  return (
+    <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold">
+              📚 Content Library
+            </h1>
+
+            <p className="mt-1 text-slate-500">
+              คลังคอนเทนต์ที่บันทึกจาก Content Studio
+            </p>
+          </div>
+
+          <a
+            href="/content-studio"
+            className="rounded-xl bg-slate-900 px-5 py-3 font-bold text-white"
+          >
+            ✨ สร้างคอนเทนต์
+          </a>
+        </div>
+
+        {message && (
+          <div className="mb-6 rounded-xl border bg-white p-4">
+            {message}
+          </div>
+        )}
+
+        <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm">
+          <div className="grid gap-3 md:grid-cols-2">
+            <input
+              value={search}
+              onChange={function (event) {
+                setSearch(event.target.value);
+              }}
+              placeholder="ค้นหาชื่อหรือเนื้อหา..."
+              className="rounded-xl border p-3 outline-none"
+            />
+
+            <select
+              value={filter}
+              onChange={function (event) {
+                setFilter(event.target.value);
+              }}
+              className="rounded-xl border p-3"
+            >
+              <option value="all">ทั้งหมด</option>
+              <option value="facebook">Facebook</option>
+              <option value="reels">Reels</option>
+              <option value="tiktok">TikTok</option>
+              <option value="script">Script</option>
+            </select>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="rounded-2xl bg-white p-10 text-center">
+            กำลังโหลดคอนเทนต์...
+          </div>
+        ) : filteredContents.length === 0 ? (
+          <div className="rounded-2xl bg-white p-10 text-center text-slate-500">
+            ยังไม่มีคอนเทนต์ที่ตรงกับเงื่อนไข
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {filteredContents.map(function (item) {
+              return (
+                <article
+                  key={item.id}
+                  className="rounded-2xl bg-white p-5 shadow-sm"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-lg font-bold">
+                        {item.title}
+                      </h2>
+
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                        <span className="rounded-full bg-slate-100 px-3 py-1">
+                          {item.platform || "ไม่ระบุแพลตฟอร์ม"}
+                        </span>
+
+                        <span className="rounded-full bg-slate-100 px-3 py-1">
+                          {item.content_type || "ไม่ระบุประเภท"}
+                        </span>
+
+                        <span className="rounded-full bg-slate-100 px-3 py-1">
+                          {item.status}
+                        </span>
+                      </div>
+                    </div>
+
+                    <span className="text-sm text-slate-400">
+                      {formatDate(item.created_at)}
+                    </span>
+                  </div>
+
+                  <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                    {item.caption || ""}
+                  </p>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={function () {
+                        setSelected(item);
+                      }}
+                      className="rounded-lg border px-4 py-2 text-sm font-medium"
+                    >
+                      เปิดดู
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={function () {
+                        copyContent(item.caption || "");
+                      }}
+                      className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+                    >
+                      คัดลอก
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={function () {
+                        sendToVoiceStudio(item.caption || "");
+                      }}
+                      className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-medium text-white"
+                    >
+                      🎙️ ส่งไป Voice Studio
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+
+        {selected && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
+            <div className="max-h-[85vh] w-full max-w-3xl overflow-auto rounded-2xl bg-white p-6">
+              <div className="flex items-start justify-between gap-4">
+                <h2 className="text-xl font-bold">
+                  {selected.title}
+                </h2>
+
+                <button
+                  type="button"
+                  onClick={function () {
+                    setSelected(null);
+                  }}
+                  className="rounded-lg border px-3 py-2"
+                >
+                  ปิด
+                </button>
+              </div>
+
+              <p className="mt-5 whitespace-pre-wrap leading-8 text-slate-700">
+                {selected.caption || ""}
+              </p>
+
+              <button
+                type="button"
+                onClick={function () {
+                  copyContent(selected.caption || "");
+                }}
+                className="mt-6 rounded-xl bg-slate-900 px-5 py-3 font-bold text-white"
+              >
+                📋 คัดลอกคอนเทนต์
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}
+
+

@@ -1,0 +1,33 @@
+// One-shot CLI entry point for external scheduler/cron to call — STEP 17
+//
+// เรียก runSocialWorker() ครั้งเดียวแล้วจบ (exit) ไม่ใช่ long-running process/loop — ตั้งใจให้
+// cron หรือ scheduled task ภายนอกเรียกซ้ำเป็นระยะ (เช่น ทุก 1 นาที) เอง แทนที่จะมี setInterval()
+// อยู่ในโปรเซสของ Next.js dev/prod server ซึ่งจะทำให้ dev server ทำงานผิดปกติ
+//
+// ใช้งาน: pnpm social:worker
+
+import { runSocialWorker, WorkerAlreadyRunningError } from "@/lib/socialWorker";
+
+async function main() {
+  try {
+    const result = await runSocialWorker();
+
+    console.log(
+      `[social:worker] processed=${result.summary.processed} ` +
+        `published=${result.summary.published} failed=${result.summary.failed} ` +
+        `retried=${result.summary.retried} skipped=${result.summary.skipped}`
+    );
+
+    process.exit(0);
+  } catch (error) {
+    if (error instanceof WorkerAlreadyRunningError) {
+      console.log("[social:worker] worker กำลังทำงานอยู่แล้ว ข้ามรอบนี้");
+      process.exit(0);
+    }
+
+    console.error("[social:worker] error:", error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+}
+
+main();

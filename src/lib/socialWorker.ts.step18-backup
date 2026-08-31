@@ -1,0 +1,81 @@
+// Social Worker — STEP 17
+//
+// Wrapper บาง ๆ รอบ processScheduledPosts() (src/lib/socialQueue.ts, STEP 12) — ไม่รื้อ logic
+// เดิม แค่เพิ่ม 2 อย่างที่ processScheduledPosts() เองไม่มีหน้าที่ทำ:
+//   1. in-memory lock กัน runSocialWorker() สองครั้งทำงานซ้อนกันในโปรเซสเดียวกัน
+//      (การป้องกันที่แท้จริงต่อ race ระดับ DB คือ claimSocialPostForProcessing() ใน
+//      socialPosts.ts — lock ตรงนี้เป็นการป้องกันชั้นที่สอง/fast-path ไม่ใช่ตัวค้ำประกันหลัก)
+//   2. เก็บสถานะการรันล่าสุดไว้ใน memory ให้ GET /api/social/worker/status อ่านได้
+//      (in-memory เท่านั้น รีเซ็ตเมื่อ dev server รีสตาร์ท — ยอมรับได้เพราะเป็นแค่สถานะ debug/
+//      observability ไม่ใช่ source of truth ของระบบ ซึ่งคือ social_posts.status ใน DB เสมอ)
+//
+// ไม่มี setInterval/cron ใดๆ ในไฟล์นี้ — runSocialWorker() เป็นฟังก์ชันเปล่าที่รอถูกเรียก
+// จาก POST /api/social/worker/run (manual trigger) หรือ scripts/run-social-worker.ts
+// (เรียกครั้งเดียวจบ เหมาะกับ external cron/scheduled task) เท่านั้น
+
+import { processScheduledPosts, type ProcessScheduledPostsSummary } from "@/lib/socialQueue";
+
+export type WorkerRunResult = {
+  startedAt: string;
+  finishedAt: string;
+  summary: ProcessScheduledPostsSummary;
+};
+
+export type WorkerStatus = {
+  state: "idle" | "running";
+  lastRunAt: string | null;
+  lastResult: ProcessScheduledPostsSummary | null;
+};
+
+let running = false;
+let lastRunAt: string | null = null;
+let lastResult: ProcessScheduledPostsSummary | null = null;
+
+export class WorkerAlreadyRunningError extends Error {
+  constructor() {
+    super("Worker กำลังทำงานอยู่แล้ว — ข้ามการเรียกซ้ำนี้ไป");
+    this.name = "WorkerAlreadyRunningError";
+  }
+}
+
+/**
+ * รัน worker หนึ่งรอบ — หา scheduled post ที่ถึงเวลาแล้วทั้งหมดแล้วประมวลผลจนจบ (ไม่ใช่ loop
+ * ค้างรอ) ถ้ามีอีก call กำลังทำงานอยู่ จะ throw WorkerAlreadyRunningError ทันที ไม่ queue รอ
+ * (ผู้เรียก — API route — ต้องจับ error นี้แล้วตอบ client ว่า worker กำลังทำงานอยู่)
+ */
+export async function runSocialWorker(): Promise<WorkerRunResult> {
+  if (running) {
+    throw new WorkerAlreadyRunningError();
+  }
+
+  running = true;
+  const startedAt = new Date().toISOString();
+
+  console.log(`[social-worker] started at ${startedAt}`);
+
+  try {
+    const summary = await processScheduledPosts();
+    const finishedAt = new Date().toISOString();
+
+    lastRunAt = finishedAt;
+    lastResult = summary;
+
+    console.log(
+      `[social-worker] finished at ${finishedAt} — ` +
+        `processed=${summary.processed} published=${summary.published} ` +
+        `failed=${summary.failed} retried=${summary.retried} skipped=${summary.skipped}`
+    );
+
+    return { startedAt, finishedAt, summary };
+  } finally {
+    running = false;
+  }
+}
+
+export function getWorkerStatus(): WorkerStatus {
+  return {
+    state: running ? "running" : "idle",
+    lastRunAt,
+    lastResult,
+  };
+}

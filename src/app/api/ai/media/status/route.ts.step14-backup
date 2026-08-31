@@ -1,0 +1,29 @@
+import { NextResponse } from "next/server";
+import { isAiImageGenerationConfigured } from "@/lib/ai/imageGeneration";
+import { getVideoGenerationStatus } from "@/lib/ai/videoGeneration";
+
+export const runtime = "nodejs";
+
+// GET /api/ai/media/status — เช็คว่า AI Image/Video Generation พร้อมใช้งานหรือไม่
+// ไม่มีทางเปิดเผย token/key ใน response นี้ — คืนแค่ status/reason เท่านั้น
+export async function GET() {
+  try {
+    const imageConfigured = isAiImageGenerationConfigured();
+    const video = getVideoGenerationStatus();
+
+    return NextResponse.json({
+      success: true,
+      image: {
+        status: imageConfigured ? "connected" : "not_configured",
+      },
+      video,
+    });
+  } catch (error) {
+    console.error("GET /api/ai/media/status error:", error);
+
+    return NextResponse.json(
+      { error: "ไม่สามารถตรวจสถานะ AI Media Generation ได้" },
+      { status: 500 }
+    );
+  }
+}

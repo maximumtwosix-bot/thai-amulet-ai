@@ -1,0 +1,196 @@
+import { NextResponse } from "next/server";
+import { stat } from "node:fs/promises";
+import path from "node:path";
+import db from "@/lib/db";
+import {
+  buildContentPackage,
+  isValidPlatform,
+  type GeneratedContent,
+} from "@/lib/socialContent";
+
+export const runtime = "nodejs";
+
+type PrepareRequest = {
+  productId?: number;
+  videoUrl?: string;
+  platform?: string;
+};
+
+type Product = {
+  id: number;
+  name: string;
+  model: string | null;
+  master: string | null;
+  year: string | null;
+  description: string | null;
+  price: number;
+  stock: number;
+  category: string | null;
+  status: string | null;
+};
+
+// เช็คเหมือน getPublicFilePath() ใน src/app/api/video/render/route.ts (STABLE — ไม่แก้ไฟล์นั้น
+// แค่ทำตรรกะความปลอดภัยแบบเดียวกันในไฟล์นี้เอง): ต้องขึ้นต้นด้วย /generated/video/ และไม่มี ".."
+function isValidVideoUrl(videoUrl: string): boolean {
+  if (!videoUrl || !videoUrl.startsWith("/")) {
+    return false;
+  }
+
+  const cleanUrl = decodeURIComponent(videoUrl.split("?")[0]);
+
+  return !cleanUrl.includes("..") && cleanUrl.startsWith("/generated/video/");
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json()) as PrepareRequest;
+
+    const productId = Number(body.productId || 0);
+    const videoUrl = String(body.videoUrl || "").trim();
+    const platformRaw = String(body.platform || "")
+      .trim()
+      .toLowerCase();
+
+    // 1. validate productId
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return NextResponse.json(
+        { error: "กรุณาระบุรหัสสินค้าให้ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    // 2. validate platform
+    if (!isValidPlatform(platformRaw)) {
+      return NextResponse.json(
+        {
+          error:
+            'platform ไม่ถูกต้อง — รองรับเฉพาะ "facebook", "reels", "instagram", "tiktok" เท่านั้น',
+        },
+        { status: 400 }
+      );
+    }
+
+    // 3. ตรวจ videoUrl (รูปแบบ + ต้องมีไฟล์จริงบนดิสก์)
+    if (!isValidVideoUrl(videoUrl)) {
+      return NextResponse.json(
+        { error: "videoUrl ไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    const videoFilePath = path.join(
+      process.cwd(),
+      "public",
+      videoUrl.replace(/^\/+/, "")
+    );
+
+    try {
+      const stats = await stat(videoFilePath);
+
+      if (!stats.isFile() || stats.size <= 0) {
+        throw new Error("empty or invalid file");
+      }
+    } catch {
+      return NextResponse.json(
+        { error: "ไม่พบไฟล์วิดีโอที่ระบุบนดิสก์จริง" },
+        { status: 400 }
+      );
+    }
+
+    // 4. โหลดข้อมูลสินค้า
+    const product = db
+      .prepare(
+        `
+        SELECT
+          id, name, model, master, year, description,
+          price, stock, category, status
+        FROM products
+        WHERE id = ?
+      `
+      )
+      .get(productId) as Product | undefined;
+
+    if (!product) {
+      return NextResponse.json(
+        { error: `ไม่พบสินค้ารหัส ${productId}` },
+        { status: 404 }
+      );
+    }
+
+    // 5. ดึง content — ตาราง content เดิมไม่ได้ผูกกับ productId เลย (ตรวจสอบแล้ว ดู
+    // src/lib/socialContent.ts) จึงสร้างคอนเทนต์สดใหม่ด้วย /api/content/generate ตัวเดิมที่
+    // /api/video/auto ใช้อยู่แล้ว (reuse endpoint เดิม ไม่สร้าง logic สร้างคอนเทนต์ซ้ำ)
+    const contentUrl = new URL("/api/content/generate", request.url);
+
+    const contentResponse = await fetch(contentUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        product: {
+          id: product.id,
+          name: product.name,
+          model: product.model || "",
+          master: product.master || "",
+          year: product.year || "",
+          description: product.description || "",
+          price: product.price,
+          stock: product.stock,
+          category: product.category || "",
+          status: product.status || "",
+        },
+        tone: "premium",
+      }),
+      cache: "no-store",
+    });
+
+    const contentData = await contentResponse.json();
+
+    if (!contentResponse.ok) {
+      throw new Error(
+        contentData?.error || "ไม่สามารถสร้างคอนเทนต์สำหรับเตรียมโพสต์ได้"
+      );
+    }
+
+    if (!contentData?.content) {
+      throw new Error("Content Generate API ไม่ได้ส่ง content กลับมา");
+    }
+
+    const content = contentData.content as GeneratedContent;
+
+    // 6 & 7. สร้าง caption/hashtags แล้วคืน post package
+    const contentPackage = buildContentPackage({
+      productId: product.id,
+      platform: platformRaw,
+      videoUrl,
+      product: {
+        id: product.id,
+        name: product.name,
+        model: product.model,
+        master: product.master,
+        year: product.year,
+        price: product.price,
+        stock: product.stock,
+      },
+      content,
+    });
+
+    return NextResponse.json({
+      success: true,
+      package: contentPackage,
+      nextStep: "connect-posting-api",
+      message: "เตรียม Content Package สำหรับโพสต์เรียบร้อยแล้ว",
+    });
+  } catch (error) {
+    console.error("POST /api/social/prepare error:", error);
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "ไม่สามารถเตรียม Content Package ได้",
+      },
+      { status: 500 }
+    );
+  }
+}

@@ -1,0 +1,865 @@
+"use client";
+
+import { Fragment, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+
+// Local copies of the STEP 19 constant lists — deliberately NOT imported from @/lib/transactions,
+// because that file also exports STEP 20's DB-touching CRUD functions (`import db from "./db"`),
+// and this is a Client Component: importing it would pull better-sqlite3/fs/path into the browser
+// bundle and break the page (confirmed by testing — "Module not found: Can't resolve 'fs'"). This
+// mirrors the existing convention already used by src/app/video-studio/page.tsx, which likewise
+// redefines CostBreakdownEntry/ImageQualityBreakdown/etc. locally instead of importing them from
+// the server-only src/lib/costLedger.ts.
+type TransactionType = "income" | "expense";
+
+type ExpenseCategory =
+  | "PRODUCT_PURCHASE"
+  | "SHIPPING"
+  | "COD_FEE"
+  | "RETURNED_PARCEL"
+  | "PACKAGING"
+  | "FACEBOOK_ADS"
+  | "FUEL"
+  | "OTHER";
+
+const EXPENSE_CATEGORIES: ExpenseCategory[] = [
+  "PRODUCT_PURCHASE",
+  "SHIPPING",
+  "COD_FEE",
+  "RETURNED_PARCEL",
+  "PACKAGING",
+  "FACEBOOK_ADS",
+  "FUEL",
+  "OTHER",
+];
+
+type IncomeCategory = "PRODUCT_SALE" | "OTHER_INCOME";
+
+const INCOME_CATEGORIES: IncomeCategory[] = ["PRODUCT_SALE", "OTHER_INCOME"];
+
+type SalesChannel =
+  | "facebook"
+  | "tiktok_shop"
+  | "shopee"
+  | "lazada"
+  | "line"
+  | "walk_in"
+  | "other";
+
+const SALES_CHANNELS: SalesChannel[] = [
+  "facebook",
+  "tiktok_shop",
+  "shopee",
+  "lazada",
+  "line",
+  "walk_in",
+  "other",
+];
+
+type TransactionRow = {
+  id: number;
+  transactionType: TransactionType;
+  amount: number;
+  transactionDate: string;
+  category: string;
+  description: string | null;
+  salesChannel: SalesChannel | null;
+  productId: number | null;
+  orderId: number | null;
+  paymentMethod: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ProductOption = { id: number; name: string };
+type OrderOption = { id: number; order_number: string };
+
+type AttachmentItem = {
+  id: number;
+  transactionId: number;
+  fileName: string;
+  fileUrl: string;
+  createdAt: string;
+};
+
+const expenseCategoryLabels: Record<ExpenseCategory, string> = {
+  PRODUCT_PURCHASE: "ซื้อสินค้าเข้าสต็อก",
+  SHIPPING: "ค่าจัดส่ง",
+  COD_FEE: "ค่าธรรมเนียม COD",
+  RETURNED_PARCEL: "พัสดุตีกลับ",
+  PACKAGING: "บรรจุภัณฑ์ / กล่อง",
+  FACEBOOK_ADS: "ค่าโฆษณา Facebook / Meta",
+  FUEL: "ค่าน้ำมัน",
+  OTHER: "อื่นๆ",
+};
+
+const incomeCategoryLabels: Record<IncomeCategory, string> = {
+  PRODUCT_SALE: "ขายสินค้า",
+  OTHER_INCOME: "รายรับอื่นๆ",
+};
+
+const salesChannelLabels: Record<SalesChannel, string> = {
+  facebook: "Facebook",
+  tiktok_shop: "TikTok Shop",
+  shopee: "Shopee",
+  lazada: "Lazada",
+  line: "LINE",
+  walk_in: "หน้าร้าน",
+  other: "อื่นๆ",
+};
+
+function categoryLabel(type: TransactionType, category: string): string {
+  if (type === "income") {
+    return incomeCategoryLabels[category as IncomeCategory] || category;
+  }
+  return expenseCategoryLabels[category as ExpenseCategory] || category;
+}
+
+function formatCurrency(value: number): string {
+  return `฿${value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("th-TH", { dateStyle: "medium" });
+}
+
+function todayDateString(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+const emptyForm = {
+  transactionType: "expense" as TransactionType,
+  amount: "",
+  transactionDate: todayDateString(),
+  category: EXPENSE_CATEGORIES[0] as string,
+  description: "",
+  salesChannel: "" as string,
+  productId: "" as string,
+  orderId: "" as string,
+  paymentMethod: "",
+  notes: "",
+};
+
+export default function FinancePage() {
+  const [transactions, setTransactions] = useState<TransactionRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const [products, setProducts] = useState<ProductOption[]>([]);
+  const [orders, setOrders] = useState<OrderOption[]>([]);
+
+  const [filterType, setFilterType] = useState<"all" | TransactionType>("all");
+
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  // STEP 21 — evidence attachments (receipt / transfer slip), upload/display only, no OCR.
+  // Loaded on demand per row when its "📎 ไฟล์แนบ" panel is expanded, not eagerly for every row.
+  const [expandedAttachmentsId, setExpandedAttachmentsId] = useState<number | null>(null);
+  const [attachmentsByTransaction, setAttachmentsByTransaction] = useState<
+    Record<number, AttachmentItem[]>
+  >({});
+  const [attachmentsLoading, setAttachmentsLoading] = useState<number | null>(null);
+  const [attachmentUploading, setAttachmentUploading] = useState<number | null>(null);
+  const [attachmentDeletingId, setAttachmentDeletingId] = useState<number | null>(null);
+  const [attachmentError, setAttachmentError] = useState<Record<number, string>>({});
+
+  async function loadAttachments(transactionId: number) {
+    setAttachmentsLoading(transactionId);
+
+    try {
+      const response = await fetch(`/api/transactions/${transactionId}/attachments`, {
+        cache: "no-store",
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถโหลดไฟล์แนบได้");
+      }
+
+      setAttachmentsByTransaction((current) => ({ ...current, [transactionId]: data.data }));
+    } catch (err) {
+      setAttachmentError((current) => ({
+        ...current,
+        [transactionId]: err instanceof Error ? err.message : "ไม่สามารถโหลดไฟล์แนบได้",
+      }));
+    } finally {
+      setAttachmentsLoading(null);
+    }
+  }
+
+  function toggleAttachments(transactionId: number) {
+    if (expandedAttachmentsId === transactionId) {
+      setExpandedAttachmentsId(null);
+      return;
+    }
+
+    setExpandedAttachmentsId(transactionId);
+    setAttachmentError((current) => ({ ...current, [transactionId]: "" }));
+
+    if (!attachmentsByTransaction[transactionId]) {
+      loadAttachments(transactionId);
+    }
+  }
+
+  async function uploadAttachment(transactionId: number, file: File) {
+    setAttachmentUploading(transactionId);
+    setAttachmentError((current) => ({ ...current, [transactionId]: "" }));
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch(`/api/transactions/${transactionId}/attachments`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถอัปโหลดไฟล์ได้");
+      }
+
+      await loadAttachments(transactionId);
+    } catch (err) {
+      setAttachmentError((current) => ({
+        ...current,
+        [transactionId]: err instanceof Error ? err.message : "ไม่สามารถอัปโหลดไฟล์ได้",
+      }));
+    } finally {
+      setAttachmentUploading(null);
+    }
+  }
+
+  async function deleteAttachment(transactionId: number, attachmentId: number) {
+    setAttachmentDeletingId(attachmentId);
+
+    try {
+      const response = await fetch(
+        `/api/transactions/${transactionId}/attachments/${attachmentId}`,
+        { method: "DELETE" }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถลบไฟล์แนบได้");
+      }
+
+      await loadAttachments(transactionId);
+    } catch (err) {
+      setAttachmentError((current) => ({
+        ...current,
+        [transactionId]: err instanceof Error ? err.message : "ไม่สามารถลบไฟล์แนบได้",
+      }));
+    } finally {
+      setAttachmentDeletingId(null);
+    }
+  }
+
+  async function loadTransactions() {
+    setLoading(true);
+    setError("");
+
+    try {
+      const query = filterType === "all" ? "" : `?transactionType=${filterType}`;
+      const response = await fetch(`/api/transactions${query}`, { cache: "no-store" });
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถโหลดรายการรายรับ-รายจ่ายได้");
+      }
+
+      setTransactions(Array.isArray(data.data) ? data.data : []);
+    } catch (err) {
+      console.error("Load transactions error:", err);
+      setError(err instanceof Error ? err.message : "ไม่สามารถโหลดรายการได้");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadTransactions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterType]);
+
+  useEffect(() => {
+    fetch("/api/products", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : []))
+      .then((data) => setProducts(Array.isArray(data) ? data : []))
+      .catch(() => setProducts([]));
+
+    fetch("/api/orders?limit=200", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : { data: [] }))
+      .then((data) => setOrders(Array.isArray(data.data) ? data.data : []))
+      .catch(() => setOrders([]));
+  }, []);
+
+  const categoryOptions = form.transactionType === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+
+  function updateForm<K extends keyof typeof emptyForm>(key: K, value: (typeof emptyForm)[K]) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function switchTransactionType(type: TransactionType) {
+    const nextCategories = type === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+    setForm((current) => ({
+      ...current,
+      transactionType: type,
+      category: nextCategories[0] as string,
+    }));
+  }
+
+  function startEdit(row: TransactionRow) {
+    setEditingId(row.id);
+    setFormError("");
+    setForm({
+      transactionType: row.transactionType,
+      amount: String(row.amount),
+      transactionDate: row.transactionDate.slice(0, 10),
+      category: row.category,
+      description: row.description || "",
+      salesChannel: row.salesChannel || "",
+      productId: row.productId ? String(row.productId) : "",
+      orderId: row.orderId ? String(row.orderId) : "",
+      paymentMethod: row.paymentMethod || "",
+      notes: row.notes || "",
+    });
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setForm(emptyForm);
+    setFormError("");
+  }
+
+  async function submitForm() {
+    setFormError("");
+
+    const amountValue = Number(form.amount);
+
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      setFormError("กรุณาระบุจำนวนเงินให้ถูกต้อง (มากกว่า 0)");
+      return;
+    }
+
+    if (!form.transactionDate) {
+      setFormError("กรุณาระบุวันที่");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const payload = {
+        transactionType: form.transactionType,
+        amount: amountValue,
+        transactionDate: form.transactionDate,
+        category: form.category,
+        description: form.description.trim() || null,
+        salesChannel: form.salesChannel || null,
+        productId: form.productId || null,
+        orderId: form.orderId || null,
+        paymentMethod: form.paymentMethod.trim() || null,
+        notes: form.notes.trim() || null,
+      };
+
+      const response = await fetch(
+        editingId ? `/api/transactions/${editingId}` : "/api/transactions",
+        {
+          method: editingId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกรายการได้");
+      }
+
+      cancelEdit();
+      await loadTransactions();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "ไม่สามารถบันทึกรายการได้");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeTransaction(id: number) {
+    setDeletingId(id);
+
+    try {
+      const response = await fetch(`/api/transactions/${id}`, { method: "DELETE" });
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถลบรายการได้");
+      }
+
+      if (editingId === id) {
+        cancelEdit();
+      }
+
+      await loadTransactions();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "ไม่สามารถลบรายการได้");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  const totals = useMemo(() => {
+    const income = transactions
+      .filter((t) => t.transactionType === "income")
+      .reduce((sum, t) => sum + t.amount, 0);
+    const expense = transactions
+      .filter((t) => t.transactionType === "expense")
+      .reduce((sum, t) => sum + t.amount, 0);
+    return { income, expense, net: income - expense };
+  }, [transactions]);
+
+  return (
+    <main className="min-h-screen bg-slate-50 p-6">
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">💰 การเงิน</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              บันทึกรายรับ-รายจ่ายของธุรกิจ (บันทึกด้วยตนเอง)
+            </p>
+          </div>
+
+          <Link
+            href="/"
+            className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+          >
+            ← กลับหน้าแรก
+          </Link>
+        </div>
+
+        <div className="mb-6 grid gap-4 md:grid-cols-3">
+          <div className="rounded-2xl border bg-white p-5 shadow-sm">
+            <p className="text-sm text-slate-500">รายรับรวม</p>
+            <p className="mt-2 text-3xl font-bold text-emerald-600">
+              {formatCurrency(totals.income)}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border bg-white p-5 shadow-sm">
+            <p className="text-sm text-slate-500">รายจ่ายรวม</p>
+            <p className="mt-2 text-3xl font-bold text-red-600">
+              {formatCurrency(totals.expense)}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border bg-white p-5 shadow-sm">
+            <p className="text-sm text-slate-500">สุทธิ</p>
+            <p
+              className={`mt-2 text-3xl font-bold ${totals.net >= 0 ? "text-emerald-600" : "text-red-600"}`}
+            >
+              {formatCurrency(totals.net)}
+            </p>
+          </div>
+        </div>
+
+        <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">
+            {editingId ? `✏️ แก้ไขรายการ #${editingId}` : "➕ เพิ่มรายรับ / รายจ่าย"}
+          </h2>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">ประเภท</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => switchTransactionType("income")}
+                  className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
+                    form.transactionType === "income"
+                      ? "border-emerald-600 bg-emerald-50 text-emerald-700"
+                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  รายรับ
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchTransactionType("expense")}
+                  className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
+                    form.transactionType === "expense"
+                      ? "border-red-600 bg-red-50 text-red-700"
+                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  รายจ่าย
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">จำนวนเงิน (บาท)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.amount}
+                onChange={(e) => updateForm("amount", e.target.value)}
+                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                placeholder="0.00"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">วันที่</label>
+              <input
+                type="date"
+                value={form.transactionDate}
+                onChange={(e) => updateForm("transactionDate", e.target.value)}
+                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">หมวดหมู่</label>
+              <select
+                value={form.category}
+                onChange={(e) => updateForm("category", e.target.value)}
+                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+              >
+                {categoryOptions.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {categoryLabel(form.transactionType, cat)}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                ช่องทางการขาย (ถ้ามี)
+              </label>
+              <select
+                value={form.salesChannel}
+                onChange={(e) => updateForm("salesChannel", e.target.value)}
+                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+              >
+                <option value="">ไม่ระบุ</option>
+                {SALES_CHANNELS.map((channel) => (
+                  <option key={channel} value={channel}>
+                    {salesChannelLabels[channel]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                วิธีชำระเงิน (ถ้ามี)
+              </label>
+              <input
+                type="text"
+                value={form.paymentMethod}
+                onChange={(e) => updateForm("paymentMethod", e.target.value)}
+                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                placeholder="เช่น โอนเงิน, เงินสด"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                สินค้าที่เกี่ยวข้อง (ถ้ามี)
+              </label>
+              <select
+                value={form.productId}
+                onChange={(e) => updateForm("productId", e.target.value)}
+                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+              >
+                <option value="">ไม่ระบุ</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                ออเดอร์ที่เกี่ยวข้อง (ถ้ามี)
+              </label>
+              <select
+                value={form.orderId}
+                onChange={(e) => updateForm("orderId", e.target.value)}
+                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+              >
+                <option value="">ไม่ระบุ</option>
+                {orders.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.order_number}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="sm:col-span-2 lg:col-span-3">
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                รายละเอียด (ถ้ามี)
+              </label>
+              <input
+                type="text"
+                value={form.description}
+                onChange={(e) => updateForm("description", e.target.value)}
+                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                placeholder="เช่น ซื้อกล่องพัสดุ 100 ใบ"
+              />
+            </div>
+
+            <div className="sm:col-span-2 lg:col-span-3">
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                หมายเหตุ (ถ้ามี)
+              </label>
+              <textarea
+                value={form.notes}
+                onChange={(e) => updateForm("notes", e.target.value)}
+                className="min-h-[80px] w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+              />
+            </div>
+          </div>
+
+          {formError && (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {formError}
+            </div>
+          )}
+
+          <div className="mt-5 flex gap-3">
+            <button
+              type="button"
+              onClick={submitForm}
+              disabled={saving}
+              className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              {saving ? "กำลังบันทึก..." : editingId ? "บันทึกการแก้ไข" : "บันทึกรายการ"}
+            </button>
+
+            {editingId && (
+              <button
+                type="button"
+                onClick={cancelEdit}
+                disabled={saving}
+                className="rounded-xl border px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                ยกเลิก
+              </button>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border bg-white shadow-sm">
+          <div className="flex flex-col gap-4 border-b p-5 md:flex-row md:items-center md:justify-between">
+            <h2 className="text-lg font-semibold text-slate-900">รายการทั้งหมด</h2>
+
+            <div className="flex gap-2">
+              {(["all", "income", "expense"] as const).map((type) => (
+                <button
+                  key={type}
+                  onClick={() => setFilterType(type)}
+                  className={`rounded-xl border px-3 py-1.5 text-xs font-medium ${
+                    filterType === type
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {type === "all" ? "ทั้งหมด" : type === "income" ? "รายรับ" : "รายจ่าย"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {error && (
+            <div className="m-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          {loading ? (
+            <div className="p-10 text-center text-sm text-slate-500">กำลังโหลดรายการ...</div>
+          ) : transactions.length === 0 ? (
+            <div className="p-10 text-center text-sm text-slate-500">ยังไม่มีรายการ</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] text-left text-sm">
+                <thead className="bg-slate-50 text-slate-600">
+                  <tr>
+                    <th className="p-4">วันที่</th>
+                    <th className="p-4">ประเภท</th>
+                    <th className="p-4">หมวดหมู่</th>
+                    <th className="p-4">รายละเอียด</th>
+                    <th className="p-4">ช่องทาง</th>
+                    <th className="p-4">จำนวนเงิน</th>
+                    <th className="p-4"></th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {transactions.map((t) => (
+                    <Fragment key={t.id}>
+                    <tr className="border-t hover:bg-slate-50">
+                      <td className="p-4 whitespace-nowrap text-slate-500">
+                        {formatDate(t.transactionDate)}
+                      </td>
+
+                      <td className="p-4">
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            t.transactionType === "income"
+                              ? "bg-emerald-50 text-emerald-700"
+                              : "bg-red-50 text-red-700"
+                          }`}
+                        >
+                          {t.transactionType === "income" ? "รายรับ" : "รายจ่าย"}
+                        </span>
+                      </td>
+
+                      <td className="p-4 text-slate-700">
+                        {categoryLabel(t.transactionType, t.category)}
+                      </td>
+
+                      <td className="p-4 max-w-xs text-slate-600">{t.description || "-"}</td>
+
+                      <td className="p-4 text-slate-600">
+                        {t.salesChannel ? salesChannelLabels[t.salesChannel] : "-"}
+                      </td>
+
+                      <td
+                        className={`p-4 font-semibold ${
+                          t.transactionType === "income" ? "text-emerald-600" : "text-red-600"
+                        }`}
+                      >
+                        {t.transactionType === "income" ? "+" : "-"}
+                        {formatCurrency(t.amount)}
+                      </td>
+
+                      <td className="p-4">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => startEdit(t)}
+                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                          >
+                            แก้ไข
+                          </button>
+                          <button
+                            onClick={() => toggleAttachments(t.id)}
+                            className={`rounded-xl border px-3 py-1.5 text-xs font-medium hover:bg-slate-100 ${
+                              expandedAttachmentsId === t.id
+                                ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
+                                : "text-slate-700"
+                            }`}
+                          >
+                            📎{" "}
+                            {(attachmentsByTransaction[t.id]?.length ?? 0) > 0
+                              ? `ไฟล์แนบ (${attachmentsByTransaction[t.id]!.length})`
+                              : "ไฟล์แนบ"}
+                          </button>
+                          <button
+                            onClick={() => removeTransaction(t.id)}
+                            disabled={deletingId === t.id}
+                            className="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            {deletingId === t.id ? "กำลังลบ..." : "ลบ"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+
+                    {expandedAttachmentsId === t.id && (
+                      <tr className="border-t bg-slate-50">
+                        <td colSpan={7} className="p-4">
+                          <div className="rounded-xl border bg-white p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <p className="text-sm font-semibold text-slate-700">
+                                📎 ไฟล์แนบ (ใบเสร็จ / สลิปโอนเงิน)
+                              </p>
+
+                              <label className="cursor-pointer rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
+                                {attachmentUploading === t.id ? "กำลังอัปโหลด..." : "+ อัปโหลดไฟล์"}
+                                <input
+                                  type="file"
+                                  accept="image/jpeg,image/png,image/gif,image/webp"
+                                  className="hidden"
+                                  disabled={attachmentUploading === t.id}
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) {
+                                      uploadAttachment(t.id, file);
+                                    }
+                                    e.target.value = "";
+                                  }}
+                                />
+                              </label>
+                            </div>
+
+                            {attachmentError[t.id] && (
+                              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                                {attachmentError[t.id]}
+                              </div>
+                            )}
+
+                            {attachmentsLoading === t.id ? (
+                              <p className="mt-3 text-sm text-slate-500">กำลังโหลดไฟล์แนบ...</p>
+                            ) : (attachmentsByTransaction[t.id]?.length ?? 0) === 0 ? (
+                              <p className="mt-3 text-sm text-slate-500">ยังไม่มีไฟล์แนบ</p>
+                            ) : (
+                              <div className="mt-3 flex flex-wrap gap-3">
+                                {attachmentsByTransaction[t.id]!.map((att) => (
+                                  <div
+                                    key={att.id}
+                                    className="w-32 rounded-xl border p-2 text-center"
+                                  >
+                                    <a href={att.fileUrl} target="_blank" rel="noreferrer">
+                                      <img
+                                        src={att.fileUrl}
+                                        alt={att.fileName}
+                                        className="h-20 w-full rounded-lg object-cover"
+                                      />
+                                    </a>
+                                    <button
+                                      onClick={() => deleteAttachment(t.id, att.id)}
+                                      disabled={attachmentDeletingId === att.id}
+                                      className="mt-2 w-full rounded-lg border border-red-200 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                    >
+                                      {attachmentDeletingId === att.id ? "กำลังลบ..." : "ลบ"}
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}

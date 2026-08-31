@@ -1,0 +1,45 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+
+export type DownloadedVideo = {
+  videoUrl: string;
+  fileName: string;
+  filePath: string;
+  size: number;
+};
+
+/**
+ * ดาวน์โหลดวิดีโอที่ provider สร้างเสร็จแล้ว (URL ภายนอกที่ provider ยืนยันว่าใช้งานได้จริง)
+ * มาเก็บไว้ใน public/generated/ai-video/ ตาม convention เดียวกับไฟล์ที่สร้างในระบบทุกจุด
+ * (voice/, video/, ai-images/) — ห้ามคืนค่าสำเร็จถ้าดาวน์โหลดไม่ได้จริงหรือไฟล์ว่างเปล่า
+ */
+export async function downloadVideoToDisk(remoteUrl: string): Promise<DownloadedVideo> {
+  const response = await fetch(remoteUrl);
+
+  if (!response.ok) {
+    throw new Error(`ไม่สามารถดาวน์โหลดวิดีโอจาก provider ได้ (HTTP ${response.status})`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+
+  if (buffer.length === 0) {
+    throw new Error("ไฟล์วิดีโอที่ดาวน์โหลดมาว่างเปล่า");
+  }
+
+  const directory = path.join(process.cwd(), "public", "generated", "ai-video");
+
+  await mkdir(directory, { recursive: true });
+
+  const fileName = `ai-video-${Date.now()}-${randomUUID()}.mp4`;
+  const filePath = path.join(directory, fileName);
+
+  await writeFile(filePath, buffer);
+
+  return {
+    videoUrl: `/generated/ai-video/${fileName}`,
+    fileName,
+    filePath,
+    size: buffer.length,
+  };
+}

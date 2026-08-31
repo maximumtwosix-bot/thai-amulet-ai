@@ -1,0 +1,201 @@
+﻿import { NextResponse } from "next/server";
+import { mkdir, writeFile, rm } from "node:fs/promises";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+
+export const runtime = "nodejs";
+
+type TimelineItem = {
+  fileName: string;
+  start: number;
+  duration: number;
+  index: number;
+};
+
+function runFFmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const process = spawn("ffmpeg", args, {
+      windowsHide: true,
+    });
+
+    let stderr = "";
+
+    process.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    process.on("error", (error) => {
+      reject(error);
+    });
+
+    process.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(
+        new Error(
+          `FFmpeg ทำงานไม่สำเร็จ (exit code ${code})\n${stderr.slice(-4000)}`
+        )
+      );
+    });
+  });
+}
+
+export async function POST(request: Request) {
+  const jobId = randomUUID();
+
+  const workDir = path.join(
+    process.cwd(),
+    ".tmp",
+    "video-render",
+    jobId
+  );
+
+  const outputDir = path.join(
+    process.cwd(),
+    "public",
+    "generated",
+    "video"
+  );
+
+  try {
+    const formData = await request.formData();
+
+    const timelineRaw = formData.get("timeline");
+
+    if (typeof timelineRaw !== "string") {
+      return NextResponse.json(
+        { error: "ไม่พบ Timeline สำหรับสร้างวิดีโอ" },
+        { status: 400 }
+      );
+    }
+
+    let timeline: TimelineItem[];
+
+    try {
+      timeline = JSON.parse(timelineRaw);
+    } catch {
+      return NextResponse.json(
+        { error: "รูปแบบ Timeline ไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+
+    if (!Array.isArray(timeline) || timeline.length === 0) {
+      return NextResponse.json(
+        { error: "กรุณาระบุ Timeline อย่างน้อย 1 Scene" },
+        { status: 400 }
+      );
+    }
+
+    const mediaFiles = formData
+      .getAll("media")
+      .filter((value): value is File => value instanceof File);
+
+    if (mediaFiles.length === 0) {
+      return NextResponse.json(
+        { error: "กรุณาเลือกไฟล์รูปภาพหรือวิดีโออย่างน้อย 1 ไฟล์" },
+        { status: 400 }
+      );
+    }
+
+    await mkdir(workDir, { recursive: true });
+    await mkdir(outputDir, { recursive: true });
+
+    const inputFiles: string[] = [];
+
+    for (let index = 0; index < mediaFiles.length; index++) {
+      const file = mediaFiles[index];
+
+      if (
+        !file.type.startsWith("image/") &&
+        !file.type.startsWith("video/")
+      ) {
+        throw new Error(`ไฟล์ ${file.name} ไม่ใช่รูปภาพหรือวิดีโอ`);
+      }
+
+      const extension =
+        path.extname(file.name).toLowerCase() ||
+        (file.type.startsWith("image/") ? ".jpg" : ".mp4");
+
+      const inputPath = path.join(
+        workDir,
+        `input-${index}${extension}`
+      );
+
+      const buffer = Buffer.from(await file.arrayBuffer());
+
+      await writeFile(inputPath, buffer);
+
+      inputFiles.push(inputPath);
+    }
+
+    const outputFileName = `video-${Date.now()}-${jobId}.mp4`;
+
+    const outputPath = path.join(
+      outputDir,
+      outputFileName
+    );
+
+    /*
+     * MVP:
+     * ใช้ไฟล์แรกเป็นวิดีโอพื้นฐานก่อน
+     * เพื่อทดสอบ pipeline FFmpeg -> MP4 -> public URL
+     *
+     * ขั้นถัดไปจะเปลี่ยนส่วนนี้ให้ใช้ Timeline
+     * และรวมทุก Scene เข้าด้วยกัน
+     */
+
+    const firstInput = inputFiles[0];
+
+    await runFFmpeg([
+      "-y",
+      "-i",
+      firstInput,
+      "-t",
+      "10",
+      "-vf",
+      "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
+      "-r",
+      "30",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-an",
+      outputPath,
+    ]);
+
+    await rm(workDir, {
+      recursive: true,
+      force: true,
+    });
+
+    return NextResponse.json({
+      success: true,
+      videoUrl: `/generated/video/${outputFileName}`,
+      fileName: outputFileName,
+      message: "สร้างวิดีโอสำเร็จ",
+    });
+  } catch (error) {
+    console.error("POST /api/video/render error:", error);
+
+    await rm(workDir, {
+      recursive: true,
+      force: true,
+    }).catch(() => {});
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "ไม่สามารถสร้างวิดีโอได้",
+      },
+      { status: 500 }
+    );
+  }
+}

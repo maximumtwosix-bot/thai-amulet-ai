@@ -1,0 +1,37 @@
+// AI Video Generation — STEP 13 (architecture-only, ไม่มี provider จริงถูกเชื่อมต่อ)
+//
+// ตรวจสอบแล้ว (audit ก่อนเขียนไฟล์นี้): dependency เดียวที่ติดตั้งอยู่แล้วในโปรเจกต์ที่มี video
+// generation API ระดับ SDK คือ `openai` (v7.5.0) ผ่าน `client.videos` (OpenAI Sora API)
+// แต่ตัว SDK เองระบุไว้ตรงๆ ที่ node_modules/openai/resources/videos.d.ts ว่า:
+//   "@deprecated The Sora API is scheduled to permanently shut down on September 24, 2026."
+// ซึ่งอยู่ห่างจากวันที่ทำงานจริง (2026-08-29) ไม่ถึง 1 เดือน — การเชื่อมต่อ API ที่กำลังจะปิดตัว
+// ถาวรภายในไม่กี่สัปดาห์ ไม่ใช่การตัดสินใจทางสถาปัตยกรรมที่ปลอดภัยหรือคุ้มค่าสำหรับ production
+// จึงตัดสินใจ "ไม่ implement" การเรียก Sora API จริงในไฟล์นี้ — ไม่ใช่เพราะไม่มี credential
+// (OPENAI_API_KEY มีอยู่แล้วในระบบ) แต่เพราะไม่มี provider ที่เหมาะสมจะ commit ระยะยาวในตอนนี้
+//
+// ไฟล์นี้จึงมีแค่ architecture (type + status function) ไว้ก่อน ให้ STEP ถัดไปเลือก provider
+// จริงที่เหมาะสม (เช่น Runway, Luma, หรือ Sora รุ่นถัดไปถ้ามี) แล้วค่อย implement ทับส่วนนี้
+// ห้าม fake success เด็ดขาด — generateProductVideo() จึง throw เสมอ ไม่มีทาง "ดูเหมือนทำงาน"
+
+export type VideoGenerationStatus = {
+  status: "unavailable";
+  reason: string;
+};
+
+const UNAVAILABLE_REASON =
+  "ยังไม่มี AI Video Generation provider ที่เหมาะสมเชื่อมต่อไว้ — SDK เดียวที่มี (OpenAI Sora " +
+  "ผ่าน client.videos) ถูกประกาศ deprecated และจะปิดตัวถาวร 24 ก.ย. 2569 จึงไม่ implement การเรียก " +
+  "จริงในตอนนี้ ต้องเลือก provider ใหม่ก่อนจึงจะเปิดใช้งานได้";
+
+/** เช็คสถานะ — เป็น "unavailable" เสมอในตอนนี้โดยเจตนา ไม่ใช่ค่าที่เปลี่ยนตาม env */
+export function getVideoGenerationStatus(): VideoGenerationStatus {
+  return { status: "unavailable", reason: UNAVAILABLE_REASON };
+}
+
+/**
+ * ยังไม่มี implementation จริง — throw เสมอ กันไม่ให้ code path ไหนเผลอเรียกแล้วดูเหมือนสำเร็จ
+ * เมื่อเลือก provider จริงได้แล้วใน STEP ถัดไป ให้แทนที่ฟังก์ชันนี้ทั้งหมด (ดูหมายเหตุด้านบน)
+ */
+export async function generateProductVideo(): Promise<never> {
+  throw new Error(UNAVAILABLE_REASON);
+}

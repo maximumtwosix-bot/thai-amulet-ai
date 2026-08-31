@@ -3078,6 +3078,31 @@ Studio, Social, Tax, Finance, Attachments — none touched.
 
 ---
 
+## LIVE SMOKE TEST — /orders/new (post STEP 27)
+
+Date: 2026-09-01
+
+Scope: live smoke test of `/orders/new` against the running dev server. Not a numbered STEP — no
+source code changed, no database schema changed.
+
+**Results**:
+- `/orders/new` UI: **PASS**
+- Order creation through `POST /api/orders`: **PASS**
+- Stock deduction: product 3 เบี้ยแก้, `13 → 12`: **PASS**
+- Inventory movement: `sale`, `-1`, `reference_type=order`, `reference_id=6`: **PASS**
+- Order detail (`/orders/6`): **PASS**
+- Browser console errors: **0**
+- Cleanup: **PASS** — test order/item/movement removed, stock restored to `13`
+- Final database counts matched baseline: `products:4, orders:1, order_items:1,
+  inventory_movements:4, transactions:0, transaction_attachments:0`
+
+**Files changed**: none.
+**Dev server**: remained running at `http://localhost:3000` throughout and after this test.
+
+**RESULT: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

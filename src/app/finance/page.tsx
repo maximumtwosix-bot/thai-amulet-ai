@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import LogoutButton from "@/components/LogoutButton";
 
 // Local copies of the STEP 19 constant lists — deliberately NOT imported from @/lib/transactions,
 // because that file also exports STEP 20's DB-touching CRUD functions (`import db from "./db"`),
@@ -81,6 +82,70 @@ type AttachmentItem = {
   fileName: string;
   fileUrl: string;
   createdAt: string;
+};
+
+// STEP 29 — AI slip/receipt extraction. Mirrors the shape returned by
+// POST /api/transactions/ai-extract (src/app/api/transactions/ai-extract/route.ts). Local copy for
+// the same reason as every other type above: this is a Client Component.
+const DOCUMENT_TYPES = [
+  "customer_payment_slip",
+  "product_purchase_slip",
+  "shipping_payment_receipt",
+  "cod_shipping_expense_receipt",
+  "advertising_expense_receipt",
+  "packaging_material_receipt",
+  "other_business_expense_receipt",
+] as const;
+
+const documentTypeLabels: Record<(typeof DOCUMENT_TYPES)[number], string> = {
+  customer_payment_slip: "สลิปโอนเงินจากลูกค้า",
+  product_purchase_slip: "สลิปจ่ายค่าซื้อสินค้า",
+  shipping_payment_receipt: "ใบเสร็จค่าจัดส่ง",
+  cod_shipping_expense_receipt: "ใบเสร็จค่าใช้จ่าย COD/ขนส่ง",
+  advertising_expense_receipt: "ใบเสร็จค่าโฆษณา",
+  packaging_material_receipt: "ใบเสร็จบรรจุภัณฑ์/วัสดุ",
+  other_business_expense_receipt: "ใบเสร็จค่าใช้จ่ายอื่นๆ",
+};
+
+type ExtractionResult = {
+  documentType: (typeof DOCUMENT_TYPES)[number] | null;
+  transactionType: TransactionType | null;
+  transactionDate: string | null;
+  amount: number | null;
+  payerName: string | null;
+  recipientName: string | null;
+  bankOrProvider: string | null;
+  referenceNumber: string | null;
+  description: string | null;
+  suggestedCategory: string | null;
+  suggestedSalesChannel: string | null;
+  confidence: number | null;
+  fieldsNeedingReview: string[];
+  needsReview: boolean;
+};
+
+const aiFieldLabels: Record<string, string> = {
+  documentType: "ประเภทเอกสาร",
+  transactionType: "ประเภทรายการ",
+  transactionDate: "วันที่",
+  amount: "จำนวนเงิน",
+  suggestedCategory: "หมวดหมู่",
+  suggestedSalesChannel: "ช่องทางการขาย",
+};
+
+const emptyAiReviewForm = {
+  transactionType: "expense" as TransactionType,
+  amount: "",
+  transactionDate: todayDateString(),
+  category: EXPENSE_CATEGORIES[0] as string,
+  description: "",
+  salesChannel: "" as string,
+  productId: "" as string,
+  orderId: "" as string,
+  paymentMethod: "",
+  payerName: "",
+  recipientName: "",
+  referenceNumber: "",
 };
 
 const expenseCategoryLabels: Record<ExpenseCategory, string> = {
@@ -265,6 +330,197 @@ export default function FinancePage() {
     }
   }
 
+  // STEP 29 — AI slip/receipt extraction. Separate state tree from the manual add/edit `form`
+  // above — this is a *suggestion* workflow (upload → AI reads → user reviews/edits → explicit
+  // confirm), not a direct edit of `form`, so the two must never share state or a stray AI response
+  // could silently overwrite a form the user is already editing.
+  const [aiFile, setAiFile] = useState<File | null>(null);
+  const [aiUploading, setAiUploading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiPreview, setAiPreview] = useState<{ fileName: string; fileUrl: string } | null>(null);
+  const [aiExtraction, setAiExtraction] = useState<ExtractionResult | null>(null);
+  const [aiReviewMode, setAiReviewMode] = useState<"readonly" | "editing">("readonly");
+  const [aiReviewForm, setAiReviewForm] = useState(emptyAiReviewForm);
+  const [aiConfirming, setAiConfirming] = useState(false);
+  const [aiConfirmError, setAiConfirmError] = useState("");
+  const [aiConfirmedId, setAiConfirmedId] = useState<number | null>(null);
+
+  function resetAiSession() {
+    setAiFile(null);
+    setAiUploading(false);
+    setAiError("");
+    setAiPreview(null);
+    setAiExtraction(null);
+    setAiReviewMode("readonly");
+    setAiReviewForm(emptyAiReviewForm);
+    setAiConfirming(false);
+    setAiConfirmError("");
+    setAiConfirmedId(null);
+  }
+
+  function updateAiReviewForm<K extends keyof typeof emptyAiReviewForm>(
+    key: K,
+    value: (typeof emptyAiReviewForm)[K]
+  ) {
+    setAiReviewForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function handleAiFileSelected(file: File) {
+    resetAiSession();
+    setAiFile(file);
+    setAiUploading(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("/api/transactions/ai-extract", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถอ่านสลิปด้วย AI ได้");
+      }
+
+      const attachment = data.data?.attachment ?? null;
+      const extraction: ExtractionResult | null = data.data?.extraction ?? null;
+
+      setAiPreview(attachment);
+
+      if (data.data?.aiError) {
+        setAiError(String(data.data.aiError));
+      }
+
+      if (extraction) {
+        setAiExtraction(extraction);
+
+        const nextType: TransactionType = extraction.transactionType ?? "expense";
+        const nextCategoryOptions = nextType === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+
+        setAiReviewForm({
+          transactionType: nextType,
+          amount: extraction.amount !== null ? String(extraction.amount) : "",
+          transactionDate: extraction.transactionDate || todayDateString(),
+          category:
+            extraction.suggestedCategory && (nextCategoryOptions as string[]).includes(extraction.suggestedCategory)
+              ? extraction.suggestedCategory
+              : (nextCategoryOptions[0] as string),
+          description: extraction.description || "",
+          salesChannel: extraction.suggestedSalesChannel || "",
+          productId: "",
+          orderId: "",
+          paymentMethod: extraction.bankOrProvider || "",
+          payerName: extraction.payerName || "",
+          recipientName: extraction.recipientName || "",
+          referenceNumber: extraction.referenceNumber || "",
+        });
+      } else {
+        // AI อ่านไม่สำเร็จ (aiError ถูกตั้งไว้แล้วด้านบน) แต่หลักฐานยังอยู่ — เปิดฟอร์มเปล่าให้กรอกเองได้
+        setAiReviewMode("editing");
+        setAiReviewForm(emptyAiReviewForm);
+      }
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : "ไม่สามารถอ่านสลิปด้วย AI ได้");
+    } finally {
+      setAiUploading(false);
+    }
+  }
+
+  async function confirmAiTransaction() {
+    // กันการกดซ้ำ/ดับเบิลคลิก — ถ้ากำลังบันทึกอยู่ หรือบันทึกไปแล้วครั้งหนึ่ง ไม่ทำซ้ำ
+    if (aiConfirming || aiConfirmedId !== null) return;
+
+    setAiConfirmError("");
+
+    const amountValue = Number(aiReviewForm.amount);
+
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      setAiConfirmError("กรุณาระบุจำนวนเงินให้ถูกต้อง (มากกว่า 0)");
+      setAiReviewMode("editing");
+      return;
+    }
+
+    if (!aiReviewForm.transactionDate) {
+      setAiConfirmError("กรุณาระบุวันที่");
+      setAiReviewMode("editing");
+      return;
+    }
+
+    setAiConfirming(true);
+
+    try {
+      const notesParts: string[] = [];
+      if (aiReviewForm.payerName.trim()) notesParts.push(`ผู้โอน: ${aiReviewForm.payerName.trim()}`);
+      if (aiReviewForm.recipientName.trim()) notesParts.push(`ผู้รับ: ${aiReviewForm.recipientName.trim()}`);
+      if (aiReviewForm.referenceNumber.trim())
+        notesParts.push(`เลขอ้างอิง: ${aiReviewForm.referenceNumber.trim()}`);
+
+      const payload = {
+        transactionType: aiReviewForm.transactionType,
+        amount: amountValue,
+        transactionDate: aiReviewForm.transactionDate,
+        category: aiReviewForm.category,
+        description: aiReviewForm.description.trim() || null,
+        salesChannel: aiReviewForm.salesChannel || null,
+        productId: aiReviewForm.productId || null,
+        orderId: aiReviewForm.orderId || null,
+        paymentMethod: aiReviewForm.paymentMethod.trim() || null,
+        notes: notesParts.length > 0 ? notesParts.join(" | ") : null,
+      };
+
+      // ใช้ endpoint เดิม POST /api/transactions (STEP 20) ตรงๆ — ไม่มี logic การสร้าง transaction
+      // ซ้ำซ้อนในหน้านี้ ยัง validate ทุกอย่างที่ server-side เหมือนเดิมทุกประการ
+      const response = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกรายการได้");
+      }
+
+      const newId = data.data.id as number;
+      setAiConfirmedId(newId);
+
+      // แนบไฟล์หลักฐานต้นฉบับผ่าน endpoint แนบไฟล์เดิม (STEP 21) — ไม่สร้างระบบแนบไฟล์ใหม่ซ้ำซ้อน
+      if (aiFile) {
+        try {
+          const attachFormData = new FormData();
+          attachFormData.append("file", aiFile);
+
+          const attachResponse = await fetch(`/api/transactions/${newId}/attachments`, {
+            method: "POST",
+            body: attachFormData,
+          });
+
+          const attachData = await attachResponse.json();
+
+          if (!attachResponse.ok || !attachData?.success) {
+            setAiConfirmError(
+              "บันทึกรายการสำเร็จ แต่แนบไฟล์หลักฐานไม่สำเร็จ — สามารถอัปโหลดไฟล์แนบเพิ่มได้จากรายการในตารางด้านล่าง"
+            );
+          }
+        } catch {
+          setAiConfirmError(
+            "บันทึกรายการสำเร็จ แต่แนบไฟล์หลักฐานไม่สำเร็จ — สามารถอัปโหลดไฟล์แนบเพิ่มได้จากรายการในตารางด้านล่าง"
+          );
+        }
+      }
+
+      await loadTransactions();
+      resetAiSession();
+    } catch (err) {
+      setAiConfirmError(err instanceof Error ? err.message : "ไม่สามารถบันทึกรายการได้");
+      setAiConfirming(false);
+    }
+  }
+
   async function loadTransactions() {
     setLoading(true);
     setError("");
@@ -443,12 +699,15 @@ export default function FinancePage() {
             </p>
           </div>
 
-          <Link
-            href="/"
-            className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-          >
-            ← กลับหน้าแรก
-          </Link>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/"
+              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              ← กลับหน้าแรก
+            </Link>
+            <LogoutButton />
+          </div>
         </div>
 
         <div className="mb-6 grid gap-4 md:grid-cols-3">
@@ -475,6 +734,302 @@ export default function FinancePage() {
             </p>
           </div>
         </div>
+
+        <section className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/40 p-6 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">📷 อ่านสลิป/บิลด้วย AI</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                อัปโหลดรูปสลิปโอนเงินหรือใบเสร็จ ให้ AI ช่วยกรอกข้อมูลเบื้องต้น (ต้องตรวจสอบและกดยืนยันเองก่อนบันทึกทุกครั้ง)
+              </p>
+            </div>
+
+            <label
+              className={`cursor-pointer rounded-xl border px-4 py-2.5 text-sm font-semibold ${
+                aiUploading
+                  ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                  : "border-amber-400 bg-amber-500 text-white hover:bg-amber-600"
+              }`}
+            >
+              {aiUploading ? "กำลังอ่านข้อมูลจากสลิป..." : "📷 อ่านสลิป/บิลด้วย AI"}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                className="hidden"
+                disabled={aiUploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    handleAiFileSelected(file);
+                  }
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+
+          {aiUploading && (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-white p-4 text-sm text-amber-700">
+              ⏳ กำลังอ่านข้อมูลจากสลิป...
+            </div>
+          )}
+
+          {!aiUploading && aiError && (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {aiError}
+            </div>
+          )}
+
+          {!aiUploading && aiPreview && (
+            <div className="mt-4 grid gap-4 md:grid-cols-[160px_1fr]">
+              <div>
+                <a href={aiPreview.fileUrl} target="_blank" rel="noreferrer">
+                  <img
+                    src={aiPreview.fileUrl}
+                    alt="สลิปที่อัปโหลด"
+                    className="w-40 rounded-xl border object-cover"
+                  />
+                </a>
+              </div>
+
+              <div>
+                <div className="rounded-xl border border-amber-300 bg-amber-100/60 p-3 text-xs font-medium text-amber-800">
+                  ⚠️ ข้อมูลจาก AI กรุณาตรวจสอบก่อนบันทึก
+                  {aiExtraction?.needsReview && " — กรุณาตรวจสอบข้อมูลก่อนบันทึก (มีบางฟิลด์ที่ AI ไม่มั่นใจ)"}
+                  {aiExtraction?.confidence !== null && aiExtraction?.confidence !== undefined && (
+                    <span className="ml-1 text-amber-600">
+                      (ความมั่นใจ AI ~{Math.round(aiExtraction.confidence * 100)}%)
+                    </span>
+                  )}
+                </div>
+
+                {aiExtraction && aiExtraction.fieldsNeedingReview.length > 0 && (
+                  <p className="mt-2 text-xs text-red-600">
+                    ฟิลด์ที่ควรตรวจสอบ:{" "}
+                    {aiExtraction.fieldsNeedingReview
+                      .map((f) => aiFieldLabels[f] || f)
+                      .join(", ")}
+                  </p>
+                )}
+
+                {aiReviewMode === "readonly" ? (
+                  <div className="mt-3 grid gap-x-4 gap-y-1 text-sm text-slate-700 sm:grid-cols-2">
+                    <p>
+                      ประเภทเอกสาร:{" "}
+                      {aiExtraction?.documentType ? documentTypeLabels[aiExtraction.documentType] : "- ไม่ทราบ -"}
+                    </p>
+                    <p>ประเภท: {aiReviewForm.transactionType === "income" ? "รายรับ" : "รายจ่าย"}</p>
+                    <p>วันที่: {aiReviewForm.transactionDate || "- ไม่ทราบ -"}</p>
+                    <p>จำนวนเงิน: {aiReviewForm.amount ? formatCurrency(Number(aiReviewForm.amount)) : "- ไม่ทราบ -"}</p>
+                    <p>ผู้โอน: {aiReviewForm.payerName || "-"}</p>
+                    <p>ผู้รับ: {aiReviewForm.recipientName || "-"}</p>
+                    <p>ธนาคาร/ช่องทางชำระเงิน: {aiReviewForm.paymentMethod || "-"}</p>
+                    <p>เลขอ้างอิง: {aiReviewForm.referenceNumber || "-"}</p>
+                    <p>หมวดหมู่: {categoryLabel(aiReviewForm.transactionType, aiReviewForm.category)}</p>
+                    <p>
+                      ช่องทางการขาย:{" "}
+                      {aiReviewForm.salesChannel
+                        ? salesChannelLabels[aiReviewForm.salesChannel as SalesChannel]
+                        : "-"}
+                    </p>
+                    <p className="sm:col-span-2">รายละเอียด: {aiReviewForm.description || "-"}</p>
+                  </div>
+                ) : (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">ประเภท</label>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateAiReviewForm("transactionType", "income");
+                            updateAiReviewForm("category", INCOME_CATEGORIES[0] as string);
+                          }}
+                          className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
+                            aiReviewForm.transactionType === "income"
+                              ? "border-emerald-600 bg-emerald-50 text-emerald-700"
+                              : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                          }`}
+                        >
+                          รายรับ
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateAiReviewForm("transactionType", "expense");
+                            updateAiReviewForm("category", EXPENSE_CATEGORIES[0] as string);
+                          }}
+                          className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
+                            aiReviewForm.transactionType === "expense"
+                              ? "border-red-600 bg-red-50 text-red-700"
+                              : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                          }`}
+                        >
+                          รายจ่าย
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">วันที่</label>
+                      <input
+                        type="date"
+                        value={aiReviewForm.transactionDate}
+                        onChange={(e) => updateAiReviewForm("transactionDate", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">จำนวนเงิน</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={aiReviewForm.amount}
+                        onChange={(e) => updateAiReviewForm("amount", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">หมวดหมู่</label>
+                      <select
+                        value={aiReviewForm.category}
+                        onChange={(e) => updateAiReviewForm("category", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      >
+                        {(aiReviewForm.transactionType === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES).map(
+                          (cat) => (
+                            <option key={cat} value={cat}>
+                              {categoryLabel(aiReviewForm.transactionType, cat)}
+                            </option>
+                          )
+                        )}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">ผู้โอน</label>
+                      <input
+                        type="text"
+                        value={aiReviewForm.payerName}
+                        onChange={(e) => updateAiReviewForm("payerName", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">ผู้รับ</label>
+                      <input
+                        type="text"
+                        value={aiReviewForm.recipientName}
+                        onChange={(e) => updateAiReviewForm("recipientName", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        ธนาคาร/ช่องทางชำระเงิน
+                      </label>
+                      <input
+                        type="text"
+                        value={aiReviewForm.paymentMethod}
+                        onChange={(e) => updateAiReviewForm("paymentMethod", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">เลขอ้างอิง</label>
+                      <input
+                        type="text"
+                        value={aiReviewForm.referenceNumber}
+                        onChange={(e) => updateAiReviewForm("referenceNumber", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        ช่องทางการขาย (ถ้ามี)
+                      </label>
+                      <select
+                        value={aiReviewForm.salesChannel}
+                        onChange={(e) => updateAiReviewForm("salesChannel", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      >
+                        <option value="">ไม่ระบุ</option>
+                        {SALES_CHANNELS.map((channel) => (
+                          <option key={channel} value={channel}>
+                            {salesChannelLabels[channel]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="mb-1 block text-xs font-medium text-slate-500">รายละเอียด</label>
+                      <input
+                        type="text"
+                        value={aiReviewForm.description}
+                        onChange={(e) => updateAiReviewForm("description", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {aiConfirmError && (
+                  <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    {aiConfirmError}
+                  </div>
+                )}
+
+                <div className="mt-4 flex flex-wrap gap-3">
+                  {aiReviewMode === "readonly" ? (
+                    <button
+                      type="button"
+                      onClick={() => setAiReviewMode("editing")}
+                      disabled={aiConfirming}
+                      className="rounded-xl border px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      แก้ไข
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setAiReviewMode("readonly")}
+                      disabled={aiConfirming}
+                      className="rounded-xl border px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      เสร็จแก้ไข
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={resetAiSession}
+                    disabled={aiConfirming}
+                    className="rounded-xl border px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    ยกเลิก
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={confirmAiTransaction}
+                    disabled={aiConfirming || aiConfirmedId !== null}
+                    className="rounded-xl bg-slate-900 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    {aiConfirming ? "กำลังบันทึก..." : "ยืนยันและบันทึก"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
 
         <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">

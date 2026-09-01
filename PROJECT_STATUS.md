@@ -3103,6 +3103,259 @@ source code changed, no database schema changed.
 
 ---
 
+## STEP 28 — AUTHENTICATION / BACK-OFFICE ACCESS CONTROL
+
+Date: 2026-09-01
+
+Scope: close the STEP 25 Blocking finding — no auth existed anywhere. Minimal single-admin
+authentication gate for the 5 back-office pages and their APIs, per instructions: environment-based
+credential, no new database table, no new dependency.
+
+**Audit before implementing**: `package.json` has zero auth-related dependencies (no next-auth, no
+iron-session, no jose, no bcrypt). No `middleware.ts`/`proxy.ts` existed. Critically, checked
+`node_modules/next/dist/docs/` per `AGENTS.md`'s standing instruction and found this Next.js version
+(16.3.2) **deprecated and renamed `middleware.ts` to `proxy.ts`** (different file name, different
+export name `proxy` instead of `middleware`) — would have silently built a non-functional gate
+otherwise. Also confirmed via the same docs that **Proxy defaults to the Node.js runtime** in this
+version (not Edge), which is why `src/lib/auth.ts` can safely use Node's built-in `crypto` module —
+no signing library needed.
+
+**Approach**: `ADMIN_USERNAME` / `ADMIN_PASSWORD` env vars (checked with `crypto.timingSafeEqual`,
+padded-length comparison to avoid a length-based timing signal) issue a `SESSION_SECRET`-HMAC-signed,
+expiring session token (`base64url(payload).base64url(hmacSha256(payload))`) stored in an `HttpOnly`,
+`SameSite=Lax` cookie (`Secure` only when `NODE_ENV=production`), 12-hour expiry. No password is ever
+stored in the database, logged, or returned in any response. `src/proxy.ts` checks a **precise
+allowlist in code** (not solely the declarative `matcher`, since this version's own matcher docs
+note a bare path like `/about` also matches `/about/team` — wrong for our case) for exactly:
+`/products`, `/inventory`, `/orders(+sub-paths)`, `/finance`, `/tax` (pages) and
+`/api/products` (exact — list/create/edit/delete only), `/api/products/:id/stock-adjustment`
+(regex, real inventory logic), `/api/orders(+sub-paths)`, `/api/inventory/*`,
+`/api/transactions(+sub-paths, covers attachments)`, `/api/tax/*` (APIs) — redirecting unauthenticated
+page requests to `/login?next=<path>` and returning a clean `401 {"success":false,"error":"Unauthorized"}`
+for unauthenticated API requests. `/api/health` and `/api/costs*`/`/costs` deliberately left
+unprotected (monitoring + not in the required scope). `/api/products/[id]/media`,
+`/api/products/[id]/ai-video/*`, and everything Video/Voice/Social/Content-Studio-related are
+untouched and confirmed to still work unauthenticated — verified live, not just by omission.
+
+**New files**: `src/lib/auth.ts` (session/credential logic), `src/proxy.ts` (the gate),
+`src/app/login/page.tsx` (public), `src/app/api/auth/login/route.ts`,
+`src/app/api/auth/logout/route.ts` (both public), `src/components/LogoutButton.tsx` (shared).
+
+**Modified**: the 5 protected pages (`products`, `inventory`, `orders`, `finance`, `tax`) each got
+one import line + one `<LogoutButton />` placed next to their existing header link — no other logic
+touched. `.env.example` — added `ADMIN_USERNAME`/`ADMIN_PASSWORD`/`SESSION_SECRET` as **empty
+placeholders only**, with a comment on how to generate a real `SESSION_SECRET`. Local `.env` (never
+committed, confirmed still `.gitignore`d) — set to **temporary generated test values**
+(`ADMIN_USERNAME=admin`, a random 12-character password, a random 32-byte hex `SESSION_SECRET`) so
+this STEP's tests could run against real credentials; **these must be changed to values of your own
+choosing before relying on this for real protection** — communicated directly in this session, not
+committed anywhere.
+
+**Backups created** (before editing, timestamped per convention):
+`.env.example.step28-backup-20260901-011916`,
+`src/app/products/page.tsx.step28-backup-20260901-011916`,
+`src/app/inventory/page.tsx.step28-backup-20260901-011916`,
+`src/app/orders/page.tsx.step28-backup-20260901-011916`,
+`src/app/finance/page.tsx.step28-backup-20260901-011916`,
+`src/app/tax/page.tsx.step28-backup-20260901-011916`.
+
+**Tested (dev server restarted fresh — `.env` changes require a restart — with `.next` cleared
+proactively; zero AI calls, zero external cost)**:
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**
+2. **Unauthenticated API** (curl, no cookie): `/api/products`, `/api/orders`, `/api/orders/1`,
+   `/api/inventory/movements`, `/api/transactions`, `/api/tax/summary` → all `401`, clean
+   `{"success":false,"error":"Unauthorized"}` body, no leak — **PASS**. `/api/health`,
+   `/api/costs/summary` → both `200`, unaffected — **PASS**
+3. **Scope precision verified live**: `/api/products/3/media` → `200` unauthenticated (correctly
+   untouched, video/AI-adjacent); `/api/products/3/stock-adjustment` → `401` unauthenticated
+   (correctly protected, real inventory logic) — **PASS**
+4. **Unauthenticated pages**: `/products`, `/inventory`, `/orders`, `/orders/new`, `/finance`,
+   `/tax` → all `307` redirect to `/login?next=<original path>` — **PASS**
+5. **Login failure**: wrong password → `401`, generic message; wrong username → identical `401`
+   message (no field-level leak); missing fields → `400` — **PASS**
+6. **Login success**: correct credentials → `200`, `Set-Cookie` confirmed `HttpOnly`,
+   `SameSite=lax`, `Max-Age=43200`, no `Secure` flag in dev (correct — dev runs on plain HTTP) —
+   **PASS**
+7. **Forged/tampered cookie**: random garbage and a valid-shape-but-wrong-signature cookie → both
+   `401` — **PASS**
+8. **Authenticated** (curl with real session cookie): all 8 regression endpoints → `200` — **PASS**;
+   all 6 protected pages → `200` — **PASS**
+9. **Browser (Playwright), full real flow**: direct nav to `/finance` while logged out → redirected
+   to `/login?next=%2Ffinance` (0 console errors) → entered wrong password → clean Thai error shown
+   inline, stayed on login (the only console entry across the whole session was the browser's own
+   native "401 resource" network log line for that intentional failed attempt — not an app error) →
+   entered correct password → **redirected to `/finance`, the originally-requested page** →
+   page rendered fully (income/expense form, product/order dropdowns loaded from the now-authenticated
+   API calls) → **direct navigation reload to `/finance`** stayed on `/finance` (session persisted,
+   0 console errors) → navigated to `/orders` while authenticated → loaded correctly, logout button
+   present → **clicked "🚪 ออกจากระบบ"** → redirected to `/login` (0 console errors) → navigated to
+   `/products` → correctly redirected to `/login?next=%2Fproducts` again — **PASS**, full login →
+   use → logout → re-block cycle confirmed end-to-end in a real browser
+10. Dev server log reviewed for the whole session — no unhandled exception
+11. **Database**: row counts identical before/after (`products:4, orders:1, order_items:1,
+    inventory_movements:4, transactions:0, transaction_attachments:0`) — confirmed **not changed**,
+    as expected (no schema touched, no data-writing test needed for an auth-only STEP)
+
+**Defects found**: none.
+**Defects fixed**: the STEP 25 Blocking finding itself (no auth anywhere) — closed.
+**Files changed**: see New/Modified above. `PROJECT_STATUS.md` updated with this entry.
+`PROJECT_CHECKPOINT.md` not touched. Video Studio, AI Video, Voice Studio, Social, Content Studio,
+Tax/Finance *calculation* logic, product/order *business* logic — all untouched and confirmed still
+working exactly as before (unauthenticated, unchanged) via live tests above.
+
+**No STEP 29 was started.** No commit, no push, per instructions.
+
+**STEP 28 STATUS: PASS**
+
+---
+
+## STEP 29 — AI SLIP / RECEIPT EXTRACTION
+
+Date: 2026-09-01
+
+Scope: AI-assisted financial document workflow on the Finance page — upload a slip/receipt image,
+AI extracts structured suggestions, user reviews/edits, user explicitly confirms, only then is a
+transaction created. AI result is a suggestion only; it can never silently create a transaction.
+
+**Audit before implementing**: read `src/lib/transactions.ts` (STEP 20 CRUD + STEP 19 enum
+constants), `src/lib/transactionAttachments.ts` and `src/app/api/transactions/[id]/attachments/route.ts`
+(STEP 21 — magic-byte-validated image upload pattern), `src/lib/auth.ts` + `src/proxy.ts` (STEP 28 —
+confirmed `/api/transactions` and every `/api/transactions/*` prefix is already protected, so this
+new route needed **zero `proxy.ts` changes**), `src/lib/costLedger.ts` + `src/lib/costConfig.ts`
+(STEP 21/23 — two-phase ledger pattern, `gpt-5-mini` text pricing already configured), and
+`src/app/api/content/generate/route.ts` (existing `openai.responses.create({model:"gpt-5-mini", input})`
+call pattern). Confirmed via `developers.openai.com/api/docs/models/gpt-5-mini` (checked 2026-09-01)
+that **gpt-5-mini supports image input** (input modalities: text, image) — so the existing text model
+already in use is vision-capable; **no new AI provider/model was installed**. Confirmed via the
+installed `openai@7.5.0` SDK types (`resources/responses/responses.d.ts`) that the Responses API
+accepts a multimodal `input: [{role:"user", content:[{type:"input_text",...},{type:"input_image",...}]}]`
+shape. **No database schema change was needed or made** — every extracted field either maps directly
+to an existing `transactions` column or (for `payerName`/`recipientName`/`referenceNumber`, which have
+no dedicated columns) is folded into the existing free-text `notes` column at confirm time.
+
+**Approach**: new `POST /api/transactions/ai-extract` (multipart image upload) — validates the image
+with the exact magic-byte/extension/MIME-cross-check pattern copied from the STEP 21 attachments
+route (fail-closed, 10MB limit), saves the original to a **new, separate**
+`public/generated/ai-slip-previews/` directory (deliberately not `transaction-attachments/`, which
+must stay 1:1 with confirmed `transaction_attachments` rows — a slip the user never confirms must not
+pollute it), then calls `gpt-5-mini` via the Responses API with the image as `input_image` and a
+prompt that explicitly forbids inventing data, forbids any VAT/tax/legal computation, and asks for a
+strict JSON shape (`documentType`, `transactionType`, `transactionDate`, `amount`, `payerName`,
+`recipientName`, `bankOrProvider`, `referenceNumber`, `description`, `suggestedCategory`,
+`suggestedSalesChannel`, `confidence`, `fieldsNeedingReview`). **Every field is independently
+re-validated server-side as untrusted input** against the same enums the rest of the app already
+enforces (`isValidTransactionType`/`isValidTransactionCategory`/`isValidSalesChannel` from
+`src/lib/transactions.ts`, a fixed 7-value `documentType` allowlist, `amount > 0`, `Date.parse`-able
+date, `confidence` in `[0,1]`) — anything invalid/unrecognized is nulled and added to
+`fieldsNeedingReview` rather than trusted or guessed. The route **never creates a transaction** — it
+only returns the preview image URL and the validated suggestion. Cost tracking reuses the STEP 21
+`ai_cost_ledger` two-phase pattern with the existing `text_generate` operation (no new operation/enum
+needed — image-input token usage is just counted as input tokens by the Responses API `usage` field,
+same cost formula as pure-text `gpt-5-mini` calls) and `metadata.feature="ai_slip_extract"` for
+traceability. If the AI call or JSON parse fails, the route still returns `success:true` with
+`extraction:null` and a generic Thai error — **the saved evidence image is never lost or deleted**
+just because extraction failed, and the user can fill the form manually. Raw OpenAI errors/stack
+traces are never returned to the client (caught, logged server-side by message only).
+
+Finance page (`src/app/finance/page.tsx`) got a new "📷 อ่านสลิป/บิลด้วย AI" section above the existing
+manual add form (untouched): file input → loading state → image preview + confidence/review banner →
+a **read-only summary view by default** (forces a deliberate "แก้ไข" click to edit — human-review-
+safety by default) that switches to a fully editable form (all fields, including
+payer/recipient/bank/reference-number, which get combined into `notes` only at submit time) →
+"ยกเลิก" / "ยืนยันและบันทึก". Confirming calls the **existing, unmodified `POST /api/transactions`**
+(no duplicated transaction-creation logic) and, on success, re-submits the *same* `File` object the
+user originally picked to the **existing, unmodified `POST /api/transactions/[id]/attachments`**
+endpoint to attach the real evidence copy — no new attachment-linking mechanism, no duplicate
+attachment system. The confirm button is disabled for the whole request (`aiConfirming` state) and
+becomes permanently unavailable the instant one save succeeds (the whole AI section resets), which is
+what prevents a double-click from creating two transactions — same guard pattern already used by the
+manual form's `saving` state and the delete button's `deletingId` state elsewhere on this page.
+
+**New files**: `src/app/api/transactions/ai-extract/route.ts`.
+**Modified**: `src/app/finance/page.tsx` (new AI section + supporting state/handlers only — the
+manual add/edit form and the attachments UI from STEP 20/21 are untouched).
+**Backup created**: `src/app/finance/page.tsx.step29-backup-20260901-131548`.
+
+**Tested (dev server, real browser via chrome-devtools MCP, real `gpt-5-mini` call — real minor
+OpenAI cost incurred, see below; a synthetic test slip image was rendered from HTML and screenshotted
+since no real slip photo was available)**:
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**. `pnpm.cmd run build` → **compiled successfully**,
+   `/api/transactions/ai-extract` present in the route list as a server function.
+2. **Unauthenticated**: `POST /api/transactions/ai-extract` (curl, no cookie) → `401
+   {"success":false,"error":"Unauthorized"}` — **PASS** (via the existing `/api/transactions/*`
+   `proxy.ts` prefix rule, unchanged). `GET /finance` unauthenticated → `307` to `/login` — **PASS**.
+3. **Authenticated extraction, real image**: uploaded a synthetic Kasikorn-style transfer slip PNG
+   (bank name, Thai/English labels, sender, recipient, amount 1,250.00 THB, date 15/03/2026, ref
+   number) → AI correctly extracted `documentType:"customer_payment_slip"`, `transactionType:"income"`,
+   `transactionDate:"2026-03-15"` (correctly parsed DD/MM/YYYY), `amount:1250`, `payerName`,
+   `recipientName`, `bankOrProvider:"KASIKORN BANK"`, `referenceNumber`, `description`,
+   `confidence:0.9` — **PASS**. `suggestedCategory`/`suggestedSalesChannel` were correctly rejected by
+   server-side validation (AI's raw guess didn't match the app's fixed enums) and correctly surfaced
+   in `fieldsNeedingReview` rather than silently accepted — untrusted-AI-output handling confirmed
+   working as designed.
+4. **Invalid file type** (a `.png`-named file containing plain text): rejected `400`, no file written
+   to disk — **PASS**.
+5. **Oversized file** (11MB): rejected `400` before reaching the app's own 10MB check — traced to
+   this Next.js version's **`proxyClientMaxBodySize` (default 10MB, experimental)**, which buffers
+   the whole request body when `proxy.ts` is active and truncates anything over the limit, which then
+   fails multipart parsing (`request.formData()` throws) before this route's own explicit size check
+   ever runs (see `node_modules/next/dist/docs/.../proxyClientMaxBodySize.md`). Net effect is still a
+   clean `400` rejection either way (fail-closed, no partial file ever written) — same platform
+   behavior already applies to the existing STEP 21 attachments route (also behind `proxy.ts`), not
+   something introduced by this STEP. Documented here rather than changed, since raising the limit
+   would be an auth-infrastructure-adjacent change outside this STEP's scope. No file was written to
+   disk for this rejected upload — confirmed.
+6. **No automatic transaction creation**: confirmed `transactions` row count stayed `0` after
+   extraction returned (before confirm) — **PASS**.
+7. **Edit mode**: clicked "แก้ไข", changed `amount` from `1250` to `1275.50`, all other fields
+   editable and pre-filled correctly — **PASS**.
+8. **Confirm creates exactly one transaction**: clicked "ยืนยันและบันทึก" → exactly one `transactions`
+   row created (`id=23`, `amount:1275.5` — the edited value, `category:"PRODUCT_SALE"`,
+   `payment_method:"KASIKORN BANK"`, `notes:"ผู้โอน: ... | ผู้รับ: ... | เลขอ้างอิง: ..."` — confirming
+   payer/recipient/reference were correctly folded into `notes` without any schema change) and exactly
+   one `transaction_attachments` row, both via the pre-existing unmodified endpoints — **PASS**.
+9. **Original evidence remains available**: the confirmed transaction's "📎 ไฟล์แนบ (1)" panel showed
+   the real slip image, viewable/openable — **PASS**.
+10. **Cost ledger**: one new `ai_cost_ledger` row, `operation:"text_generate"`, `model:"gpt-5-mini"`,
+    `status:"succeeded"`, `input_units:1204`, `output_units:716`,
+    `estimated_cost:0.001733` (= 1204/1000×$0.00025 + 716/1000×$0.002, matches the STEP 23 pricing
+    formula exactly) — **PASS**. Real-world cost for one slip extraction with `gpt-5-mini`: roughly
+    **$0.0015–0.002 per extraction** at this image size/prompt length (exact image-tokenization cost
+    is OpenAI-internal and not independently verifiable from this repo, consistent with STEP 21's
+    "never invent a price" rule — this is an *observed* estimated-cost figure from a real test call,
+    not a published rate).
+11. **Regression** (authenticated, browser): `/products`, `/orders`, `/inventory`, `/tax`, `/costs`
+    → all `200`, zero console errors. `/`, `/api/health` → `200`. `/video-studio`, `/voice-studio`,
+    `/content-studio` → still `200` **unauthenticated** (untouched, as required). Existing manual
+    Finance add/edit/delete form and existing attachment upload/delete (STEP 20/21) re-exercised live
+    during this same test session — both still work.
+12. **Browser console**: zero real application errors across the whole session (the only entries were
+    the two expected `400`s from the invalid-type/oversized negative tests above).
+13. **No secrets in client bundle**: `pnpm.cmd run build` output searched — `OPENAI_API_KEY` (the env
+    var *name*) appears only inside pre-existing STEP-14-era Video Studio error-message strings
+    (`"ยังไม่ได้ตั้งค่า OPENAI_API_KEY"`), unrelated to this STEP; the actual key **value** does not
+    appear anywhere in `.next/static` — **PASS**.
+14. **Database safety**: baseline recorded before testing
+    (`products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+    transaction_attachments:0, ai_cost_ledger:10`). After testing, the one test transaction, its one
+    attachment (DB row + disk file, via the real DELETE endpoint), the one test `ai_cost_ledger` row,
+    and the orphaned `ai-slip-previews/` preview file were all removed — **all counts confirmed back
+    to baseline exactly**, including `ai_cost_ledger:10`.
+
+**Defects found**: none in the new code. One incidental slip during testing — a pre-existing tracked
+utility script (`check-db.cjs`, committed in STEP 24) was overwritten and then deleted while building
+an ad-hoc row-count checker for this STEP's before/after verification; caught before finishing and
+restored via `git checkout -- check-db.cjs` (confirmed clean, matches HEAD). No user work was lost.
+**Files changed**: see New/Modified above. `PROJECT_STATUS.md` updated with this entry.
+Video Studio, AI Video, Voice Studio, Social, Content Studio — all untouched, confirmed still working
+unauthenticated exactly as before.
+
+**No STEP 30 was started.** No commit, no push, per instructions.
+
+**STEP 29 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

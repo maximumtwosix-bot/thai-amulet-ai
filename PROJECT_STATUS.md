@@ -4674,9 +4674,56 @@ read from (for regression) but not modified.
 
 **Git**: nothing committed, nothing pushed, per instructions.
 
-**No STEP 43 was started.**
-
 **STEP 42 STATUS: PASS**
+
+---
+
+## STEP 43 — PRODUCTION READINESS SPOT-CHECK (read-only)
+
+Date: 2026-09-01
+
+Read-only diagnostic pass, no code/database changes. Confirmed: git tree clean (up to date with
+`origin/master` at `ff11195`, only pre-existing `.step*-backup-*` clutter untracked); no stray Node
+processes belonging to the app (the 3 running `node` processes were all identified via
+`Get-CimInstance` command-line inspection as `chrome-devtools-mcp` tooling, not the app — nothing
+listening on ports 3000–3002); `pnpm backup` succeeded with baseline row counts; Scheduled Task
+`thai-amulet-backup` healthy (`State: Ready`, `LastTaskResult: 0`, correct `NextRunTime`);
+`tsc --noEmit` clean. The dev server was not running at the time of this check — expected, since this
+project's convention is to start it only for active testing, not run it persistently between STEPs
+(Docker is not part of this project's stack, so `docker ps` failing to connect is unrelated/expected).
+
+**STEP 43 STATUS: PASS (spot-check only, no implementation)**
+
+---
+
+## STEP 44 — FINAL LIVE SMOKE TEST / GO-LIVE CHECK
+
+Date: 2026-09-01
+
+Full end-to-end live smoke test of the daily back-office workflow, real browser + real dev server,
+ahead of go-live. All 22 checklist items **PASS**: app start/health, login, Products, Inventory,
+Customers, Orders, order creation via the real UI (including inline new-customer creation), correct
+`customerId` linkage (order `#37` → customer `#4`), stock deduction (`13→12`), automatic income
+transaction (`#68`, `฿199`, correctly linked), Finance/Tax/Profit all consistent (Revenue ฿199 / COGS
+฿100 / Gross Profit ฿99 / Net Profit ฿99), full order status transition chain
+(`pending→paid→shipped→completed`) via the real UI buttons, Order Detail's linked-transactions and
+shipping-summary sections (STEP 38) rendering correctly with N/A shown honestly where no shipping/COD
+data exists, `pnpm backup` succeeding mid-test, the Scheduled Task confirmed healthy
+(`LastTaskResult: 0`), zero unexpected browser console errors across every page, correct API error
+responses (`401`/`400`/`404`, no raw-error leakage — STEP 42's fix confirmed holding), `tsc --noEmit`
+and `pnpm run build` both clean.
+
+**Database counts** — before: `products:4, orders:1, order_items:1, inventory_movements:4,
+transactions:0, transaction_attachments:0, customers:0, ai_cost_ledger:10`; after test data cleanup
+(deleted by exact id via a temporary script): identical to before in every column. **Database restored
+to baseline: confirmed** (row counts and field values — product 3 stock back to `13`/`active`).
+**Historical order id 1: untouched** (`status: pending`, `customer_id: null`, unchanged throughout).
+
+No defects found. No schema change, no dependency added, no source files modified.
+
+**Overall: back-office confirmed ready for go-live.**
+
+**STEP 44 STATUS: PASS**
 
 ---
 

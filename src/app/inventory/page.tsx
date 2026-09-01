@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useEffect, useState } from "react";
+import LogoutButton from "@/components/LogoutButton";
 
 // STEP 23 — Low-stock panel. Local type + level helper (not imported from any lib) — this page has
 // no server-only imports today and stays that way, consistent with the client-bundle-safety
@@ -152,12 +153,15 @@ export default function InventoryPage() {
             </p>
           </div>
 
-          <a
-            href="/products"
-            className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-          >
-            ← กลับไปจัดการสินค้า
-          </a>
+          <div className="flex flex-wrap items-center gap-3">
+            <a
+              href="/products"
+              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              ← กลับไปจัดการสินค้า
+            </a>
+            <LogoutButton />
+          </div>
         </div>
 
         <div className="mb-6 grid gap-4 md:grid-cols-3">

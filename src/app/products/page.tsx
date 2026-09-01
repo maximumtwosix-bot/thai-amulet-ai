@@ -1,6 +1,7 @@
 "use client";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Noto_Sans_Thai, Noto_Serif_Thai } from "next/font/google";
+import LogoutButton from "@/components/LogoutButton";
 
 const serif = Noto_Serif_Thai({
   subsets: ["thai", "latin"],
@@ -617,12 +618,15 @@ export default function ProductsPage() {
               เพิ่มและจัดการข้อมูลวัตถุมงคลของร้าน
             </p>
           </div>
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="rounded-md bg-[#2A2118] px-5 py-3 font-semibold text-[#F1E9D8] transition-colors hover:bg-[#3D3122]"
-          >
-            {showForm ? "ปิดแบบฟอร์ม" : "+ เพิ่มสินค้า"}
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => setShowForm(!showForm)}
+              className="rounded-md bg-[#2A2118] px-5 py-3 font-semibold text-[#F1E9D8] transition-colors hover:bg-[#3D3122]"
+            >
+              {showForm ? "ปิดแบบฟอร์ม" : "+ เพิ่มสินค้า"}
+            </button>
+            <LogoutButton />
+          </div>
         </div>
         {error && (
           <div className="mb-6 rounded-md border border-[#8B3A3A]/30 bg-[#8B3A3A]/5 p-4 text-[#8B3A3A]">

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import LogoutButton from "@/components/LogoutButton";
 
 // Local label maps — deliberately duplicated rather than imported from @/lib/transactions or
 // @/lib/taxSummary (both touch server-only db.ts / better-sqlite3). This is a Client Component;
@@ -182,12 +183,15 @@ export default function TaxPage() {
             </p>
           </div>
 
-          <Link
-            href="/"
-            className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-          >
-            ← กลับหน้าแรก
-          </Link>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/"
+              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              ← กลับหน้าแรก
+            </Link>
+            <LogoutButton />
+          </div>
         </div>
 
         <section className="mb-6 rounded-2xl border bg-white p-5 shadow-sm">

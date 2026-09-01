@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import LogoutButton from "@/components/LogoutButton";
 
 type OrderListItem = {
   id: number;
@@ -110,6 +111,8 @@ export default function OrdersPage() {
             >
               ← กลับหน้าแรก
             </Link>
+
+            <LogoutButton />
           </div>
         </div>
 

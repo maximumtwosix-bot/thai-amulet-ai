@@ -3356,6 +3356,132 @@ unauthenticated exactly as before.
 
 ---
 
+## STEP 30 — DATABASE & EVIDENCE BACKUP / RECOVERY
+
+Date: 2026-09-01
+
+Scope: a read-only-audited-first back-office readiness gap (identified in this same session's
+pre-STEP-30 audit) — `data/thai-amulet.db` and `public/generated/` (transaction slip/receipt
+evidence, product photos, AI media) had **no backup mechanism at all**, and both are intentionally
+`.gitignore`'d, so git provided zero protection either. This STEP closes that gap only — no other
+back-office behavior touched, no video/voice/content-studio code touched.
+
+**Audit before implementing**: confirmed via `src/lib/db.ts` that the DB path is
+`path.join(process.cwd(), "data", "thai-amulet.db")` and runs in **WAL mode**
+(`db.pragma("journal_mode = WAL")`) — confirmed live by the presence of `.db-shm`/`.db-wal` files
+next to it. This matters because a plain file copy of a WAL-mode database can miss recent writes
+still sitting in the `-wal` file or capture a torn/inconsistent snapshot if anything is writing
+concurrently — a blind `cp` was explicitly ruled out for this reason. Checked `package.json` /
+`scripts/` / full source search: no existing backup mechanism anywhere. Checked
+`node_modules/.pnpm/@types+better-sqlite3@9.6.0` and confirmed `better-sqlite3` (already a project
+dependency, no new one added) ships a native `Database#backup(destinationFile)` method implementing
+SQLite's official **Online Backup API** — explicitly designed to produce a complete, consistent
+snapshot even while another process/connection is actively writing to the source database. Checked
+`public/generated/` — 6 subdirectories (`ai-images`, `ai-video`, `product-media`,
+`transaction-attachments`, `video`, `voice`); all are runtime-written business/user content, none is
+source, so the whole tree is backed up (not just `transaction-attachments`). Followed the existing
+`docs/SOCIAL_WORKER.md` documentation convention and `scripts/run-social-worker.ts` /
+`"social:worker": "tsx ..."` one-shot-CLI-script convention for consistency.
+
+**Approach**: `scripts/backup.ts` (new, run via `pnpm backup`) —
+1. Refuses to run (exit 1) if `BACKUP_DIR` resolves inside the project repository.
+2. Records table row counts from the **live** database via the existing `@/lib/db` singleton
+   connection (same WAL-configured connection the app itself would use).
+3. Calls `db.backup(destinationFile)` to produce a consistent SQLite snapshot — not a raw file copy.
+4. Copies `data/app.db` (a pre-existing, unused, 0-byte stray file noted in this session's earlier
+   audit) verbatim for completeness.
+5. Recursively copies the entire `public/generated/` tree with its own file-counting walker (Node
+   built-in `fs`/`fs/promises` only — no archive library added, since none was needed or installed).
+6. **Verifies** the backup by opening the freshly-written backup `.db` file read-only and
+   re-counting the same tables — any table-count difference from step 2 is logged as an informational
+   note (expected if a real write happened during the backup window — the Online Backup API still
+   guarantees a consistent snapshot regardless) rather than a hard failure, but a backup file that
+   **fails to open at all** does hard-fail the script (non-zero exit).
+7. Defense-in-depth: walks the finished backup output and hard-fails if any file named `.env`/
+   `.env.local`/`.env.production`/`.env.development` is found anywhere in it — belt-and-suspenders on
+   top of the fact that the script never reads the project root or any dotfile by construction (it
+   only ever touches `data/thai-amulet.db`, `data/app.db`, and `public/generated/**`).
+8. Writes `manifest.json` into the backup folder (table counts at start + verified, count
+   mismatches if any, evidence file count/bytes, timestamps) and prints the same summary to stdout.
+9. Exit code `0` on success, `1` on any failure, with a clear message either way — no raw stack
+   traces, no secrets logged.
+
+**Backup destination**: `C:\Users\maxim\thai-amulet-backups` (outside the repository — this exact
+path was already suggested in the STEP 30 instructions and fits this single-machine Windows setup;
+no reason found to deviate from it). Overridable via the new optional `BACKUP_DIR` env var, documented
+in `.env.example` with a comment. `git check-ignore`/`git ls-files` against this path from inside the
+repo confirms it is **entirely outside** the repository (git refuses to even evaluate it — "outside
+repository" error), not merely `.gitignore`'d.
+
+**New files**: `scripts/backup.ts`, `docs/BACKUP_AND_RECOVERY.md` (full recovery procedure — identify
+a backup, stop the app, rescue-copy the current DB before overwriting anything, restore DB, restore
+evidence files, verify the restored DB's row counts against the backup's `manifest.json` *before*
+restarting the app, restart, verify the running app — plus a documented-only, not-yet-created Windows
+Task Scheduler example for future nightly automation, matching the `docs/SOCIAL_WORKER.md` pattern
+exactly per instructions not to auto-create a scheduled task in this STEP).
+**Modified**: `package.json` (added `"backup": "tsx scripts/backup.ts"`, same convention as
+`"social:worker"`), `.env.example` (added optional `BACKUP_DIR=` with an explanatory comment — no
+real value, consistent with every other var in that file).
+**No dependencies added.** `pnpm-lock.yaml` untouched.
+
+**Tested (real backup run against the live database, plus a non-destructive recovery dry-run)**:
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED** (checked before and after all edits).
+2. Baseline row counts recorded via a temporary readonly-mode `.cjs` script (deleted immediately
+   after use, per this project's established convention — `check-db.cjs` itself was left untouched
+   this time, unlike an earlier session's mistake):
+   `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+   transaction_attachments:0, customers:0, ai_cost_ledger:10`.
+3. `pnpm backup` → **exit code 0**, real backup created at
+   `C:\Users\maxim\thai-amulet-backups\backup-20260901-140539\` — printed table counts matched the
+   baseline exactly, `76` evidence files backed up (`53,466,745` bytes), zero count mismatches
+   reported (no concurrent writes occurred during the backup window).
+4. **Backup DB opens and reads correctly**: `manifest.json`'s `tableCountsVerifiedInBackupCopy`
+   matches `tableCountsAtBackupStart` exactly for all 8 tables — **PASS**.
+5. **Production database unchanged**: re-ran the same readonly row-count check against the live
+   `data/thai-amulet.db` immediately after the backup completed — identical to the baseline in step 2
+   — **PASS**, confirming the backup process is fully read-only against production.
+6. **No secrets in backup output**: `find` across the entire backup tree for
+   `.env*`/`*.bak`/`*secret*`/`*credential*` → **zero matches** — **PASS**.
+7. **Backup location confirmed outside git**: `git check-ignore`/any git command against the backup
+   path from inside the repo errors with "outside repository" — **PASS**, stronger guarantee than a
+   `.gitignore` rule (this path is never even reachable by any git operation from this repo).
+8. **Non-destructive recovery dry-run**: copied the backup's `db/` and `generated/` folders into an
+   isolated temp directory (outside both the repo and the real backup folder — never touched
+   `data/thai-amulet.db` or `public/generated/` at any point), opened the restored `.db` file
+   read-only from that temp path, and re-ran the same 8-table count query — **identical to
+   production** — **PASS**. Confirmed all `76` evidence files present in the restored copy, spot-checked
+   `product-media/` files by name — **PASS**. Temp directory deleted after verification.
+9. The real backup created in step 3 was **kept** (not deleted) — it is a legitimate first real
+   backup of production data, not test pollution, and directly satisfies this STEP's goal.
+
+**Defects found**: none. One incidental observation, not a defect: opening the backup `.db` file for
+the verify step (step 4 above) causes SQLite to create empty `-shm`/`0-byte -wal` companion files
+next to it in the backup folder — harmless (the backup `.db` file itself is a complete, consistent
+snapshot on its own via the Online Backup API; these companions carry no pending data), documented in
+`docs/BACKUP_AND_RECOVERY.md` so a future restore isn't confused by their presence.
+
+**Database safety**: no schema change, no test business data inserted, no production rows
+modified/deleted, no stock changes, no transaction/attachment changes — every verification above was
+either a `SELECT COUNT(*)` against the live DB or a read against a copy sitting outside both the repo
+and the live `data/` directory.
+
+**Files changed**: see New/Modified above. `PROJECT_STATUS.md` updated with this entry.
+`PROJECT_CHECKPOINT.md` not touched, per instructions. Video Studio, AI Video, Voice Studio, Social,
+Content Studio — not touched at all in this STEP (this STEP's `public/generated/` backup covers their
+output directories too, since that's what the requirements specified, but no *code* for any of those
+features was read, modified, or executed).
+
+**Git**: nothing committed, nothing pushed, per instructions — `scripts/backup.ts`,
+`docs/BACKUP_AND_RECOVERY.md` remain untracked and `package.json`/`.env.example`/this file remain
+modified-but-unstaged in the working tree, exactly as the STEP 28/29 pattern left prior work before
+its own explicit commit step.
+
+**No STEP 31 was started.**
+
+**STEP 30 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

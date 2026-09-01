@@ -55,6 +55,19 @@ function formatCurrency(value: number): string {
   return `฿${value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// STEP 47 — sales channel options, values match src/lib/transactions.ts's SALES_CHANNELS exactly
+// (isValidSalesChannel()) so the value this page sends as `channel` always maps to a real
+// salesChannel on the order's automatic income transaction, instead of silently becoming null.
+const CHANNEL_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "facebook", label: "Facebook" },
+  { value: "tiktok_shop", label: "TikTok Shop" },
+  { value: "shopee", label: "Shopee" },
+  { value: "lazada", label: "Lazada" },
+  { value: "line", label: "LINE" },
+  { value: "walk_in", label: "หน้าร้าน" },
+  { value: "other", label: "อื่นๆ" },
+];
+
 // แปล error จาก backend (ภาษาอังกฤษ) เป็นข้อความไทยที่เข้าใจง่าย — backend เดิมส่งข้อความ
 // ภาษาอังกฤษมาตรงๆ (ดู src/app/api/orders/route.ts) ไม่ใช่บั๊ก แค่ต้องแปลชั้น UI นี้เพื่อผู้ใช้จริง
 function translateOrderError(message: string): string {
@@ -86,6 +99,13 @@ export default function NewOrderPage() {
   const [items, setItems] = useState<LineItem[]>([emptyLineItem()]);
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // STEP 47 — payment method / sales channel / shipping fee. Previously never sent by this page at
+  // all (POST body was only { customerId, items }), even though POST /api/orders and createOrder()
+  // already fully accept and persist all three — this was a UI-only gap, not an API/DB one.
+  const [paymentMethod, setPaymentMethod] = useState<"transfer" | "cod">("transfer");
+  const [channel, setChannel] = useState<string>("other");
+  const [shippingFee, setShippingFee] = useState("0");
 
   // STEP 36 — customer selection state, entirely separate from the product/order state above.
   // Optional throughout: an order with no customer selected must keep working exactly as before
@@ -267,7 +287,11 @@ export default function NewOrderPage() {
   }
 
   const orderSubtotal = items.reduce((sum, item) => sum + lineSubtotal(item), 0);
-  const orderTotal = orderSubtotal; // ไม่มี input ค่าจัดส่ง/ส่วนลดในฟอร์มนี้ตามขอบเขตที่กำหนด
+  // STEP 47 — shippingFeeValue mirrors validateBeforeSubmit()'s own parsing below (NaN/blank → 0,
+  // matching the server's own default in src/app/api/orders/route.ts) so the on-screen total always
+  // matches what createOrder() will actually persist as `total`.
+  const shippingFeeValue = Number.isFinite(Number(shippingFee)) ? Number(shippingFee) : 0;
+  const orderTotal = orderSubtotal + shippingFeeValue; // ไม่มี input ส่วนลดในฟอร์มนี้ตามขอบเขตที่กำหนด
 
   function validateBeforeSubmit(): string {
     const realItems = items.filter((item) => item.productId !== "");
@@ -300,6 +324,15 @@ export default function NewOrderPage() {
       }
     }
 
+    // STEP 47 — same rule as the existing server-side check (INVALID_SHIPPING_FEE in
+    // src/lib/orders.ts): must be a finite number >= 0. Checked here too so a negative value never
+    // even reaches the API call.
+    const shippingFeeNumber = Number(shippingFee);
+
+    if (!Number.isFinite(shippingFeeNumber) || shippingFeeNumber < 0) {
+      return "กรุณาระบุค่าจัดส่งเป็นจำนวนเงินตั้งแต่ 0 ขึ้นไป";
+    }
+
     return "";
   }
 
@@ -327,6 +360,9 @@ export default function NewOrderPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           customerId: selectedCustomer ? selectedCustomer.id : null,
+          paymentMethod,
+          channel,
+          shippingFee: Number(shippingFee),
           items: realItems.map((item) => ({
             productId: item.productId,
             quantity: Number(item.quantity),
@@ -669,6 +705,75 @@ export default function NewOrderPage() {
           </div>
         </section>
 
+        {/* STEP 47 — payment method / sales channel / shipping fee. Previously not exposed by this
+            page at all; POST /api/orders and createOrder() already fully support all three. */}
+        <section className="mt-6 rounded-2xl border bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-lg font-semibold text-slate-900">การชำระเงินและการจัดส่ง</h2>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                วิธีชำระเงิน
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("transfer")}
+                  className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
+                    paymentMethod === "transfer"
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  โอนเงิน
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("cod")}
+                  className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
+                    paymentMethod === "cod"
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  COD / เก็บเงินปลายทาง
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                ช่องทางการขาย
+              </label>
+              <select
+                value={channel}
+                onChange={(e) => setChannel(e.target.value)}
+                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+              >
+                {CHANNEL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                ค่าจัดส่ง
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={shippingFee}
+                onChange={(e) => setShippingFee(e.target.value)}
+                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+              />
+            </div>
+          </div>
+        </section>
+
         <section className="mt-6 rounded-2xl border bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold text-slate-900">สรุปออเดอร์</h2>
 
@@ -677,11 +782,28 @@ export default function NewOrderPage() {
               <span>ยอดรวมสินค้า</span>
               <span>{formatCurrency(orderSubtotal)}</span>
             </div>
+            <div className="flex justify-between text-slate-600">
+              <span>ค่าจัดส่ง</span>
+              <span>{formatCurrency(shippingFeeValue)}</span>
+            </div>
             <div className="flex justify-between border-t pt-2 text-base font-bold text-slate-900">
               <span>ยอดรวมสุทธิ</span>
               <span>{formatCurrency(orderTotal)}</span>
             </div>
           </div>
+
+          {/* STEP 47 — COD collection messaging, display-only: no new database field, computed
+              entirely from the existing orderTotal so it's always exactly the final order total. */}
+          {paymentMethod === "cod" && (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <p className="text-sm font-medium text-amber-800">
+                💰 ยอดเก็บเงินปลายทาง (COD)
+              </p>
+              <p className="mt-1 text-xl font-bold text-amber-900">
+                {formatCurrency(orderTotal)}
+              </p>
+            </div>
+          )}
 
           {formError && (
             <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">

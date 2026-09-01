@@ -4821,6 +4821,88 @@ STEP 45's, retroactively, same convention as STEP 35/36, 39/40, 41/42, 43/44).
 
 ---
 
+## STEP 47 — ORDER PAYMENT & SHIPPING UI
+
+Date: 2026-09-01
+
+**Scope**: a prior read-only audit (this same date) found that `POST /api/orders`, `createOrder()`
+(`src/lib/orders.ts`), and the `orders` table schema already fully supported `paymentMethod`,
+`channel`, and `shippingFee` — the only gap was that `src/app/orders/new/page.tsx` never exposed any
+of the three, so every order created through the real UI silently got `paymentMethod: "unknown"`,
+`channel: "manual"` (→ `salesChannel: null` on the linked income transaction), and `shippingFee: 0`.
+This STEP closes that UI-only gap.
+
+**Implemented, isolated entirely to `src/app/orders/new/page.tsx`**:
+- **Payment method**: a two-button toggle — "โอนเงิน" (transfer) / "COD / เก็บเงินปลายทาง" (COD) —
+  sent as `paymentMethod` in the existing `POST /api/orders` body.
+- **Sales channel**: a dropdown using the exact existing `SALES_CHANNELS` enum values
+  (`facebook`/`tiktok_shop`/`shopee`/`lazada`/`line`/`walk_in`/`other`) with Thai-friendly labels,
+  sent as `channel` — this is the fix for the `salesChannel: null` gap, since a real enum value now
+  reaches `createOrder()`'s existing `mapOrderChannelToSalesChannel()`.
+- **Shipping fee**: a number input, default `0`, min `0`; validated client-side (mirroring the
+  existing server-side `INVALID_SHIPPING_FEE` rule in `src/lib/orders.ts`) so a negative value never
+  reaches the API call at all; sent as `shippingFee`.
+- **Live total**: `orderTotal` changed from `= orderSubtotal` to `= orderSubtotal + shippingFeeValue`,
+  displayed with a new "ค่าจัดส่ง" line in the existing order-summary card, so the on-screen total
+  always matches what `createOrder()` will actually persist.
+- **COD collection display**: a banner shown only when `paymentMethod === "cod"`, showing the exact
+  `orderTotal` (no new field, no new calculation — reuses the same total) — hidden entirely when
+  "โอนเงิน" is selected.
+
+All existing state (customer selection, product/quantity/price line items, add/remove item), the
+existing `submitOrder()` request/response handling, the existing stock-sufficiency check, and the
+existing API endpoint were left untouched — only the POST body gained three new fields the API
+already accepted.
+
+**Files changed**: `src/app/orders/new/page.tsx` only. **No changes to** `src/app/api/orders/route.ts`,
+`src/lib/orders.ts`, `src/lib/db.ts`, `src/lib/transactions.ts`, any database schema, Finance,
+Inventory, Products, Customers, Video Studio, Voice Studio, Content Studio, or Social — confirmed via
+`git status` showing only this one file modified.
+**No dependencies added.**
+**Backup created**: `src/app/orders/new/page.tsx.step47-backup-20260901-222243`.
+
+**Tested (real dev server, real browser via chrome-devtools MCP)**:
+1. `pnpm exec tsc --noEmit` → **PASS**. `pnpm run build` → **PASS**, route list unchanged.
+2. **Real-data discovery**: before testing, baseline row counts didn't match the expected prior state
+   — investigation (read-only) found genuine post-go-live user data already present: product id 47
+   ("ลูกอมหล่ออุดกริ่ง ยันต์แปดทิศ"), customer id 5 ("โน่"), and order id 38 (linked income transaction
+   id 69). This was correctly identified as real data, not test data, and **left completely
+   untouched** throughout — only one clearly-scoped test order (id 39) was created and later removed
+   by exact id.
+3. **Browser regression**: page loads; existing customer search/inline-create, product
+   selection/quantity/price/add-remove-item all work unchanged; new payment method toggle, channel
+   dropdown, and shipping fee input all render and respond correctly; zero new console errors (only
+   pre-existing-pattern accessibility notices matching this page's existing unlabeled-input
+   convention, and unrelated Next.js font-preload warnings).
+4. **Negative shipping fee**: entering `-10` and submitting was correctly blocked client-side with a
+   clear Thai message; confirmed via direct DB read that the order count was unchanged — no stray
+   order was created by the rejected attempt.
+5. **Live total correctness**: selecting a product (₿299) and entering shipping fee ₿40 correctly
+   updated the on-screen total to ₿339; switching payment method to COD showed a banner with exactly
+   ₿339; switching back to โอนเงิน made the COD banner disappear immediately.
+6. **Order creation, the critical check**: submitted one test order (product 47 × 1, `channel:
+   "other"`, `paymentMethod: "cod"`, `shippingFee: 40`). Server persisted `total: 339` exactly
+   matching the UI. The linked automatic income transaction correctly got `amount: 339`,
+   `payment_method: "cod"`, **and `sales_channel: "other"` — a real value instead of the previous
+   `null`**, confirming the actual gap is fixed. The existing STEP 38 shipping-visibility section on
+   Order Detail correctly showed the new ₿40 customer shipping fee.
+7. **Stock integrity**: product 47 stock went `19 → 18` on the test purchase, confirmed via direct DB
+   read; **restored to `19`** during cleanup.
+8. **Cleanup**: the one test order's transaction, `order_items` row, and `inventory_movements` row
+   were deleted by exact id, the order row deleted, and product 47's stock restored — all via a
+   temporary script, deleted immediately after use. Verified afterward: real order 38, real customer
+   5, and real product 47 are completely intact and unmodified; historical order id 1 untouched;
+   `/orders` list correctly shows only the 2 real orders (the pre-existing real one and historical
+   order 1), with zero trace of the test order remaining.
+
+**Defects found**: none — implementation matched the approved audit scope exactly on the first pass.
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**STEP 47 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

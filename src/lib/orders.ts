@@ -2,6 +2,7 @@
 import { decreaseStockForSale } from "./inventory";
 import { createTransaction, isValidSalesChannel } from "./transactions";
 import { isValidOrderStatus, isValidOrderStatusTransition, type OrderStatus } from "./orderStatus";
+import { assertCustomerExists } from "./customers";
 
 // STEP 31 — orders.channel (e.g. the "manual" default every order from src/app/orders/new/page.tsx
 // currently gets, since that form never sends a channel at all) is free TEXT, not validated against
@@ -132,6 +133,23 @@ export function createOrder(
       throw new Error("INVALID_ORDER_TOTAL");
     }
 
+    // STEP 36 — customerId has existed as a CreateOrderInput field since before this STEP but was
+    // never validated (nothing ever supplied it — src/app/orders/new/page.tsx never sent one until
+    // now). Validated with the same rigor as productId/orderId elsewhere in this function: a bad
+    // reference must fail the whole order atomically, not silently write a dangling customer_id.
+    const customerId =
+      input.customerId === undefined || input.customerId === null
+        ? null
+        : Number(input.customerId);
+
+    if (customerId !== null) {
+      if (!Number.isInteger(customerId) || customerId <= 0) {
+        throw new Error("INVALID_CUSTOMER_ID");
+      }
+
+      assertCustomerExists(customerId);
+    }
+
     const orderResult = db
       .prepare(`
         INSERT INTO orders (
@@ -149,7 +167,7 @@ export function createOrder(
       `)
       .run(
         input.orderNumber.trim(),
-        input.customerId ?? null,
+        customerId,
         input.channel ?? null,
         input.paymentMethod ?? null,
         subtotal,

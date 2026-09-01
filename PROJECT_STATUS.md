@@ -4055,6 +4055,155 @@ Content Studio — not touched at all in this STEP.
 
 ---
 
+## STEP 35 — BACK-OFFICE COMPLETENESS AUDIT (read-only)
+
+Date: 2026-09-01
+
+Read-only audit, no code/database changes, per its own explicit instructions (this file itself was
+not to be modified during the audit — no entry was added at the time). Findings: a fresh read-only
+integrity scan of the live database found zero orphaned records of any kind (no order without items,
+no dangling transaction/attachment/movement references, no duplicate income per order, no stock
+corruption, no order.total arithmetic mismatches) — STEP 30–34's guards holding up under direct
+inspection, not just their own tests. Confirmed remaining gaps were all additive/reporting in nature
+(customer capture, profit/margin, shipping reconciliation, daily date-filtering), none blocking.
+Recommended order: STEP 36 (customer management) → STEP 37 (profit/margin reporting) → STEP 38
+(order-detail linked-transactions view / shipping visibility). This entry is being added retroactively
+alongside STEP 36's for continuity, since the audit turn itself correctly made no `PROJECT_STATUS.md`
+edit.
+
+**STEP 35 STATUS: PASS (audit only, no implementation)**
+
+---
+
+## STEP 36 — CUSTOMER MANAGEMENT
+
+Date: 2026-09-01
+
+Scope: the top recommendation from STEP 35 — customer creation/edit/list/search, selecting or
+creating a customer during order creation, and passing `customerId` through to order creation. Fully
+additive: zero changes to stock deduction, automatic order→income creation, order status workflow, or
+Finance/Tax logic (all re-verified live, see Tested below).
+
+**Audit before implementing**: confirmed the `customers` table (`id, name NOT NULL, phone, address,
+district, province, postal_code, created_at` — no `notes`, no `updated_at`) already existed with
+everything this STEP needed — **no schema change was required or made**. Confirmed `createOrder()`
+(`src/lib/orders.ts`) already had a `customerId` field on `CreateOrderInput` but never validated it
+(just wrote `input.customerId ?? null` straight into the `INSERT` — a value nothing had ever
+supplied, since `orders/new/page.tsx` never sent one). Confirmed `GET /api/orders` and
+`GET /api/orders/[id]` already `LEFT JOIN customers` and return `customer_name`/`phone`/`address`/
+`district`/`province`/`postal_code` — the **display side was already fully built and waiting**, exactly
+as STEP 35 predicted; zero changes were needed to the order-detail page itself. Confirmed
+`src/proxy.ts` did **not** yet protect any `/customers` or `/api/customers` prefix — unlike STEP 29/
+31/32/34's routes, which all landed under an already-protected existing prefix, this is a genuinely
+new top-level prefix that needed its own rule.
+
+**Approach**:
+- New `src/lib/customers.ts` — `createCustomer()`/`listCustomers()` (name/phone `LIKE` search)/
+  `updateCustomer()`/`getCustomerById()`/`assertCustomerExists()`, same `toRow()`/CRUD-layer
+  convention as `transactions.ts`/`orders.ts`. `assertCustomerExists()` is exported specifically so
+  `createOrder()` can validate a supplied `customerId` with the same rigor `assertProductExists()`/
+  `assertOrderExists()` already apply — a bad reference now fails the whole order atomically instead
+  of silently writing a dangling `customer_id`.
+- New `src/app/api/customers/route.ts` (`GET` list/search, `POST` create) and
+  `src/app/api/customers/[id]/route.ts` (`GET` single, `PATCH` edit). No delete endpoint — out of
+  this STEP's stated scope (list/search/add/edit only).
+- New `src/app/customers/page.tsx` — add/edit form at top + searchable list below, same layout
+  convention as `finance/page.tsx`/`products/page.tsx`.
+- `src/proxy.ts` — added `/customers` to `isProtectedPage()` and `/api/customers`(`/*`) to
+  `isProtectedApi()`, plus both to the `matcher` array.
+- `src/lib/orders.ts` `createOrder()` — added the same validate-then-use pattern already used for
+  `productId`/`orderId`: `customerId` (if provided) must be a positive integer referencing a real
+  customer, checked via `assertCustomerExists()`, before the `INSERT`.
+- `src/app/api/orders/route.ts` — now reads `customerId` from the POST body (previously silently
+  ignored) and maps the two new error cases (`CUSTOMER_NOT_FOUND` → `404`, `INVALID_CUSTOMER_ID` →
+  `400`).
+- `src/app/orders/new/page.tsx` — new "👤 ลูกค้า (ถ้ามี)" section: a debounced search-as-you-type box
+  against `GET /api/customers?search=`, a dropdown of matches to select from, and a
+  "+ เพิ่มลูกค้าใหม่" inline mini-form that `POST`s a new customer and auto-selects it — favoring
+  reuse of an existing customer over creating a duplicate one, per the STEP's instruction not to
+  create customer records unnecessarily. Entirely optional throughout — `submitOrder()` sends
+  `customerId: selectedCustomer ? selectedCustomer.id : null`, so an order created with no customer
+  selected behaves exactly as before.
+- `src/app/page.tsx` — added a "👤 ลูกค้า" entry to the existing sidebar `menuItems` array, linking to
+  `/customers`, next to "🧾 ออเดอร์".
+
+**New files**: `src/lib/customers.ts`, `src/app/api/customers/route.ts`,
+`src/app/api/customers/[id]/route.ts`, `src/app/customers/page.tsx`.
+**Modified**: `src/proxy.ts`, `src/lib/orders.ts`, `src/app/api/orders/route.ts`,
+`src/app/orders/new/page.tsx`, `src/app/page.tsx`. **No dependencies added. No database schema
+change — the existing `customers` table already had every field this STEP needed.**
+**Backups created**: `.step36-backup-<timestamp>` copies of all 5 modified files.
+
+**Tested (real dev server, real browser via chrome-devtools MCP + curl; a fresh `pnpm backup` — STEP
+30/33 — was run immediately before testing)**:
+
+Baseline: `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+transaction_attachments:0, customers:0, ai_cost_ledger:10`; product 3 stock `13`; order id 1
+`customer_id:null`, `status:pending`, `total:299`.
+
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**. `pnpm.cmd run build` → **compiled successfully**,
+   `/customers`, `/api/customers`, `/api/customers/[id]` all present in the route list.
+2. **Authentication regression**, checked before any functional testing: unauthenticated
+   `GET /customers` → `307`; unauthenticated `GET`/`POST /api/customers` → both `401` — **PASS**.
+3. **Customer create**: full-detail customer and name-only customer both created successfully
+   (`201`); creating without a name → `400` with a clear Thai error — **PASS**.
+4. **Customer edit**: `PATCH` updated an existing customer's phone correctly; editing a nonexistent
+   id → `404` — **PASS**.
+5. **Customer list/search**: listed both test customers; search by partial name and by partial phone
+   both correctly narrowed to the matching customer; a non-matching search term correctly returned
+   zero results — **PASS**.
+6. **Order creation with `customerId`**: an order created with a valid `customerId` correctly stored
+   it; an order created with **no** `customerId` (existing behavior) still worked identically —
+   **PASS**. An order submitted with a nonexistent `customerId` (`99999`) → `404 "Customer not
+   found"`, and verified **no orphan order was created** (the `INVALID_ORDER_NUMBER`/atomic-rollback
+   behavior extends correctly to the new validation) — **PASS**.
+7. **STEP 31/STEP 32 regression, confirmed alongside the above**: both valid test orders still got
+   exactly one automatic income transaction each (`transaction_type:'income'`, correct `amount`), and
+   stock deducted correctly (`13→11` after 2 orders) — **PASS**, customer wiring does not interfere
+   with either.
+8. **Order detail displays linked customer correctly**: `GET /api/orders/[id]` for a customer-linked
+   order returned the customer's `name`/`phone`/`address` correctly (zero code changes needed here,
+   confirmed); for a non-linked order, `customer_name` correctly `null` — **PASS**.
+9. **Real browser, full UI flow**: on `/orders/new`, searched for an existing customer by name →
+   dropdown showed the match → selected it → customer card displayed with a "เปลี่ยน" button →
+   completed and submitted the order → redirected to the new order's detail page showing the correct
+   customer name/phone/address **and** the STEP 31 "✅ บันทึกรายรับแล้ว" badge **and** the STEP 32
+   status-change buttons, all together, zero console errors — **PASS**. Repeated with
+   "+ เพิ่มลูกค้าใหม่" (inline new-customer creation) → new customer auto-selected immediately after
+   saving → order submitted → detail page showed the newly-created customer correctly — **PASS**,
+   zero console errors. `/customers` page tested directly: add form, list, and "แก้ไข" (pre-filling
+   every field correctly) all confirmed working live — **PASS**, zero console errors.
+10. **Historical order id 1 verified untouched** throughout all of the above (real browser
+    screenshot): `customer_id` still `null`, displays "ไม่มีข้อมูลลูกค้า", `status`/`total` unchanged
+    — **PASS**.
+11. **`/orders` list page regression**: correctly displays the linked customer's name for
+    customer-linked orders and `-` for unlinked ones (pre-existing join, unmodified) — **PASS**, zero
+    console errors.
+12. **Finance/Tax regression**: `/finance` and `/tax` pages both load with zero console errors;
+    `GET /api/health`, `/api/products`, `/api/orders`, `/api/orders/1`, `/api/inventory/movements`,
+    `/api/transactions`, `/api/tax/summary`, `/api/costs/summary`, `/api/customers` → all `200` —
+    **PASS**.
+
+**Cleanup**: all 4 test orders, their 4 `order_items` rows, their 4 income transactions, their 4
+`inventory_movements` rows, and all 3 test customers were deleted by exact id via a temporary script
+(deleted immediately after use). Product 3 stock restored from `9` back to `13`. **Final table counts
+verified identical to baseline** in every column, including `customers:0`; order id 1 was never
+touched by either the tests or the cleanup.
+
+**Defects found**: none.
+
+**Files changed**: see New/Modified above. `PROJECT_STATUS.md` updated with this entry (and STEP 35's,
+retroactively). `PROJECT_CHECKPOINT.md` not touched, per instructions. Video Studio, AI Video, Voice
+Studio, Social, Content Studio — not touched at all in this STEP.
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**No STEP 37 was started.**
+
+**STEP 36 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

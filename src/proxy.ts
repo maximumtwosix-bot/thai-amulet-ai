@@ -30,6 +30,9 @@ function isProtectedPage(pathname: string): boolean {
   if (pathname === "/orders" || pathname.startsWith("/orders/")) return true;
   if (pathname === "/finance") return true;
   if (pathname === "/tax") return true;
+  // STEP 36 — new page, new prefix (unlike STEP 29/31/32/34's routes, which all landed under an
+  // already-protected prefix like /orders/* or /api/transactions/*, this one needs its own rule)
+  if (pathname === "/customers") return true;
 
   return false;
 }
@@ -49,6 +52,10 @@ function isProtectedApi(pathname: string): boolean {
   if (pathname === "/api/transactions" || pathname.startsWith("/api/transactions/")) return true;
 
   if (pathname.startsWith("/api/tax/")) return true;
+
+  // STEP 36 — covers /api/customers and /api/customers/[id]; new prefix, needs its own rule (same
+  // reasoning as the /customers page rule above).
+  if (pathname === "/api/customers" || pathname.startsWith("/api/customers/")) return true;
 
   return false;
 }
@@ -86,6 +93,7 @@ export const config = {
     "/orders/:path*",
     "/finance",
     "/tax",
+    "/customers",
     "/api/products",
     "/api/products/:path*",
     "/api/orders",
@@ -94,5 +102,7 @@ export const config = {
     "/api/transactions",
     "/api/transactions/:path*",
     "/api/tax/:path*",
+    "/api/customers",
+    "/api/customers/:path*",
   ],
 };

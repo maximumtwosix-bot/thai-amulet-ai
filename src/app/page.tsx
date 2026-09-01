@@ -11,6 +11,7 @@ const menuItems = [
   { icon: "🖼️", title: "จัดการรูปภาพ", desc: "โปสเตอร์สินค้า", href: "/video-studio" },
   { icon: "📦", title: "สินค้า", desc: "จัดการข้อมูลสินค้า", href: "/products" },
   { icon: "🧾", title: "ออเดอร์", desc: "จัดการคำสั่งซื้อ", href: "/orders" },
+  { icon: "👤", title: "ลูกค้า", desc: "รายชื่อลูกค้า", href: "/customers" },
   { icon: "💰", title: "การเงิน", desc: "รายรับ-รายจ่าย", href: "/finance" },
   { icon: "📑", title: "สรุปภาษี", desc: "รายงานสำหรับทำบัญชี", href: "/tax" },
   { icon: "📊", title: "ยอดขาย", desc: "ดูสถิติการขาย", href: null },

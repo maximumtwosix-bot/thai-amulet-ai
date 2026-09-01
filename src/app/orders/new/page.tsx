@@ -4,17 +4,35 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
-// STEP 27 — สร้างออเดอร์ใหม่จากหน้าเว็บ ใช้ POST /api/orders / createOrder() เดิมทั้งหมด ไม่มีการแก้
-// backend logic ใดๆ ในไฟล์นี้ — customerId ยังไม่รองรับที่นี่โดยเจตนา เพราะ POST /api/orders ปัจจุบัน
-// ไม่ได้อ่าน customerId จาก request body เลย (แม้ createOrder() ใน src/lib/orders.ts จะรองรับ
-// พารามิเตอร์นี้ก็ตาม) — ตามขอบเขตที่กำหนดไว้ ห้ามขยาย backend ใน STEP นี้ จึงยังไม่มีการเลือกลูกค้า
-// ในฟอร์มนี้ ถือเป็นข้อจำกัดที่ทราบแล้ว ไม่ใช่บั๊ก
+// STEP 27 — สร้างออเดอร์ใหม่จากหน้าเว็บ ใช้ POST /api/orders / createOrder() เดิมทั้งหมด
+// STEP 36 — เพิ่มการเลือก/สร้างลูกค้าแล้ว ส่ง customerId เข้า POST /api/orders (ก่อนหน้านี้ไม่รองรับ
+// เพราะ POST /api/orders ยังไม่อ่าน customerId จาก request body — ตอนนี้อ่านแล้ว ดู
+// src/app/api/orders/route.ts และ src/lib/customers.ts)
 
 type ProductOption = {
   id: number;
   name: string;
   price: number;
   stock: number;
+};
+
+type CustomerOption = {
+  id: number;
+  name: string;
+  phone: string | null;
+  address: string | null;
+  district: string | null;
+  province: string | null;
+  postalCode: string | null;
+};
+
+const emptyNewCustomerForm = {
+  name: "",
+  phone: "",
+  address: "",
+  district: "",
+  province: "",
+  postalCode: "",
 };
 
 type LineItem = {
@@ -48,6 +66,8 @@ function translateOrderError(message: string): string {
     "Invalid shipping fee": "ค่าจัดส่งไม่ถูกต้อง",
     "Invalid discount": "ส่วนลดไม่ถูกต้อง",
     "Product not found": "ไม่พบสินค้านี้ในระบบ (อาจถูกลบไปแล้ว)",
+    "Customer not found": "ไม่พบลูกค้านี้ในระบบ กรุณาเลือกลูกค้าใหม่อีกครั้ง",
+    "Invalid customer ID": "ข้อมูลลูกค้าไม่ถูกต้อง กรุณาเลือกลูกค้าใหม่อีกครั้ง",
     "Insufficient stock": "สต็อกสินค้าไม่เพียงพอ กรุณาตรวจสอบจำนวนคงเหลืออีกครั้ง",
     "Order number already exists": "เลขที่ออเดอร์นี้ถูกใช้ไปแล้ว กรุณาลองใหม่อีกครั้ง",
     "Internal server error": "เกิดข้อผิดพลาดที่เซิร์ฟเวอร์ กรุณาลองใหม่อีกครั้ง",
@@ -66,6 +86,108 @@ export default function NewOrderPage() {
   const [items, setItems] = useState<LineItem[]>([emptyLineItem()]);
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // STEP 36 — customer selection state, entirely separate from the product/order state above.
+  // Optional throughout: an order with no customer selected must keep working exactly as before
+  // (existing test requirement).
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [customerResults, setCustomerResults] = useState<CustomerOption[]>([]);
+  const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false);
+  const [customerSearchLoading, setCustomerSearchLoading] = useState(false);
+
+  const [showNewCustomerForm, setShowNewCustomerForm] = useState(false);
+  const [newCustomerForm, setNewCustomerForm] = useState(emptyNewCustomerForm);
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [customerFormError, setCustomerFormError] = useState("");
+
+  useEffect(() => {
+    if (!customerDropdownOpen) return;
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setCustomerSearchLoading(true);
+
+      try {
+        const query = customerSearch.trim()
+          ? `?search=${encodeURIComponent(customerSearch.trim())}`
+          : "";
+        const response = await fetch(`/api/customers${query}`, { cache: "no-store" });
+        const data = await response.json();
+
+        if (!cancelled && response.ok && data?.success) {
+          setCustomerResults(Array.isArray(data.data) ? data.data : []);
+        }
+      } catch {
+        // ค้นหาลูกค้าล้มเหลวไม่ใช่ error ที่ block การสร้างออเดอร์ — เงียบไว้ แค่ไม่แสดงผลลัพธ์
+      } finally {
+        if (!cancelled) setCustomerSearchLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [customerSearch, customerDropdownOpen]);
+
+  function selectCustomer(c: CustomerOption) {
+    setSelectedCustomer(c);
+    setCustomerDropdownOpen(false);
+    setCustomerSearch("");
+    setShowNewCustomerForm(false);
+  }
+
+  function clearSelectedCustomer() {
+    setSelectedCustomer(null);
+  }
+
+  function updateNewCustomerForm<K extends keyof typeof emptyNewCustomerForm>(
+    key: K,
+    value: (typeof emptyNewCustomerForm)[K]
+  ) {
+    setNewCustomerForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function submitNewCustomer() {
+    setCustomerFormError("");
+
+    if (!newCustomerForm.name.trim()) {
+      setCustomerFormError("กรุณาระบุชื่อลูกค้า");
+      return;
+    }
+
+    setCreatingCustomer(true);
+
+    try {
+      const response = await fetch("/api/customers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newCustomerForm.name.trim(),
+          phone: newCustomerForm.phone.trim() || null,
+          address: newCustomerForm.address.trim() || null,
+          district: newCustomerForm.district.trim() || null,
+          province: newCustomerForm.province.trim() || null,
+          postalCode: newCustomerForm.postalCode.trim() || null,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถเพิ่มลูกค้าได้");
+      }
+
+      selectCustomer(data.data);
+      setNewCustomerForm(emptyNewCustomerForm);
+      setShowNewCustomerForm(false);
+    } catch (err) {
+      setCustomerFormError(err instanceof Error ? err.message : "ไม่สามารถเพิ่มลูกค้าได้");
+    } finally {
+      setCreatingCustomer(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -204,6 +326,7 @@ export default function NewOrderPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          customerId: selectedCustomer ? selectedCustomer.id : null,
           items: realItems.map((item) => ({
             productId: item.productId,
             quantity: Number(item.quantity),
@@ -251,6 +374,193 @@ export default function NewOrderPage() {
             {productsError}
           </div>
         )}
+
+        {/* STEP 36 — customer selection, entirely optional. Existing orders with no customer must
+            keep working exactly as before, so this section never blocks order submission. */}
+        <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">👤 ลูกค้า (ถ้ามี)</h2>
+
+          {selectedCustomer ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <div>
+                <p className="text-sm font-semibold text-emerald-800">{selectedCustomer.name}</p>
+                {selectedCustomer.phone && (
+                  <p className="text-xs text-emerald-700">{selectedCustomer.phone}</p>
+                )}
+                {(selectedCustomer.address ||
+                  selectedCustomer.district ||
+                  selectedCustomer.province) && (
+                  <p className="text-xs text-emerald-700">
+                    {[
+                      selectedCustomer.address,
+                      selectedCustomer.district,
+                      selectedCustomer.province,
+                      selectedCustomer.postalCode,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  </p>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={clearSelectedCustomer}
+                className="rounded-xl border bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                เปลี่ยน
+              </button>
+            </div>
+          ) : (
+            <div className="mt-3">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={customerSearch}
+                  onChange={(e) => setCustomerSearch(e.target.value)}
+                  onFocus={() => setCustomerDropdownOpen(true)}
+                  placeholder="ค้นหาชื่อหรือเบอร์โทรลูกค้าที่มีอยู่แล้ว..."
+                  className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                />
+
+                {customerDropdownOpen && (
+                  <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border bg-white shadow-lg">
+                    {customerSearchLoading ? (
+                      <p className="p-3 text-sm text-slate-500">กำลังค้นหา...</p>
+                    ) : customerResults.length === 0 ? (
+                      <p className="p-3 text-sm text-slate-500">
+                        {customerSearch.trim() ? "ไม่พบลูกค้าที่ค้นหา" : "ยังไม่มีลูกค้าในระบบ"}
+                      </p>
+                    ) : (
+                      customerResults.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => selectCustomer(c)}
+                          className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-slate-50"
+                        >
+                          <span className="font-medium text-slate-900">{c.name}</span>
+                          {c.phone && <span className="ml-2 text-slate-500">{c.phone}</span>}
+                        </button>
+                      ))
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setCustomerDropdownOpen(false)}
+                      className="block w-full border-t px-3 py-2 text-left text-xs text-slate-400 hover:bg-slate-50"
+                    >
+                      ปิด
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNewCustomerForm((current) => !current);
+                  setCustomerDropdownOpen(false);
+                }}
+                className="mt-2 rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+              >
+                {showNewCustomerForm ? "ยกเลิกการเพิ่มลูกค้าใหม่" : "+ เพิ่มลูกค้าใหม่"}
+              </button>
+
+              {showNewCustomerForm && (
+                <div className="mt-3 rounded-xl border bg-slate-50 p-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        ชื่อลูกค้า *
+                      </label>
+                      <input
+                        type="text"
+                        value={newCustomerForm.name}
+                        onChange={(e) => updateNewCustomerForm("name", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        เบอร์โทร (ถ้ามี)
+                      </label>
+                      <input
+                        type="text"
+                        value={newCustomerForm.phone}
+                        onChange={(e) => updateNewCustomerForm("phone", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        ที่อยู่ (ถ้ามี)
+                      </label>
+                      <input
+                        type="text"
+                        value={newCustomerForm.address}
+                        onChange={(e) => updateNewCustomerForm("address", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        ตำบล/แขวง (ถ้ามี)
+                      </label>
+                      <input
+                        type="text"
+                        value={newCustomerForm.district}
+                        onChange={(e) => updateNewCustomerForm("district", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        จังหวัด (ถ้ามี)
+                      </label>
+                      <input
+                        type="text"
+                        value={newCustomerForm.province}
+                        onChange={(e) => updateNewCustomerForm("province", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        รหัสไปรษณีย์ (ถ้ามี)
+                      </label>
+                      <input
+                        type="text"
+                        value={newCustomerForm.postalCode}
+                        onChange={(e) => updateNewCustomerForm("postalCode", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+                  </div>
+
+                  {customerFormError && (
+                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                      {customerFormError}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={submitNewCustomer}
+                    disabled={creatingCustomer}
+                    className="mt-3 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    {creatingCustomer ? "กำลังบันทึก..." : "บันทึกลูกค้า"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
 
         <section className="rounded-2xl border bg-white shadow-sm">
           <div className="border-b p-5">

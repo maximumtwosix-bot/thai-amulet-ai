@@ -190,8 +190,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // STEP 36 — optional; createOrder() validates existence itself (INVALID_CUSTOMER_ID/
+    // CUSTOMER_NOT_FOUND below) so a typo'd or deleted-in-between id fails the whole order
+    // atomically rather than silently writing a dangling customer_id.
+    const customerId =
+      body.customerId === undefined || body.customerId === null || body.customerId === ""
+        ? null
+        : Number(body.customerId);
+
     const result = createOrder({
       orderNumber,
+      customerId,
       channel,
       paymentMethod,
       shippingFee,
@@ -219,6 +228,27 @@ export async function POST(request: NextRequest) {
           error: "Product not found",
         },
         { status: 404 }
+      );
+    }
+
+    // STEP 36
+    if (message === "CUSTOMER_NOT_FOUND") {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Customer not found",
+        },
+        { status: 404 }
+      );
+    }
+
+    if (message === "INVALID_CUSTOMER_ID") {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid customer ID",
+        },
+        { status: 400 }
       );
     }
 

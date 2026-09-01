@@ -4727,6 +4727,100 @@ No defects found. No schema change, no dependency added, no source files modifie
 
 ---
 
+## STEP 45 — POST-GO-LIVE AUDIT (read-only)
+
+Date: 2026-09-01
+
+Read-only audit, no code/database changes. Confirmed git tree clean at `e47d201`; confirmed the
+STEP 39 IMPORTANT finding (duplicate-income-via-edit) and STEP 41 MINOR finding (orders route error
+leakage) both remain fixed with no regression — the `error: message` leak pattern now matches only
+in old `.step*-backup-*` files, never the live `orders/route.ts`. Zero `TODO`/`FIXME` anywhere in
+`src/`. Scheduled Task `thai-amulet-backup` healthy (`LastTaskResult: 0`). One new MINOR observation:
+16 backup folders had accumulated (818.66 MB total, `public/generated/` copied in full each time) —
+informational only, consistent with STEP 30/33's already-accepted, explicitly deferred retention
+decision; no action taken.
+
+**STEP 45 STATUS: PASS (audit only, no implementation)**
+
+---
+
+## STEP 46 — PRODUCTS AUDIT + VISUAL FIX
+
+Date: 2026-09-01
+
+**Reported problems**: (1) test/newly-created products on `/products` could not be deleted; (2)
+`/products`'s background/colors/layout/theme did not visually match the rest of the back-office.
+
+**Audit (read-only, before any implementation)**:
+- **Delete behavior**: traced `deleteProduct()` (`src/app/products/page.tsx`) → `DELETE
+  /api/products?id=<id>` → `src/app/api/products/route.ts`. Confirmed the UI/API request format
+  matches exactly (query-param `id`, no mismatch) and `DELETE` is authenticated identically to
+  `GET`/`POST`/`PATCH` (`src/proxy.ts`'s `pathname === "/api/products"` rule is method-agnostic).
+  Live, read-only DB inspection showed **all 4 products currently in the database have at least one
+  reference row** (`ai_cost_ledger`, `inventory_movements`, `order_items`, `product_media`, or
+  `content_plans`). This is the deliberate, documented business rule from STEP 26.9/27.1
+  (`PRODUCT_REFERENCE_TABLES`/`findProductReferences()`/a real SQLite `FOREIGN KEY` constraint,
+  `foreign_keys` pragma enabled) — a product can only be deleted while it has zero history anywhere
+  in the system, specifically to prevent silent loss of real order/financial/inventory data.
+  **Conclusion: delete behavior is working exactly as designed, not a defect** — any product a user
+  interacts with in any way (a photo, a stock adjustment, an order, an AI-cost entry) permanently
+  gains a reference row and can only be edited or set to `stock: 0`/`out_of_stock` afterward, never
+  hard-deleted through the UI.
+- **Theme**: confirmed `/products` was the only back-office page not using the shared `min-h-screen
+  bg-slate-50 p-6` baseline that Finance/Tax/Orders (list/detail/new)/Customers/Inventory all share
+  byte-for-byte — it instead used a self-contained "amulet shop" design (`Noto_Serif_Thai`/
+  `Noto_Sans_Thai` Google Fonts, cream/gold custom hex palette, `rounded-md` cards) with no other
+  back-office page match, and was missing the "← กลับหน้าแรก" nav link the others have.
+
+**Approved scope**: visual fix only, `src/app/products/page.tsx` exclusively. Delete behavior,
+`src/app/api/products/route.ts`, `src/proxy.ts`, `src/lib/db.ts`, and every other back-office page
+were explicitly out of scope and confirmed untouched.
+
+**Implementation**: rewrote every `className` in `src/app/products/page.tsx` to the established
+slate/emerald/red/amber Tailwind token system (card `rounded-2xl border bg-white shadow-sm`, table
+`thead bg-slate-50 text-slate-600` / `tr border-t hover:bg-slate-50`, buttons `rounded-xl bg-slate-900
+.../ rounded-xl border ...`, status badges `bg-emerald-50`/`bg-amber-50`/`bg-red-50` — matching
+Inventory's own three-state badge exactly), removed the `Noto_Serif_Thai`/`Noto_Sans_Thai` font
+imports and all `fontFamily` usage, removed the page-unique decorative gold gradient bar and "THAI
+AMULET TH" eyebrow label, and added the "← กลับหน้าแรก" link to match the other six back-office pages.
+Every state variable, handler, `fetch()` call, HTTP method, and conditional was left untouched —
+verified by diffing every function name/`useState` hook/`fetch()` call/HTTP-method string between the
+backup and the edited file (zero differences).
+
+**Files changed**: `src/app/products/page.tsx` only (134 insertions, 179 deletions — styling-only).
+**No database/schema changes. No dependency changes. No financial/inventory logic changes** (the
+delete business rule, stock deduction, and cost-ledger references were read for the audit but never
+modified). **No changes to Video Studio, Voice Studio, Content Studio, or Social.**
+**Backup created**: `src/app/products/page.tsx.step46-backup-20260901-212457`.
+
+**Tested (real dev server, real browser via chrome-devtools MCP)**:
+1. `pnpm exec tsc --noEmit` → **PASS**. `pnpm run build` → **PASS**, route list unchanged.
+2. Page loads with the correct slate back-office theme, zero console errors.
+3. Add Product form, Edit Product (correct pre-fill), Stock Adjustment panel (correct current-stock
+   display), Image Viewer modal (open/navigate/close) — all **PASS**, visuals only changed.
+4. **Delete behavior regression, the critical check**: confirm dialog text identical; delete attempt
+   still correctly blocked with the exact same reference-based `409` message
+   (`ประวัติต้นทุน AI, ประวัติการเคลื่อนไหวสต็อก`), now shown in the new red banner style only — **PASS,
+   completely unchanged**.
+5. Mobile viewport (390px width) — **PASS**, no horizontal page overflow; the table's pre-existing
+   `overflow-x-auto` wrapper (untouched) correctly contains the wide table.
+6. Console: only pre-existing accessibility "[issue]" notices (identical count before/after) and the
+   same routine `409` network log + the app's own unmodified `console.error(err)` inside
+   `deleteProduct()`'s catch block — no new errors.
+
+**Defects found**: none — the reported "cannot delete" behavior was confirmed working as designed,
+not a bug.
+
+**Files changed**: `src/app/products/page.tsx`. `PROJECT_STATUS.md` updated with this entry (and
+STEP 45's, retroactively, same convention as STEP 35/36, 39/40, 41/42, 43/44).
+`PROJECT_CHECKPOINT.md` not touched, per instructions.
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**STEP 46 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

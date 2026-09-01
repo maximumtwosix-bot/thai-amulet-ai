@@ -4566,9 +4566,117 @@ modified (only reused/reduplicated-away, per the shared-helper extraction above)
 
 **Git**: nothing committed, nothing pushed, per instructions.
 
-**No STEP 41 was started.**
-
 **STEP 40 STATUS: PASS**
+
+---
+
+## STEP 41 — FINAL BACK-OFFICE PRODUCTION READINESS AUDIT (read-only)
+
+Date: 2026-09-01
+
+Read-only audit, no code/database changes, per its own explicit instructions (this file itself was
+not to be modified during the audit — no entry was added at the time, same convention as STEP 35/39).
+Overall readiness: **READY WITH MINOR ITEMS**. Zero BLOCKING findings. Zero new IMPORTANT findings —
+the one from STEP 39 (duplicate-income-via-edit) was re-confirmed still fixed via a fresh live
+reproduction (`409`, database unchanged). A live, whole-database relationship/arithmetic scan found
+zero orphaned records and zero inconsistencies across every FK relationship and `orders.total`
+arithmetic check. Security re-verified live: forged and tampered (both corrupted-signature and
+payload/signature-mismatch) session cookies all correctly rejected against a real valid-cookie
+baseline; cross-transaction attachment access blocked with live evidence (404, no leakage); fake-image
+upload rejected by magic-byte content verification; SQL-injection-shaped search input safely
+parameterized. Backup mechanism and the Windows Scheduled Task both re-verified live and working
+(`LastTaskResult: 0`); full 8-step recovery procedure confirmed documented in
+`docs/BACKUP_AND_RECOVERY.md`.
+
+One MINOR finding (new): `POST /api/orders`'s catch-all error fallback (`src/app/api/orders/route.ts`)
+returned the raw internal error message string to the client at `500` instead of following the
+generic-message convention every other route in the codebase already uses — reachable via a discount
+exceeding the order total (`INVALID_ORDER_TOTAL`, unmapped). No secrets/stack-trace exposure; the
+underlying business rule itself was already correctly enforced (no negative-total order could ever be
+created). Recommended STEP 42, scoped narrowly to this one fix.
+
+Other MINOR/ACCEPTABLE items carried over unchanged from STEP 39 (order-status-change errors
+untranslated; no customer delete UI; `.step*-backup-*` clutter not gitignored; local backup retention
+undecided; `data/app.db`; `/costs` unauthenticated; AI Slip Extraction never auto-links orders; home
+dashboard unauthenticated-but-static; COD/Return relies on manual expense entry) — none require
+action per this STEP's own classification criteria.
+
+**STEP 41 STATUS: PASS (audit only, no implementation) — 1 MINOR finding, addressed in STEP 42**
+
+---
+
+## STEP 42 — ORDERS ROUTE ERROR LEAKAGE FIX
+
+Date: 2026-09-01
+
+Scope: close exactly the one MINOR gap STEP 41 found — `POST /api/orders`'s catch-all error handler
+leaked the raw internal error message to the client instead of a safe generic response. Strictly
+scoped to `src/app/api/orders/route.ts` only, per instructions.
+
+**Scope check before editing**: confirmed via `Select-String`/grep that the leak was the final
+`catch` fallback (`{ error: message }` at `500`, where `message` is the raw `error.message`), and
+confirmed the established convention to match by reading `orders/[id]/status/route.ts`'s fallback
+(`console.error(...)` + generic `"Internal server error"` at `500`) — the same pattern already used
+by `transactions/route.ts`, `transactions/[id]/route.ts`, `customers/route.ts`, `tax/summary/route.ts`,
+`profit/summary/route.ts`, `stock-adjustment/route.ts`, and this same file's own `GET` handler.
+
+**Approach**: replaced only the final fallback's `error: message` with `error: "Internal server error"`,
+leaving the existing `console.error("Create order error:", error)` (server-side logging, unchanged)
+and all 5 specifically-mapped error branches above it (`PRODUCT_NOT_FOUND` → 404, `CUSTOMER_NOT_FOUND`
+→ 404, `INVALID_CUSTOMER_ID` → 400, `INSUFFICIENT_STOCK` → 409, duplicate order number → 409) completely
+untouched. The `try` block (order creation itself) and the entire `GET` handler were not touched at all.
+
+**New files**: none. **Modified**: `src/app/api/orders/route.ts` only. **No dependencies added. No
+database schema change. No business logic changed** (stock deduction, automatic income transaction,
+order status workflow, customer handling, cancellation — all untouched, confirmed by re-reading the
+diff before testing).
+**Backup created**: `src/app/api/orders/route.ts.step42-backup-<timestamp>`.
+
+**Tested (real dev server, real browser via chrome-devtools MCP + curl; a fresh `pnpm backup` was run
+immediately before testing)**:
+
+Baseline: `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+transaction_attachments:0, customers:0, ai_cost_ledger:10`; product 3 stock `13`/`active`; order id 1
+untouched throughout.
+
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**. `pnpm.cmd run build` → **compiled successfully**, route
+   list unchanged.
+2. **Authentication regression**: unauthenticated `POST /api/orders` → `401`; unauthenticated
+   `GET /api/orders` → `401` — **PASS**.
+3. **Valid order creation still succeeds**: `201`, order created normally with correct total/items —
+   **PASS**.
+4. **Existing pre-catch validation unchanged**: empty items array → `400 "Order must contain at least
+   one item"` — **PASS**.
+5. **Existing mapped errors unchanged**: nonexistent product → `404 "Product not found"`; quantity
+   exceeding stock → `409 "Insufficient stock"`; duplicate order number → `409 "Order number already
+   exists"` — all three **PASS**, byte-for-byte identical to before.
+6. **The fix, confirmed live**: a discount exceeding the order total (previously leaked the raw
+   `INVALID_ORDER_TOTAL` constant) now returns `500 {"success":false,"error":"Internal server error"}`
+   — **PASS**. Confirmed no stray order was created by the rejected attempt (order list showed only
+   the one valid test order plus historical order id 1) — the underlying business rule was already
+   correctly enforced before this fix; only the client-facing error text/consistency changed.
+7. **Full regression, zero console errors on every page**: `/orders`, `/finance`, `/tax`, `/customers`
+   — **PASS**. API regression: `GET /api/profit/summary`, `GET /api/tax/summary` both `200` — **PASS**.
+
+**Cleanup**: the one valid test order (and its `order_items`/`inventory_movements`/automatic income
+transaction) was deleted by exact id via a temporary script (deleted immediately after use); product 3
+stock restored to `13`. Final table counts and field values verified identical to baseline; order id 1
+was never touched by either the tests or the cleanup.
+
+**Defects found**: none beyond the one STEP 41 already identified and this STEP fixed.
+
+**Files changed**: `src/app/api/orders/route.ts`. `PROJECT_STATUS.md` updated with this entry (and
+STEP 41's, retroactively, same convention as STEP 35/36 and STEP 39/40). `PROJECT_CHECKPOINT.md` not
+touched, per instructions. Video Studio, AI Video, Voice Studio, Social, Content Studio — not touched.
+Order business logic, stock deduction, automatic income transaction, order status workflow, customer
+handling, cancellation behavior, Finance, Tax, Profit, Transactions, Customers, and Backup were all
+read from (for regression) but not modified.
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**No STEP 43 was started.**
+
+**STEP 42 STATUS: PASS**
 
 ---
 

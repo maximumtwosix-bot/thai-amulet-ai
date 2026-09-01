@@ -278,10 +278,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // STEP 42 — every other route in this codebase (orders/[id]/status, transactions,
+    // customers, tax/summary, profit/summary, stock-adjustment, and this file's own GET above)
+    // ends its unmapped-error fallback with this exact generic message, never the raw thrown
+    // `message` — that raw string (e.g. an internal constant like INVALID_ORDER_TOTAL, reachable
+    // when a discount exceeds the order total) was leaking to the client here. console.error above
+    // already logs the real error server-side, so nothing about diagnosability is lost.
     return NextResponse.json(
       {
         success: false,
-        error: message,
+        error: "Internal server error",
       },
       { status: 500 }
     );

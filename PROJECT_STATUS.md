@@ -3914,6 +3914,147 @@ status, and isn't something `git status` will ever show.
 
 ---
 
+## STEP 34 — ORDER-LINKED TRANSACTION INTEGRITY GUARDS
+
+Date: 2026-09-01
+
+Scope: closes three data-integrity gaps in the order↔transaction linkage that STEP 31/32 shipped
+without originally testing (found by this session's own STEP 34 pre-audit, verified against current
+code, not assumed): (1) a transaction could be deleted with one click and zero confirmation even when
+it was the sole income record for a paid/shipped/completed order; (2) nothing stopped a second income
+transaction being manually created against an order that already had one; (3) Finance/Tax had no
+visibility into a linked order's status, so a cancelled order's still-counted income (an explicit,
+approved STEP 32 design decision — cancellation must never touch Finance/Tax totals) was invisible
+without clicking through to the order.
+
+**Audit before implementing**: re-read `src/lib/transactions.ts`, `src/app/api/transactions/route.ts`,
+`src/app/api/transactions/[id]/route.ts`, `src/lib/orders.ts`, `src/lib/orderStatus.ts`,
+`src/lib/taxSummary.ts`, `src/app/finance/page.tsx`, `src/app/tax/page.tsx`, and `PROJECT_STATUS.md`
+fresh rather than trusting prior summaries. Confirmed (again, this project uses raw SQL via
+`better-sqlite3`, no Prisma) exactly how each piece works: `createTransaction()` validates
+`productId`/`orderId` existence but never checked for a prior income link; `deleteTransaction()` had
+zero awareness of `orderId` at all; `listTransactions()`/`getTaxSummary()` selected `transactions`
+columns only, no join to `orders`. Confirmed `createOrder()`'s STEP 31 automatic-income call and
+`updateOrderStatus()`'s STEP 32 logic were both otherwise untouched candidates to build on top of,
+not replace.
+
+**Approach**:
+
+1. **Duplicate-income guard** (`src/lib/transactions.ts` `createTransaction()`) — when
+   `transactionType === "income"` and `orderId` is set, the check-then-insert is wrapped in
+   `db.transaction()` and looks for an existing `transactions` row with the same `order_id` and
+   `transaction_type = 'income'`; if found, throws `DUPLICATE_ORDER_INCOME` (mapped to `409` with a
+   Thai message in `src/app/api/transactions/route.ts`). Only income is restricted — an order can
+   still have any number of linked *expense* transactions (e.g. a return-shipping cost). better-
+   sqlite3 automatically uses a SAVEPOINT (documented nested-transaction support) when this runs from
+   inside `createOrder()`'s already-open `db.transaction()` (STEP 31's automatic path) — that path is
+   a guaranteed no-op there, since a brand-new order can never already have an income transaction; no
+   other code creates one. Live-tested under a genuine race (two truly concurrent requests against an
+   order with zero prior income) — exactly one succeeded.
+2. **Deletion guard** (`deleteTransaction()`) — now takes `options?.confirmOrderLinked`; if the
+   transaction's `orderId` is set and that flag isn't `true`, throws
+   `ORDER_LINKED_CONFIRMATION_REQUIRED` (mapped to `409` in
+   `src/app/api/transactions/[id]/route.ts`) instead of deleting anything. The route reads
+   `?confirm=order-linked` from the query string. This is the real, server-side gate — the UI's
+   `window.confirm()` (in `finance/page.tsx`'s `removeTransaction()`, now naming the specific linked
+   order in the dialog text) is additional UX protection on top of it, not a substitute; a direct API
+   call without the query param is rejected regardless of what any UI does. Unlinked transactions
+   (`orderId` null) delete exactly as before, no confirmation needed.
+3. **Linked order status visibility** (display-only) — `listTransactions()` and `getTaxSummary()`'s
+   transaction-row query both gained a `LEFT JOIN orders o ON o.id = t.order_id`, selecting
+   `o.status`/`o.order_number` as `linked_order_status`/`linked_order_number`. `TransactionRow` and
+   `TaxSummaryTransaction` both gained `linkedOrderStatus`/`linkedOrderNumber` fields (null for every
+   other query path — `getById()`/single-row create/update never join, which is harmless since
+   nothing currently reads the field from those paths). `finance/page.tsx` and `tax/page.tsx` each
+   import the shared `ORDER_STATUS_LABELS`/`OrderStatus` from `src/lib/orderStatus.ts` (zero-import,
+   client-safe — same file STEP 32 created for exactly this constraint) and render a badge next to
+   any order-linked transaction, turning red specifically when `linkedOrderStatus === "cancelled"`.
+   **No total, sum, or the underlying transaction row is touched by this join** — verified live (see
+   Test E below) that Tax's `totalIncome` is byte-for-byte identical before and after cancelling an
+   order with a linked income transaction, preserving the STEP 32 rule exactly.
+
+**New files**: none. **Modified**: `src/lib/transactions.ts`, `src/app/api/transactions/route.ts`,
+`src/app/api/transactions/[id]/route.ts`, `src/lib/taxSummary.ts`, `src/app/finance/page.tsx`,
+`src/app/tax/page.tsx`. **No dependencies added. No database schema change** — every guard is
+read-then-validate logic against existing columns (`transactions.order_id`, `orders.status`); the two
+new joins select existing columns only.
+**Backups created**: `.step34-backup-20260901-164103` copies of all 6 modified files.
+
+**Tested (real dev server, real browser via chrome-devtools MCP + curl for precise/concurrent
+requests; a fresh `pnpm backup` — STEP 30 — was run immediately before testing)**:
+
+Baseline: `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+transaction_attachments:0, customers:0, ai_cost_ledger:10`; product 3 stock `13`; order id 1 status
+`pending`, `total:299`.
+
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**. `pnpm.cmd run build` → **compiled successfully**.
+2. **Authentication regression (Test F)**, checked *before* any functional testing: unauthenticated
+   `POST /api/transactions`, `DELETE /api/transactions/1`, `PATCH /api/orders/1/status` → all `401`;
+   unauthenticated `GET /finance` → `307` — **PASS**.
+3. **Test A (normal order → income)**: created a fresh order → exactly one income transaction
+   auto-created, unchanged from STEP 31 — **PASS**.
+4. **Test B (duplicate income)**: manual `POST /api/transactions` with the same `orderId` as an
+   existing income transaction → `409` with the Thai message, transaction count for that order stayed
+   at `1` — **PASS**. Confirmed an *expense* transaction on the same order is still allowed (`201`) —
+   **PASS**, guard is income-only as designed. **Concurrent duplicate protection**: two genuinely
+   simultaneous `POST` requests (backgrounded shell jobs) against an order with **zero** prior income
+   (a `total:0` order, which skips STEP 31's auto-creation) → exactly one succeeded, the other
+   correctly `409`'d — **PASS**, proving the SAVEPOINT-wrapped check-then-insert is race-safe, not
+   just correct for sequential requests.
+5. **Test C (deletion guard)**: unlinked transaction deleted with no `confirm` param → `200`,
+   unchanged behavior — **PASS**. Linked transaction deleted *without* `?confirm=order-linked` →
+   `409`, transaction and its linked order both verified unchanged afterward — **PASS**. Same
+   transaction deleted *with* `?confirm=order-linked` → `200`, deleted, and the linked order verified
+   completely unchanged (`status`/`total`/`order_number` all identical to before) — **PASS**.
+   **Real browser UI**: clicking "ลบ" on an order-linked row opened a native `confirm()` dialog naming
+   the exact order (`"...ผูกกับออเดอร์ STEP34-TEST-3-ZERO (#18)..."`); dismissing it left the
+   transaction untouched (verified in DB); clicking "ลบ" again and accepting deleted it, list
+   refreshed, order confirmed untouched — **PASS**, zero console errors throughout.
+6. **Test D (order status display)**: advanced one order through `pending→paid→shipped→completed`
+   via the existing STEP 32 endpoint, checking `GET /api/transactions?orderId=...` after every step —
+   `linkedOrderStatus` correctly tracked each transition live — **PASS**. Verified in the real browser
+   on both `/finance` and `/tax`: badges render with the correct label at every status, screenshotted
+   — **PASS**, zero console errors on either page.
+7. **Test E (cancellation accounting boundary)**: recorded Tax `totalIncome` before cancelling an
+   order with a linked income transaction (`249`), cancelled it, re-checked — **identical (`249`)** —
+   **PASS**. The linked transaction itself verified unchanged in the DB (`amount`/`transaction_type`
+   untouched), with `linkedOrderStatus` now correctly reporting `cancelled` — **PASS**. Real browser:
+   the cancelled order's badge rendered in red on both Finance (screenshotted) and Tax (screenshotted,
+   using a second cancelled example on the expense side too, confirming the same non-reversal
+   behavior generically) — **PASS**.
+8. **Regression (Test G)**: `GET /api/health`, `/api/products`, `/api/orders`, `/api/orders/1`,
+   `/api/inventory/movements`, `/api/transactions`, `/api/tax/summary`, `/api/costs/summary` → all
+   `200`. `/products`, `/inventory`, `/orders`, `/orders/new`, `/finance`, `/tax` → all `200`, zero
+   console errors (checked individually per page). Also spot-checked `/orders/[id]` (not in the
+   required list, but closely related to this STEP) — loads correctly, correctly shows "ยังไม่มีรายรับ
+   ที่บันทึกไว้" after its income transaction was deleted in Test C — **PASS**.
+9. **Historical order id 1 verified untouched** throughout all of the above — `status:'pending'`,
+   `order_number`/`total` unchanged — **PASS**.
+
+**Cleanup**: all 3 test orders (ids 16-18), their 3 `order_items` rows, their remaining 2 transactions
+(2 others were deleted mid-test as part of Test C itself), and all 3 `inventory_movements` rows were
+deleted by exact id via a temporary script (deleted immediately after use). Product 3 stock restored
+from `10` back to `13`. **Final table counts verified identical to baseline** in every column; order
+id 1 was never touched by either the tests or the cleanup.
+
+**Defects found**: none. One known, documented limitation *not* fixed in this STEP, staying within
+the approved scope: `updateTransaction()` (the Finance "แก้ไข" edit path) is not guarded against being
+used to retroactively turn an existing expense transaction into a second income transaction for an
+already-covered order — only `createTransaction()` was in scope. Noted here for visibility, not
+addressed.
+
+**Files changed**: see New/Modified above. `PROJECT_STATUS.md` updated with this entry.
+`PROJECT_CHECKPOINT.md` not touched, per instructions. Video Studio, AI Video, Voice Studio, Social,
+Content Studio — not touched at all in this STEP.
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**No STEP 35 was started.**
+
+**STEP 34 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

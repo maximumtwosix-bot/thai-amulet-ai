@@ -33,6 +33,17 @@ function errorToResponse(error: unknown) {
     );
   }
 
+  // STEP 34 — duplicate-income-per-order guard (src/lib/transactions.ts createTransaction())
+  if (message === "DUPLICATE_ORDER_INCOME") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "ออเดอร์นี้มีรายการรายรับที่บันทึกไว้แล้ว ไม่สามารถสร้างรายรับซ้ำสำหรับออเดอร์เดียวกันได้",
+      },
+      { status: 409 }
+    );
+  }
+
   console.error("Transactions API error:", error);
 
   return NextResponse.json(

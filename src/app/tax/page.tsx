@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import { ORDER_STATUS_LABELS, type OrderStatus } from "@/lib/orderStatus";
 
 // Local label maps — deliberately duplicated rather than imported from @/lib/transactions or
 // @/lib/taxSummary (both touch server-only db.ts / better-sqlite3). This is a Client Component;
@@ -94,6 +95,9 @@ type SummaryTransaction = {
   paymentMethod: string | null;
   notes: string | null;
   hasAttachment: boolean;
+  // STEP 34 — display-only, from getTaxSummary()'s order-status join; null unless orderId is set.
+  linkedOrderStatus: OrderStatus | null;
+  linkedOrderNumber: string | null;
 };
 
 type TaxSummary = {
@@ -414,6 +418,7 @@ export default function TaxPage() {
                         <th className="p-4">ประเภท</th>
                         <th className="p-4">หมวดหมู่</th>
                         <th className="p-4">รายละเอียด</th>
+                        <th className="p-4">ออเดอร์ที่เกี่ยวข้อง</th>
                         <th className="p-4">จำนวนเงิน</th>
                         <th className="p-4">ไฟล์แนบ</th>
                       </tr>
@@ -439,6 +444,28 @@ export default function TaxPage() {
                             {categoryLabel(t.transactionType, t.category)}
                           </td>
                           <td className="p-4 max-w-xs text-slate-600">{t.description || "-"}</td>
+                          <td className="p-4">
+                            {/* STEP 34 — display-only order status flag; never affects any total
+                                on this page. Cancelled shown in red so it's obvious the amount to
+                                the right still counts toward รายรับรวม/สุทธิ per the STEP 32 rule
+                                that cancellation never changes Finance/Tax totals. */}
+                            {t.orderId ? (
+                              <span
+                                className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                                  t.linkedOrderStatus === "cancelled"
+                                    ? "bg-red-100 text-red-700"
+                                    : "bg-slate-100 text-slate-500"
+                                }`}
+                              >
+                                #{t.orderId}
+                                {t.linkedOrderStatus
+                                  ? ` (${ORDER_STATUS_LABELS[t.linkedOrderStatus]})`
+                                  : ""}
+                              </span>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
                           <td
                             className={`p-4 font-semibold ${
                               t.transactionType === "income" ? "text-emerald-600" : "text-red-600"

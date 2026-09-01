@@ -53,6 +53,12 @@ export interface TaxSummaryTransaction {
   paymentMethod: string | null;
   notes: string | null;
   hasAttachment: boolean;
+  // STEP 34 — display-only, from a LEFT JOIN against orders; never affects totalIncome/
+  // totalExpense/netIncome/monthlyBreakdown, all of which are computed above from plain SUM(amount)
+  // queries untouched by this STEP. Lets the Tax page flag a cancelled order's income clearly
+  // without reversing or excluding it, per the STEP 32 rule that cancellation never changes totals.
+  linkedOrderStatus: string | null;
+  linkedOrderNumber: string | null;
 }
 
 export interface TaxSummaryResult {
@@ -277,6 +283,9 @@ export function getTaxSummary(params: TaxSummaryParams): TaxSummaryResult {
       net: income - expense,
     }));
 
+  // STEP 34 — LEFT JOIN orders so the Tax transaction list can show each order-linked row's current
+  // order status (display-only — see TaxSummaryTransaction above; none of the SUM()-based totals
+  // computed earlier in this function touch this join at all).
   const transactionRows = db
     .prepare(
       `
@@ -292,8 +301,11 @@ export function getTaxSummary(params: TaxSummaryParams): TaxSummaryResult {
         t.order_id,
         t.payment_method,
         t.notes,
-        (SELECT COUNT(*) FROM transaction_attachments ta WHERE ta.transaction_id = t.id) AS attachment_count
+        (SELECT COUNT(*) FROM transaction_attachments ta WHERE ta.transaction_id = t.id) AS attachment_count,
+        o.status AS linked_order_status,
+        o.order_number AS linked_order_number
       FROM transactions t
+      LEFT JOIN orders o ON o.id = t.order_id
       WHERE t.transaction_date BETWEEN ? AND ?
       ORDER BY t.transaction_date DESC, t.id DESC
       `
@@ -311,6 +323,8 @@ export function getTaxSummary(params: TaxSummaryParams): TaxSummaryResult {
     payment_method: string | null;
     notes: string | null;
     attachment_count: number;
+    linked_order_status: string | null;
+    linked_order_number: string | null;
   }>;
 
   const transactions: TaxSummaryTransaction[] = transactionRows.map((row) => ({
@@ -326,6 +340,8 @@ export function getTaxSummary(params: TaxSummaryParams): TaxSummaryResult {
     paymentMethod: row.payment_method,
     notes: row.notes,
     hasAttachment: row.attachment_count > 0,
+    linkedOrderStatus: row.linked_order_status,
+    linkedOrderNumber: row.linked_order_number,
   }));
 
   return {

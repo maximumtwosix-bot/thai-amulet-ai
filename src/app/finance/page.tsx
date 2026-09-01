@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import { ORDER_STATUS_LABELS, type OrderStatus } from "@/lib/orderStatus";
 
 // Local copies of the STEP 19 constant lists — deliberately NOT imported from @/lib/transactions,
 // because that file also exports STEP 20's DB-touching CRUD functions (`import db from "./db"`),
@@ -71,6 +72,10 @@ type TransactionRow = {
   notes: string | null;
   createdAt: string;
   updatedAt: string;
+  // STEP 34 — display-only, from GET /api/transactions' order-status join; null unless orderId is
+  // set and that order still exists.
+  linkedOrderStatus: OrderStatus | null;
+  linkedOrderNumber: string | null;
 };
 
 type ProductOption = { id: number; name: string };
@@ -655,18 +660,34 @@ export default function FinancePage() {
     }
   }
 
-  async function removeTransaction(id: number) {
-    setDeletingId(id);
+  // STEP 34 — deleting a transaction linked to an order requires explicit confirmation naming that
+  // order. This is UX protection only — the real gate is server-side in deleteTransaction()
+  // (src/lib/transactions.ts), which rejects the request outright without ?confirm=order-linked
+  // regardless of what the UI does or doesn't ask.
+  async function removeTransaction(t: TransactionRow) {
+    if (t.orderId) {
+      const orderLabel = t.linkedOrderNumber ? `${t.linkedOrderNumber} (#${t.orderId})` : `#${t.orderId}`;
+      const confirmed = window.confirm(
+        `รายการนี้ผูกกับออเดอร์ ${orderLabel} — ลบแล้วออเดอร์จะไม่มีรายรับที่บันทึกไว้อีกต่อไป (ตัวออเดอร์เองจะไม่ถูกแก้ไข) ยืนยันการลบหรือไม่?`
+      );
+
+      if (!confirmed) return;
+    }
+
+    setDeletingId(t.id);
 
     try {
-      const response = await fetch(`/api/transactions/${id}`, { method: "DELETE" });
+      const url = t.orderId
+        ? `/api/transactions/${t.id}?confirm=order-linked`
+        : `/api/transactions/${t.id}`;
+      const response = await fetch(url, { method: "DELETE" });
       const data = await response.json();
 
       if (!response.ok || !data?.success) {
         throw new Error(data?.error || "ไม่สามารถลบรายการได้");
       }
 
-      if (editingId === id) {
+      if (editingId === t.id) {
         cancelEdit();
       }
 
@@ -1301,10 +1322,23 @@ export default function FinancePage() {
                             either way it's a meaningful "this entry is tied to an order" signal, so
                             it's shown generically rather than trying to detect "auto-generated"
                             specifically (which would need parsing notes text — brittle, and not
-                            more informative to the user than just showing the order link itself). */}
+                            more informative to the user than just showing the order link itself).
+                            STEP 34 — now also shows the linked order's current status, in red when
+                            cancelled, so a cancelled order's still-counted income (per the STEP 32
+                            rule that cancellation never touches Finance/Tax totals) is obvious at a
+                            glance without needing to click through to the order. */}
                         {t.orderId && (
-                          <span className="ml-2 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+                          <span
+                            className={`ml-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                              t.linkedOrderStatus === "cancelled"
+                                ? "bg-red-100 text-red-700"
+                                : "bg-slate-100 text-slate-500"
+                            }`}
+                          >
                             🔗 ออเดอร์ #{t.orderId}
+                            {t.linkedOrderStatus
+                              ? ` (${ORDER_STATUS_LABELS[t.linkedOrderStatus]})`
+                              : ""}
                           </span>
                         )}
                       </td>
@@ -1344,7 +1378,7 @@ export default function FinancePage() {
                               : "ไฟล์แนบ"}
                           </button>
                           <button
-                            onClick={() => removeTransaction(t.id)}
+                            onClick={() => removeTransaction(t)}
                             disabled={deletingId === t.id}
                             className="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
                           >

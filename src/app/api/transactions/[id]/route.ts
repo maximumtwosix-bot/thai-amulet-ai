@@ -58,6 +58,20 @@ function errorToResponse(error: unknown) {
     );
   }
 
+  // STEP 34 — deleteTransaction() (src/lib/transactions.ts) requires ?confirm=order-linked for any
+  // transaction with orderId set; this is the server-side half of that guard, not just the UI's
+  // confirm() dialog.
+  if (message === "ORDER_LINKED_CONFIRMATION_REQUIRED") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "รายการนี้ผูกกับออเดอร์ กรุณายืนยันการลบอีกครั้ง",
+        requiresConfirmation: true,
+      },
+      { status: 409 }
+    );
+  }
+
   console.error("Transaction detail API error:", error);
 
   return NextResponse.json(
@@ -146,7 +160,13 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       );
     }
 
-    const deletedAttachments = deleteTransaction(id);
+    // STEP 34 — required only when the transaction being deleted is order-linked; see
+    // deleteTransaction() in src/lib/transactions.ts. Ignored (harmlessly) for unlinked
+    // transactions, which continue to delete exactly as before with no confirmation needed.
+    const { searchParams } = new URL(request.url);
+    const confirmOrderLinked = searchParams.get("confirm") === "order-linked";
+
+    const deletedAttachments = deleteTransaction(id, { confirmOrderLinked });
 
     // STEP 21 — ลบไฟล์แนบจริงบนดิสก์แบบ best-effort (record ถูกลบแล้วไม่ว่ากรณีนี้จะสำเร็จหรือไม่)
     for (const attachment of deletedAttachments) {

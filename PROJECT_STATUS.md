@@ -4428,9 +4428,147 @@ profit calculation logic were all read from but not modified.
 
 **Git**: nothing committed, nothing pushed, per instructions.
 
-**No STEP 39 was started.**
-
 **STEP 38 STATUS: PASS**
+
+---
+
+## STEP 39 — BACK-OFFICE READINESS AUDIT (read-only)
+
+Date: 2026-09-01
+
+Read-only audit, no code/database changes, per its own explicit instructions (this file itself was
+not to be modified during the audit — no entry was added at the time, same convention as STEP 35).
+Confirmed the core daily workflow (login → products → stock → order → customer → status → income →
+Finance/Tax/Profit → order-detail visibility → backup) is functionally sound: authentication/proxy
+coverage correct across every in-scope back-office page and API, empty/loading states present and
+correct, order-creation error messages already translated to Thai (including `Insufficient stock`/
+`Customer not found`, added in earlier STEPs), Windows Scheduled Backup Task confirmed registered and
+actually succeeding (`LastTaskResult: 0`), `pnpm run backup` confirmed working. Zero BLOCKING findings.
+
+One IMPORTANT finding, confirmed live (not just from source): `updateTransaction()`
+(`src/lib/transactions.ts`, used by `PATCH /api/transactions/[id]` — the same endpoint Finance's edit
+form calls) had no equivalent of STEP 34's duplicate-income-per-order guard, unlike `createTransaction()`.
+Reproduced live: an order with an existing automatic income transaction, then `PATCH`ing an unrelated
+transaction's `orderId` to that same order while also setting `transactionType: "income"` succeeded
+(`200`), leaving the order with two income rows — which then silently doubled that order's COGS in
+`GET /api/profit/summary` (JOIN matched the same `order_items` row once per income transaction).
+Reachable through the Finance page's existing edit form, not just a raw API call. Test data fully
+cleaned up afterward, baseline verified restored.
+
+Also noted (MINOR/ACCEPTABLE, none blocking): order-status-change errors show untranslated English
+text (low reachability — the UI only ever offers valid transitions); no delete UI for customers
+(intentionally out of STEP 36's scope); 66 accumulated `.step*-backup-*` files under `src/` are not
+`.gitignore`d (mitigated in practice by this project's consistent use of explicit `git add <file>`
+lists, never `-A`/`.`); local backup folders accumulate with no retention policy (STEP 33's own
+explicitly deferred decision); `data/app.db` stray 0-byte file (already documented/accepted in
+STEP 30); `/costs` + `/api/costs/*` (AI cost dashboard, STEP 21) remain unauthenticated — Content/
+Video-Studio-adjacent, explicitly out of this STEP's scope.
+
+Recommended next step: STEP 40, scoped narrowly to just the IMPORTANT finding above.
+
+**STEP 39 STATUS: PASS (audit only, no implementation) — 1 IMPORTANT finding, addressed in STEP 40**
+
+---
+
+## STEP 40 — UPDATE TRANSACTION DUPLICATE-INCOME GUARD
+
+Date: 2026-09-01
+
+Scope: close exactly the one IMPORTANT gap STEP 39 found — `updateTransaction()` could be used to
+turn any transaction into a second `income` row linked to an order that already had one, bypassing
+STEP 34's guard (which only ever covered `createTransaction()`). Strictly scoped to
+`src/lib/transactions.ts` and `src/app/api/transactions/[id]/route.ts` only, per instructions.
+
+**Audit before implementing**: re-read `createTransaction()`'s existing STEP 34 guard (an inline
+`SELECT ... WHERE order_id = ? AND transaction_type = 'income'` check, run inside the same
+`db.transaction()` as the `INSERT`, for atomicity under concurrent requests) to reuse its exact
+business rule rather than re-deriving or duplicating it.
+
+**Approach**: extracted the inline check into one small shared helper,
+`assertNoDuplicateOrderIncome(orderId, excludeTransactionId?)` — `createTransaction()` now calls it
+with no exclusion (unchanged behavior, same query, same error, `DUPLICATE_ORDER_INCOME`);
+`updateTransaction()` now calls it with `excludeTransactionId: id` whenever the update's *resulting*
+type is `income` and its *resulting* `orderId` is non-null, so re-saving an order's own existing
+income transaction (e.g. correcting its amount) is never rejected as a false-positive duplicate of
+itself — only linking a genuinely different row to an order that already has income is rejected. The
+check + `UPDATE` are wrapped in one `db.transaction()`, mirroring the create path's atomicity.
+`src/app/api/transactions/[id]/route.ts`'s `errorToResponse()` gained one new mapping —
+`DUPLICATE_ORDER_INCOME` → `409`, identical Thai message to the existing create-path one in
+`src/app/api/transactions/route.ts`, for consistency. No other file was touched; no schema change.
+
+**New files**: none. **Modified**: `src/lib/transactions.ts`, `src/app/api/transactions/[id]/route.ts`.
+**No dependencies added. No database schema change.**
+**Backups created**: `src/lib/transactions.ts.step40-backup-<timestamp>`,
+`src/app/api/transactions/[id]/route.ts.step40-backup-<timestamp>`.
+
+**Tested (real dev server, real browser via chrome-devtools MCP + curl; a fresh `pnpm backup` was run
+immediately before testing)**:
+
+Baseline: `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+transaction_attachments:0, customers:0, ai_cost_ledger:10`; product 3 stock `13`/`active`; order id 1
+untouched throughout.
+
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**. `pnpm.cmd run build` → **compiled successfully**, route
+   list unchanged.
+2. **Authentication regression**: unauthenticated `PATCH /api/transactions/1` → `401`; unauthenticated
+   `GET /api/transactions` → `401` — **PASS**.
+3. **Exact STEP 39 reproduction, now fixed**: order with an existing automatic income transaction
+   (id 60, order 33) + an unrelated standalone expense transaction (id 61) → `PATCH`ing id 61 to
+   `{transactionType:"income", orderId:33}` → **`409`**, same Thai duplicate-income message as the
+   create path. Verified the database afterward: order 33 still had exactly 1 income transaction
+   (id 60, completely unchanged including `updated_at`); transaction 61 completely unchanged
+   (still `expense`, `orderId:null`, `updated_at` unchanged) — confirming the rejected request never
+   reached the `UPDATE` statement — **PASS**.
+4. **Positive test A** (self-update an order's own existing income transaction, amount only) →
+   `200` — **PASS**.
+5. **Positive test B** (expense → income for an order with no existing income) → `200` — **PASS**.
+6. **Positive test C** (income → expense) → `200` — **PASS** (rule only applies when the *resulting*
+   type is income).
+7. **Positive test D** (update an unrelated transaction, `orderId` stays null throughout) → `200` —
+   **PASS**.
+8. **Edge cases**: two standalone income transactions both with `orderId:null` never conflict with
+   each other — **PASS**. Nonexistent transaction id → `404 "Transaction not found"`, unchanged from
+   before — **PASS**. Nonexistent `orderId` → `404 "Order not found"`, unchanged from before (this
+   validation still runs before the new duplicate check) — **PASS**.
+9. **STEP 34 deletion guard regression**: unlinked transaction deletes without confirmation (`200`);
+   order-linked transaction delete without confirmation → `409` requiring confirmation, exactly as
+   before; with `?confirm=order-linked` → succeeds (`200`) — **PASS**, completely unaffected by this
+   STEP's changes.
+10. **Real browser, end-to-end UI verification**: reproduced the exact scenario through Finance's
+    actual "แก้ไข" edit form (not just the raw API) — selecting an order that already had income in
+    the "ออเดอร์ที่เกี่ยวข้อง" dropdown and saving displayed the same Thai duplicate-income error inline,
+    gracefully, via the form's existing error-banner mechanism (no UI code changes were needed) —
+    **PASS**. The only console entry was Chrome DevTools' standard "Failed to load resource: ...409"
+    network-status log line — confirmed via a side-by-side test that this same line appears for
+    *any* non-2xx fetch response (tested with an unrelated `404`), i.e. normal browser logging of the
+    HTTP response itself, not a JS/React error — consistent with how every prior STEP's "zero console
+    errors" checks have already treated routine 401/404/409 responses throughout this project.
+11. **Full regression, zero console errors on every page**: `/products`, `/inventory`, `/orders`,
+    `/orders/1`, `/customers`, `/tax`, `/finance` — **PASS**. API regression:
+    `/api/health`, `/api/products`, `/api/orders`, `/api/orders/1`, `/api/inventory/movements`,
+    `/api/transactions`, `/api/customers`, `/api/tax/summary`, `/api/profit/summary` all responded
+    correctly — **PASS**.
+
+**Cleanup**: all test orders/order_items/inventory_movements/transactions created during
+reproduction and positive testing were deleted by exact id via a temporary script (deleted
+immediately after use); product 3 stock restored to `13`. Final table counts and field values verified
+identical to baseline; order id 1 was never touched by either the tests or the cleanup.
+
+**Defects found**: none beyond the one STEP 39 already identified and this STEP fixed.
+
+**Files changed**: `src/lib/transactions.ts`, `src/app/api/transactions/[id]/route.ts`.
+`PROJECT_STATUS.md` updated with this entry (and STEP 39's, retroactively, same convention as
+STEP 35/36). `PROJECT_CHECKPOINT.md` not touched, per instructions. Video Studio, AI Video, Voice
+Studio, Social, Content Studio — not touched. `createTransaction()`'s guard, the STEP 34 deletion
+guard, order status workflow, the STEP 32 cancellation boundary, STEP 36 customer management, STEP 37
+profit calculation, and STEP 38 order-linked transaction visibility were all read from but not
+modified (only reused/reduplicated-away, per the shared-helper extraction above).
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**No STEP 41 was started.**
+
+**STEP 40 STATUS: PASS**
 
 ---
 

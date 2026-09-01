@@ -72,6 +72,20 @@ function errorToResponse(error: unknown) {
     );
   }
 
+  // STEP 40 — updateTransaction() (src/lib/transactions.ts) now applies the same STEP 34
+  // duplicate-income-per-order guard createTransaction() already had: editing a transaction into
+  // `income` linked to an order that already has a different income transaction is rejected here,
+  // same message/status as the create-path equivalent in src/app/api/transactions/route.ts.
+  if (message === "DUPLICATE_ORDER_INCOME") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "ออเดอร์นี้มีรายการรายรับที่บันทึกไว้แล้ว ไม่สามารถสร้างรายรับซ้ำสำหรับออเดอร์เดียวกันได้",
+      },
+      { status: 409 }
+    );
+  }
+
   console.error("Transaction detail API error:", error);
 
   return NextResponse.json(

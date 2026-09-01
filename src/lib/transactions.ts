@@ -190,6 +190,31 @@ function assertOrderExists(orderId: number): void {
   }
 }
 
+// STEP 34 — duplicate-income-per-order guard. Shared by createTransaction() and (STEP 40)
+// updateTransaction() so both paths enforce the identical rule via one query, not two copies of it.
+// `excludeTransactionId` lets a caller ignore the very row being updated, so re-saving an order's
+// own existing income transaction (unchanged or with only its amount/date/notes edited) is never
+// rejected as a false-positive duplicate of itself — only a genuinely different row linked to the
+// same order counts.
+function assertNoDuplicateOrderIncome(orderId: number, excludeTransactionId?: number): void {
+  const existingIncome =
+    excludeTransactionId === undefined
+      ? db
+          .prepare(
+            "SELECT id FROM transactions WHERE order_id = ? AND transaction_type = 'income' LIMIT 1"
+          )
+          .get(orderId)
+      : db
+          .prepare(
+            "SELECT id FROM transactions WHERE order_id = ? AND transaction_type = 'income' AND id != ? LIMIT 1"
+          )
+          .get(orderId, excludeTransactionId);
+
+  if (existingIncome) {
+    throw new Error("DUPLICATE_ORDER_INCOME");
+  }
+}
+
 function isValidDateString(value: string): boolean {
   return typeof value === "string" && value.trim() !== "" && !Number.isNaN(Date.parse(value));
 }
@@ -266,15 +291,7 @@ export function createTransaction(input: CreateTransactionInput): TransactionRow
   // *expense* transactions linked to it (e.g. a return-shipping cost), which this does not restrict.
   const insert = db.transaction(() => {
     if (input.transactionType === "income" && orderId !== null) {
-      const existingIncome = db
-        .prepare(
-          "SELECT id FROM transactions WHERE order_id = ? AND transaction_type = 'income' LIMIT 1"
-        )
-        .get(orderId);
-
-      if (existingIncome) {
-        throw new Error("DUPLICATE_ORDER_INCOME");
-      }
+      assertNoDuplicateOrderIncome(orderId);
     }
 
     return db
@@ -467,36 +484,51 @@ export function updateTransaction(id: number, input: UpdateTransactionInput): Tr
 
   const nextNotes = input.notes === undefined ? existing.notes : input.notes?.trim() || null;
 
-  db.prepare(
-    `
-    UPDATE transactions
-    SET
-      transaction_type = ?,
-      amount = ?,
-      transaction_date = ?,
-      category = ?,
-      description = ?,
-      sales_channel = ?,
-      product_id = ?,
-      order_id = ?,
-      payment_method = ?,
-      notes = ?,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-    `
-  ).run(
-    nextType,
-    nextAmount,
-    nextDate,
-    nextCategory,
-    nextDescription,
-    nextSalesChannel || null,
-    nextProductId,
-    nextOrderId,
-    nextPaymentMethod,
-    nextNotes,
-    id
-  );
+  // STEP 40 — same duplicate-income-per-order guard STEP 34 applies on create, now also applied
+  // here: editing a transaction into `income` + an `orderId` that already has a *different* income
+  // transaction is rejected exactly like creating a second one would be. `excludeTransactionId: id`
+  // means re-saving an order's own existing income transaction (e.g. just correcting its amount) is
+  // never blocked as a false-positive duplicate of itself — only linking a genuinely different row
+  // to an order that already has income is rejected. Wrapped in db.transaction() with the UPDATE for
+  // the same atomicity reason as STEP 34's create path (SAVEPOINT-safe under concurrent requests).
+  const update = db.transaction(() => {
+    if (nextType === "income" && nextOrderId !== null) {
+      assertNoDuplicateOrderIncome(nextOrderId, id);
+    }
+
+    db.prepare(
+      `
+      UPDATE transactions
+      SET
+        transaction_type = ?,
+        amount = ?,
+        transaction_date = ?,
+        category = ?,
+        description = ?,
+        sales_channel = ?,
+        product_id = ?,
+        order_id = ?,
+        payment_method = ?,
+        notes = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+      `
+    ).run(
+      nextType,
+      nextAmount,
+      nextDate,
+      nextCategory,
+      nextDescription,
+      nextSalesChannel || null,
+      nextProductId,
+      nextOrderId,
+      nextPaymentMethod,
+      nextNotes,
+      id
+    );
+  });
+
+  update();
 
   const row = getById(id);
 

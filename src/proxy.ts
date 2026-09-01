@@ -57,6 +57,10 @@ function isProtectedApi(pathname: string): boolean {
   // reasoning as the /customers page rule above).
   if (pathname === "/api/customers" || pathname.startsWith("/api/customers/")) return true;
 
+  // STEP 37 — new prefix (no dedicated /profit page — the report is embedded in the existing,
+  // already-protected /tax page), needs its own rule same as /api/customers above.
+  if (pathname.startsWith("/api/profit/")) return true;
+
   return false;
 }
 
@@ -104,5 +108,6 @@ export const config = {
     "/api/tax/:path*",
     "/api/customers",
     "/api/customers/:path*",
+    "/api/profit/:path*",
   ],
 };

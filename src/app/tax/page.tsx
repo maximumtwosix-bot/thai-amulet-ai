@@ -118,6 +118,36 @@ type TaxSummary = {
   transactions: SummaryTransaction[];
 };
 
+// STEP 37 — Profit/Margin. Deliberately a SEPARATE type/fetch from TaxSummary above, not merged
+// into it — "revenue" here excludes cancelled-order income (this STEP's own business rule), while
+// TaxSummary's totalIncome above intentionally still includes it (STEP 32's rule: cancellation must
+// never change Finance/Tax totals). The two numbers are allowed to legitimately differ for the same
+// period — the UI below explains why rather than silently disagreeing with the summary above it.
+type ProfitSummary = {
+  period: {
+    type: "monthly" | "yearly" | "range";
+    year: number | null;
+    month: number | null;
+    dateFrom: string;
+    dateTo: string;
+  };
+  revenue: number;
+  cogs: number;
+  grossProfit: number;
+  grossMarginPercent: number | null;
+  operatingExpenses: number;
+  shippingExpense: number;
+  codReturnLoss: number;
+  netProfit: number;
+  includedIncomeEntryCount: number;
+  excludedCancelledOrderCount: number;
+};
+
+function formatPercent(value: number | null): string {
+  if (value === null) return "N/A";
+  return `${value.toLocaleString("th-TH", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+}
+
 const currentYear = new Date().getFullYear();
 const yearOptions = Array.from({ length: 6 }, (_, i) => currentYear + 1 - i);
 
@@ -129,6 +159,12 @@ export default function TaxPage() {
   const [summary, setSummary] = useState<TaxSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // STEP 37 — separate loading/error state from the tax summary above; deliberately not merged into
+  // one useEffect so a failure in either fetch doesn't block the other from rendering.
+  const [profitSummary, setProfitSummary] = useState<ProfitSummary | null>(null);
+  const [profitLoading, setProfitLoading] = useState(true);
+  const [profitError, setProfitError] = useState("");
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams({ year: String(year) });
@@ -164,6 +200,45 @@ export default function TaxPage() {
       } finally {
         if (!cancelled) {
           setLoading(false);
+        }
+      }
+    }
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [queryString]);
+
+  // STEP 37 — profit/margin fetch, reusing the exact same queryString (identical monthly/yearly/
+  // custom-range date semantics as the tax summary fetch above).
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setProfitLoading(true);
+      setProfitError("");
+
+      try {
+        const response = await fetch(`/api/profit/summary?${queryString}`, { cache: "no-store" });
+        const data = await response.json();
+
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.error || "ไม่สามารถโหลดสรุปกำไรได้");
+        }
+
+        if (!cancelled) {
+          setProfitSummary(data.data);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setProfitError(err instanceof Error ? err.message : "ไม่สามารถโหลดสรุปกำไรได้");
+          setProfitSummary(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setProfitLoading(false);
         }
       }
     }
@@ -309,6 +384,93 @@ export default function TaxPage() {
                 </p>
               </div>
             </div>
+
+            <section className="mb-6 rounded-2xl border bg-white shadow-sm">
+              <div className="border-b p-5">
+                <h2 className="text-lg font-semibold text-slate-900">
+                  💰 กำไร / อัตรากำไร (Profit / Margin)
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  รายได้ที่นี่ไม่รวมออเดอร์ที่ยกเลิก (cancelled) — จึงอาจต่างจาก
+                  &quot;รายรับรวม&quot; ด้านบน ซึ่งยังคงรวมทุกรายการตามกฎเดิม (STEP 32) โดยไม่แก้ไข
+                </p>
+              </div>
+
+              {profitError && (
+                <div className="m-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                  {profitError}
+                </div>
+              )}
+
+              {profitLoading ? (
+                <p className="p-5 text-sm text-slate-500">กำลังโหลดข้อมูล...</p>
+              ) : profitSummary ? (
+                <div className="p-5">
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded-xl border bg-slate-50 p-4">
+                      <p className="text-xs text-slate-500">รายได้ (Revenue)</p>
+                      <p className="mt-1 text-xl font-bold text-emerald-600">
+                        {formatCurrency(profitSummary.revenue)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border bg-slate-50 p-4">
+                      <p className="text-xs text-slate-500">ต้นทุนขาย (COGS)</p>
+                      <p className="mt-1 text-xl font-bold text-red-600">
+                        {formatCurrency(profitSummary.cogs)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border bg-slate-50 p-4">
+                      <p className="text-xs text-slate-500">กำไรขั้นต้น (Gross Profit)</p>
+                      <p
+                        className={`mt-1 text-xl font-bold ${profitSummary.grossProfit >= 0 ? "text-emerald-600" : "text-red-600"}`}
+                      >
+                        {formatCurrency(profitSummary.grossProfit)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border bg-slate-50 p-4">
+                      <p className="text-xs text-slate-500">อัตรากำไรขั้นต้น (Gross Margin)</p>
+                      <p className="mt-1 text-xl font-bold text-slate-900">
+                        {formatPercent(profitSummary.grossMarginPercent)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border bg-slate-50 p-4">
+                      <p className="text-xs text-slate-500">ค่าใช้จ่ายดำเนินงาน (Operating)</p>
+                      <p className="mt-1 text-xl font-bold text-red-600">
+                        {formatCurrency(profitSummary.operatingExpenses)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border bg-slate-50 p-4">
+                      <p className="text-xs text-slate-500">ค่าจัดส่ง (Shipping)</p>
+                      <p className="mt-1 text-xl font-bold text-red-600">
+                        {formatCurrency(profitSummary.shippingExpense)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border bg-slate-50 p-4">
+                      <p className="text-xs text-slate-500">ขาดทุนจาก COD / ตีกลับ</p>
+                      <p className="mt-1 text-xl font-bold text-red-600">
+                        {formatCurrency(profitSummary.codReturnLoss)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border bg-slate-900 p-4">
+                      <p className="text-xs text-slate-300">กำไรสุทธิ (Net Profit)</p>
+                      <p
+                        className={`mt-1 text-xl font-bold ${profitSummary.netProfit >= 0 ? "text-emerald-400" : "text-red-400"}`}
+                      >
+                        {formatCurrency(profitSummary.netProfit)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="mt-4 text-xs text-slate-400">
+                    นับรายรับ {profitSummary.includedIncomeEntryCount.toLocaleString()} รายการ ·
+                    ไม่นับออเดอร์ที่ยกเลิก {profitSummary.excludedCancelledOrderCount.toLocaleString()}{" "}
+                    ออเดอร์เป็นรายได้
+                  </p>
+                </div>
+              ) : (
+                <p className="p-5 text-sm text-slate-500">ไม่สามารถโหลดข้อมูลกำไรได้</p>
+              )}
+            </section>
 
             <div className="mb-6 grid gap-6 lg:grid-cols-2">
               <section className="rounded-2xl border bg-white shadow-sm">

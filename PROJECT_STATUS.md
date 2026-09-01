@@ -4198,9 +4198,120 @@ Studio, Social, Content Studio — not touched at all in this STEP.
 
 **Git**: nothing committed, nothing pushed, per instructions.
 
-**No STEP 37 was started.**
-
 **STEP 36 STATUS: PASS**
+
+---
+
+## STEP 37 — PROFIT / MARGIN REPORTING (COD/RETURN-AWARE)
+
+**Business rule (approved 2026-09-01)**: profit reporting must reflect the shop's real profit
+(กำไรจริงของร้าน), not raw transaction totals. A cancelled order's linked income must not count as
+Revenue (and its items not count as COGS), since the sale never actually happened — but a real
+shipping/return cost the shop incurred (e.g. a COD parcel that shipped and was refused) must still
+count as a loss if that cost was actually recorded.
+
+**Mandatory data audit (before writing any code)**: confirmed `EXPENSE_CATEGORIES` already includes
+`SHIPPING`, `COD_FEE`, and `RETURNED_PARCEL` (pre-existing, nothing added), and `transactions.order_id`
+already supports linking an expense to a specific order (proven working since STEP 34). **STOP
+CONDITION did not trigger** — no schema/migration needed; the existing category + order-link system
+is sufficient to record actual shipping/return costs, it just requires the operator to enter them.
+
+**Design — a new, separate metric, not a change to Finance/Tax's own totals**: added
+`src/lib/profitSummary.ts` (`getProfitSummary()`) and `GET /api/profit/summary`, reusing
+`taxSummary.ts`'s `resolveTaxPeriod()`/`parseTaxSummaryParams()` directly so monthly/yearly/custom-range
+date semantics are byte-for-byte identical to Tax's. **STEP 32's cancellation boundary is untouched**:
+`getTaxSummary()` still sums every transaction regardless of order status, exactly as before — this
+report's "Revenue" simply excludes order-linked income where that order's live status is `cancelled`
+(non-order income is never excluded). Revenue = income transactions excluding cancelled-order-linked
+ones; COGS = `SUM(order_items.cost * quantity)` for the same non-cancelled, revenue-bearing orders;
+Gross Profit = Revenue − COGS; Gross Margin % = null (rendered "N/A") when Revenue is 0, never a guessed
+number; Shipping Expense = category `SHIPPING`; COD/Return Loss = categories `COD_FEE` +
+`RETURNED_PARCEL` (neither requires order-linkage, matching Tax's own category-only aggregation); all
+other expense categories = Operating Expenses; Net Profit = Gross Profit − Operating − Shipping −
+COD/Return Loss. `PRODUCT_PURCHASE` expense is deliberately kept separate from COGS (different
+accounting concepts — cash spent restocking vs. cost of items actually sold — never netted together).
+
+**UI**: added a "💰 กำไร / อัตรากำไร (Profit / Margin)" section to `/tax` (reuses the page's existing
+`queryString`/date-filter state so it always matches the Tax summary's period exactly), showing all 8
+figures above plus a transparency line ("นับรายรับ N รายการ · ไม่นับออเดอร์ที่ยกเลิก N ออเดอร์เป็น
+รายได้") and an explicit note that this section's Revenue intentionally excludes cancelled orders while
+"รายรับรวม" above it does not (per the STEP 32 boundary). No dedicated `/profit` page — added
+`/api/profit/` to `src/proxy.ts`'s `isProtectedApi()`/`matcher` (same pattern as STEP 36's
+`/api/customers`).
+
+**New files**: `src/lib/profitSummary.ts`, `src/app/api/profit/summary/route.ts`.
+**Modified**: `src/proxy.ts`, `src/app/tax/page.tsx`. **No dependencies added. No database schema
+change.**
+**Backups created**: `src/proxy.ts.step37-backup-<timestamp>`, `src/app/tax/page.tsx.step37-backup-<timestamp>`.
+
+**Tested (real dev server, real browser via chrome-devtools MCP + curl; a fresh `pnpm backup` was run
+immediately before testing)**:
+
+Baseline: `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+transaction_attachments:0, customers:0, ai_cost_ledger:10`; product 3 stock `13`; products 41/33/4
+stock `0`/`status:out_of_stock`; order id 1 untouched throughout.
+
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**. `pnpm.cmd run build` → **compiled successfully**,
+   `/api/profit/summary` present in the route list.
+2. **Test data** (5 orders, ids 23–27, covering every required scenario): Order A — single item,
+   progressed `pending→paid→shipped→completed` (real completed sale). Order B — multi-item (3
+   products, qty 1/1/3), progressed to `paid` (real sale, non-terminal). Order C — cancelled before
+   shipment (`pending→cancelled` directly). Order D — COD-reject simulation
+   (`pending→paid→shipped→cancelled`), with two manually-entered *actual* cost transactions linked via
+   `orderId`: `SHIPPING` ฿40 (outbound) and `RETURNED_PARCEL` ฿40 (return). Order E — zero-total
+   (full-discount) order, confirming `createOrder()`'s pre-existing "total=0 → no income transaction
+   created" behavior naturally produces a genuine zero-revenue case. Plus 3 standalone (non-order-linked)
+   expenses: `SHIPPING` ฿15, `COD_FEE` ฿10, `PACKAGING` ฿25.
+3. **Calculation correctness, custom range/monthly/yearly all cross-checked against hand-computed
+   expected values and each other** (all test data dated today, so all three ranges agreed): Revenue
+   ฿1,593 (398 + 1,195 — Orders A and B only, C and D correctly excluded), COGS ฿700 (200 + 500), Gross
+   Profit ฿893, Gross Margin 56.06% (rounded 56.1%), Operating Expenses ฿25, Shipping Expense ฿55 (15
+   standalone + 40 linked), COD/Return Loss ฿50 (10 standalone + 40 linked), Net Profit ฿763,
+   `includedIncomeEntryCount:2`, `excludedCancelledOrderCount:2` — **PASS** on all three view modes.
+4. **Cancelled-order exclusion vs. STEP 32 boundary preservation, the critical check**: `/api/tax/summary`
+   for the identical period still showed `totalIncome:2191` (all 4 income transactions, including
+   Orders C's and D's, i.e. the cancelled ones) and `totalExpense:130` — **confirmed Finance/Tax totals
+   are completely unaffected by order cancellation**, exactly as STEP 32 requires, while the new Profit
+   report correctly shows the smaller, cancellation-aware figures — **PASS**.
+5. **Out-of-range periods correctly return zero, not stale/leaked data**: August 2026, year 2025, and a
+   custom range excluding today all returned `revenue:0` through `netProfit:0` with
+   `grossMarginPercent:null` — **PASS**.
+6. **N/A rendering, real browser**: at zero revenue, the Gross Margin card visibly renders "N/A" (never
+   "0%" or "NaN%") — **PASS**, zero console errors. At non-zero revenue, all 8 figures rendered
+   correctly matching the API response exactly, including the STEP 34 order-status badges next to each
+   linked transaction in the list below (e.g. `#26 (🚫 ยกเลิก)` next to Order D's linked expenses) —
+   **PASS**.
+7. **Full regression, real browser, zero console errors on every page**: `/tax` (monthly, yearly, and
+   the zero-data month), `/finance`, `/orders`, `/orders/26` (a cancelled order's detail page),
+   `/products`, `/inventory`, `/customers`, `/orders/new` — **PASS** (orders/new showed 2 pre-existing,
+   STEP-37-unrelated accessibility lint issues, not errors, not touched by this STEP).
+8. **Authentication regression**: confirmed via the same login flow used throughout — `/api/profit/summary`
+   correctly required a valid session (proxy.ts rule added and verified working) — **PASS**.
+
+**Cleanup**: all 5 test orders and their `order_items`/`inventory_movements` rows, all 9 test
+transactions (4 automatic income + 2 order-linked expense + 3 standalone expense), and the 3 stock-bump
+`inventory_movements` rows were deleted by exact id via a temporary script (deleted immediately after
+use). Products 41/33/4 stock restored `0`; product 3 stock restored `13`. **One extra fix required**:
+directly restoring `products.stock` via SQL bypassed the app's own stock↔status sync logic (in
+`adjustProductStock()`), leaving products 41/33/4 stuck at `status:'active'` despite `stock:0` —
+caught by comparing against the recorded baseline (not just row counts) and corrected with a
+targeted `UPDATE ... WHERE stock = 0` restoring `status:'out_of_stock'` to match baseline exactly. Final
+table counts and every product's `stock`/`status` verified identical to baseline; order id 1 was never
+touched by either the tests or the cleanup.
+
+**Defects found**: none in the STEP 37 code itself. The one issue above was in my own cleanup procedure
+(bypassing app logic with a raw SQL restore), not a defect in `profitSummary.ts`/`tax/page.tsx`/`proxy.ts`
+— caught and fixed before finishing.
+
+**Files changed**: see New/Modified above. `PROJECT_STATUS.md` updated with this entry.
+`PROJECT_CHECKPOINT.md` not touched, per instructions. Video Studio, AI Video, Voice Studio, Social,
+Content Studio — not touched at all in this STEP.
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**No STEP 38 was started.**
+
+**STEP 37 STATUS: PASS**
 
 ---
 

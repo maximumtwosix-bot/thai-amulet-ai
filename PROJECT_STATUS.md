@@ -3802,6 +3802,118 @@ Content Studio — not touched at all in this STEP.
 
 ---
 
+## STEP 33 — AUTOMATED WINDOWS SCHEDULED DATABASE BACKUP
+
+Date: 2026-09-01
+
+Scope: closes the last remaining item from the original BLOCKING-risk tier — the STEP 30 backup
+mechanism existed and worked, but only ever ran when a person remembered to type `pnpm backup`
+(confirmed via this session's own STEP 33 pre-audit: all 3 backups that existed on disk were manually
+triggered immediately before STEP 31/32 testing, zero had ever run unattended). This STEP registers a
+real Windows Scheduled Task that runs the existing, unmodified `pnpm backup` automatically every
+night, and verifies it actually executes — not just that it's configured.
+
+**Audit before implementing**: confirmed the exact command chain (`pnpm backup` → `tsx
+scripts/backup.ts`, package.json), confirmed `scripts/backup.ts` itself needed **zero changes** (STEP
+30's WAL-safe `Database#backup()` Online Backup API and the `public/generated/` evidence copy are
+reused exactly as-is), confirmed `.env` has no `BACKUP_DIR` override set (so the script's hardcoded
+default `C:\Users\maxim\thai-amulet-backups` is what's actually in use), and confirmed
+`scripts/start-production.ps1` already establishes this project's own convention of invoking `pnpm`
+via its **full absolute path** to `pnpm.CMD` rather than relying on `pnpm` being resolvable on `PATH`
+— reused that exact same path for the scheduled task's action, since Task Scheduler execution
+contexts don't reliably inherit an interactive shell's `PATH`. Confirmed the current Windows username
+(`maxim`) via `$env:USERNAME` at registration time rather than hardcoding it, per instructions — it
+happens to match every other already-hardcoded path in this project, but the registration command
+itself never assumes a specific username.
+
+**Approach**: registered via `Register-ScheduledTask` (native PowerShell, no npm dependency):
+- **Task name**: `thai-amulet-backup`
+- **Trigger**: daily at 02:00 (`New-ScheduledTaskTrigger -Daily -At 2:00AM`)
+- **Action**: `<full path to pnpm.CMD> backup`, working directory `C:\Users\maxim\thai-amulet-ai`
+- **Principal**: `-UserId $env:USERNAME -LogonType Interactive -RunLevel Limited` — runs only while
+  the user is logged on, **no password is stored anywhere in the task definition** (verified below);
+  deliberately not "Run whether user is logged on or not," which would require either a stored
+  credential or a Group Managed Service Account — unnecessary complexity for a single-shop-PC setup
+- **Settings**: `MultipleInstances IgnoreNew` (won't stack a second run if one is still in progress —
+  same guidance `docs/BACKUP_AND_RECOVERY.md` already gave for the never-implemented STEP 30 example)
+  + `StartWhenAvailable` (if the PC is off/logged-out at 02:00, runs at next login instead of skipping
+  the day entirely)
+
+No source code was modified — `scripts/backup.ts`, `package.json`, and every business-logic file are
+completely untouched. This is a pure OS-level registration plus documentation.
+
+**Modified**: `docs/BACKUP_AND_RECOVERY.md` (replaced the STEP 30 "not yet configured, here's an
+example" section with the actual configured task's real name/schedule/command/destination, plus how
+to verify it, run it on demand, check its last-run result, inspect Task Scheduler history, disable it,
+remove it, and inspect the latest backup — retention/pruning explicitly still out of scope, unchanged
+from STEP 30). **No new files. No dependencies added. No database schema change.**
+
+**Tested (real execution against the live database and the real registered task — not just
+inspection)**:
+
+Baseline: `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+transaction_attachments:0, customers:0, ai_cost_ledger:10`.
+
+1. **Manual `pnpm backup` control run** (before touching the task) → succeeded, exit `0` — **PASS**,
+   confirms the underlying mechanism itself was healthy before adding scheduling on top of it.
+2. **Task registered** → `Get-ScheduledTask` confirms `State: Ready`.
+3. **Full definition verified via native tools** (`Get-ScheduledTask`, `Get-ScheduledTaskInfo`,
+   `Export-ScheduledTask`): action `Execute` = the correct full `pnpm.CMD` path, `Arguments: backup`,
+   `WorkingDirectory: C:\Users\maxim\thai-amulet-ai` — **PASS**. Trigger: `StartBoundary
+   2026-09-01T02:00:00+07:00`, `DaysInterval: 1`, `Enabled: True` — **PASS**. Principal: `UserId:
+   maxim` (SID form in the raw XML, `LogonType: InteractiveToken`) — **PASS**.
+4. **No credentials embedded**: printed the full exported task XML directly — no `<Password>` element
+   or any credential blob anywhere in the definition, only the identity SID (not a secret) — **PASS**.
+5. **Real execution test**: `Start-ScheduledTask -TaskName "thai-amulet-backup"` (manually fired the
+   registered task itself, not just re-running `pnpm backup` directly) → `Get-ScheduledTaskInfo`
+   afterward showed `LastTaskResult: 0` (success) and a correctly-computed `NextRunTime` of the
+   following day at 02:00 — **PASS**.
+6. **New backup confirmed on disk**: a new `backup-20260901-161942` folder appeared under
+   `C:\Users\maxim\thai-amulet-backups\` at the exact moment the task ran — **PASS**, proves the task
+   genuinely executed the real backup script, not just that Task Scheduler reported success.
+7. **Backup content verified**: `manifest.json` shows `tableCountsAtBackupStart` ==
+   `tableCountsVerifiedInBackupCopy` for all 8 tables, `countMismatches: []`, `76` evidence files
+   (`53,466,745` bytes) — **PASS**. Searched the entire backup tree for `.env*`/`*.bak`/`*secret*`/
+   `*credential*` → zero matches — **PASS**. Searched for `*.ts`/`*.tsx`/`*.step*-backup*` source-code
+   clutter → zero matches — **PASS**.
+8. **Recovery dry-run**: copied the scheduled-task-produced backup's `db/` and `generated/` folders
+   into an isolated temp directory (never touched `data/thai-amulet.db` or `public/generated/`),
+   opened the restored `.db` read-only, re-ran the 8-table count query — identical to production —
+   **PASS**. Temp directory deleted after.
+9. **Production database verified unchanged** at every checkpoint (immediately after the manual
+   control backup, immediately after the scheduled-task execution, and at the very end) — identical
+   to baseline every time — **PASS**, zero business-data side effects from either backup run.
+10. **Regression**: no source files were modified, so `tsc`/build weren't strictly required per
+    instructions, but `pnpm.cmd exec tsc --noEmit` was run anyway as a final sanity check → **PASSED**.
+    `GET /api/health`, `/api/products`, `/api/orders`, `/api/orders/1`, `/api/inventory/movements`,
+    `/api/transactions`, `/api/tax/summary`, `/api/costs/summary` → all `200`. `/products`,
+    `/inventory`, `/orders`, `/orders/new`, `/finance`, `/tax` → all `200`.
+
+**Cleanup**: no test business data was created this STEP (backups are read-only against the live DB
+by construction) — nothing to clean up beyond the temporary row-counting `.cjs` script and the
+recovery dry-run's temp directory, both removed immediately after use. The 5 backup folders that now
+exist under `C:\Users\maxim\thai-amulet-backups\` (from this and prior STEPs' testing) were
+deliberately **not** deleted — they're legitimate real backups, not test pollution, and retention
+remains explicitly out of scope per STEP 30's original decision, reaffirmed for this STEP.
+
+**Defects found**: none.
+
+**Files changed**: `docs/BACKUP_AND_RECOVERY.md` only (plus this `PROJECT_STATUS.md` entry). No `.ts`/
+`.tsx` source file was touched. `PROJECT_CHECKPOINT.md` not touched, per instructions. Video Studio,
+AI Video, Voice Studio, Social, Content Studio — not touched at all in this STEP. Orders/Finance/Tax/
+Inventory/AI-slip business logic — not touched at all in this STEP (confirmed by the regression pass
+above and by the fact that zero `.ts`/`.tsx` files show in this STEP's diff).
+
+**Git**: nothing committed, nothing pushed, per instructions. Note: the registered Windows Scheduled
+Task itself is OS state, not a repository file — it persists on this machine regardless of git commit
+status, and isn't something `git status` will ever show.
+
+**No STEP 34 was started.**
+
+**STEP 33 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

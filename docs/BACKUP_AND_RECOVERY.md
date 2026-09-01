@@ -1,4 +1,4 @@
-# Backup & Recovery — STEP 30
+# Backup & Recovery — STEP 30 (mechanism) / STEP 33 (scheduling)
 
 `pnpm backup` รัน `scripts/backup.ts` เป็น **one-shot script** (เหมือน `pnpm social:worker` — ไม่ใช่
 process ที่ค้างรันตลอดเวลา ไม่มี scheduler ในตัว) หน้าที่ของมันคือสำรองข้อมูลธุรกิจจริงทั้งหมด:
@@ -131,30 +131,85 @@ pnpm dev
 
 ---
 
-## การตั้งเวลารัน backup อัตโนมัติ (ยังไม่ได้ตั้งค่าใดๆ ในเครื่องผู้ใช้)
+## การตั้งเวลารัน backup อัตโนมัติ — STEP 33 (ตั้งค่าแล้ว, ทำงานจริงบนเครื่องนี้)
 
-STEP นี้สร้างเฉพาะคำสั่ง `pnpm backup` ที่รันแล้วสำเร็จจริง — **ไม่ได้ตั้ง Windows Task Scheduler หรือ
-scheduler ใดๆ ให้อัตโนมัติ** ตามที่กำหนดไว้ ด้านล่างคือตัวอย่างวิธีตั้งเองภายหลังเมื่อพร้อม (รูปแบบ
-เดียวกับ `docs/SOCIAL_WORKER.md`):
+**Task name**: `thai-amulet-backup`
+**Schedule**: ทุกวัน เวลา 02:00 (นอกเวลาทำการร้าน)
+**คำสั่งที่รัน**: `pnpm backup` (เรียกผ่าน full path ของ `pnpm.CMD` — path เดียวกับที่
+`scripts/start-production.ps1` ใช้อยู่แล้ว เพื่อเลี่ยงปัญหา `PATH` ไม่ถูก resolve ตอนรันผ่าน Task
+Scheduler)
+**Working directory**: `C:\Users\maxim\thai-amulet-ai`
+**ปลายทาง backup**: `C:\Users\maxim\thai-amulet-backups\backup-<timestamp>\` (เหมือนเดิมทุกประการ —
+task นี้แค่เรียก `pnpm backup` เฉยๆ ไม่ได้มี logic การ backup แยกต่างหาก)
+**Run as**: user ปัจจุบันของเครื่อง (`$env:USERNAME` ตอนตั้งค่า — ไม่ได้ hardcode username คนอื่น),
+`LogonType: InteractiveToken` (**ไม่มีการเก็บรหัสผ่านใดๆ ไว้ใน task เลย** — ตรวจสอบแล้วด้วย
+`Export-ScheduledTask`, ไม่มี `<Password>` หรือ credential blob ใดๆ ในนิยาม task) — ผลคือ task นี้
+**รันได้เฉพาะตอนที่ user login อยู่เท่านั้น** (ไม่ใช่ "Run whether user is logged on or not" ซึ่งต้องเก็บ
+รหัสผ่านหรือใช้ Group Managed Service Account) ถ้าเครื่องถูก sign out/restart ตอน 02:00 จะไม่รัน แต่ตั้ง
+`StartWhenAvailable = true` ไว้แล้ว — ถ้าพลาดรอบ 02:00 ระบบจะรันให้ทันทีที่ user login ครั้งถัดไป
+**Multiple instances**: `IgnoreNew` (ถ้า backup รอบก่อนยังไม่เสร็จ จะไม่เริ่มรอบใหม่ซ้อน)
 
-### Windows Task Scheduler (แนะนำรันทุกคืน)
-
-1. เปิด Task Scheduler → Create Task
-2. General: ตั้งชื่อ เช่น `thai-amulet-backup`, เลือก "Run whether user is logged on or not"
-3. Triggers → New: "Daily", ตั้งเวลาที่ร้านปิด/ไม่มีคนใช้งาน เช่น 02:00
-4. Actions → New:
-   - Program/script: `pnpm`
-   - Add arguments: `backup`
-   - Start in: `C:\Users\maxim\thai-amulet-ai`
-5. Settings: "If the task is already running..." → **Do not start a new instance**
-
-หรือ PowerShell (รันในฐานะ Administrator):
+### วิธีตรวจสอบ task (native Windows tools, ไม่ต้องติดตั้งอะไรเพิ่ม)
 
 ```powershell
-$action = New-ScheduledTaskAction -Execute "pnpm" -Argument "backup" -WorkingDirectory "C:\Users\maxim\thai-amulet-ai"
-$trigger = New-ScheduledTaskTrigger -Daily -At 2am
-Register-ScheduledTask -TaskName "thai-amulet-backup" -Action $action -Trigger $trigger
+# ดูสถานะพื้นฐาน
+Get-ScheduledTask -TaskName "thai-amulet-backup" | Select-Object TaskName, State
+
+# ดู action/trigger/principal แบบละเอียด
+Get-ScheduledTask -TaskName "thai-amulet-backup" | Select-Object -ExpandProperty Actions
+Get-ScheduledTask -TaskName "thai-amulet-backup" | Select-Object -ExpandProperty Triggers
+Get-ScheduledTask -TaskName "thai-amulet-backup" | Select-Object -ExpandProperty Principal
+
+# ดูผลรันล่าสุด (0 = สำเร็จ, ไม่ใช่ 0 = ล้มเหลว) + รอบถัดไปจะรันเมื่อไหร่
+Get-ScheduledTaskInfo -TaskName "thai-amulet-backup" | Select-Object LastRunTime, LastTaskResult, NextRunTime
+
+# export XML เต็มของ task definition (ตรวจสอบได้เองว่าไม่มี credential ฝังอยู่)
+Export-ScheduledTask -TaskName "thai-amulet-backup"
 ```
 
-แนะนำให้ลบ backup เก่าที่เกิน N วันเป็นระยะด้วยตนเอง (ยังไม่มีการลบอัตโนมัติในสคริปต์นี้ — ตั้งใจ
-ไม่ลบข้อมูลใดๆ ทั้งสิ้นในทุก STEP ที่เกี่ยวกับการ backup)
+`LastTaskResult` คือวิธีหลักในการรู้ว่า backup คืนล่าสุด**ล้มเหลวเงียบๆ หรือไม่** — สคริปต์
+`scripts/backup.ts` (STEP 30) จบด้วย `process.exit(1)` เสมอเมื่อล้มเหลว (เช่น เปิดไฟล์ backup ที่เพิ่ง
+สร้างไม่ได้, พบไฟล์ต้องห้ามในผลลัพธ์, หรือ error อื่นๆ) ซึ่ง Task Scheduler จะสะท้อนเป็น
+`LastTaskResult` ที่ไม่ใช่ 0 ทันที — **ไม่มีทางที่ backup ล้มเหลวแล้ว Task Scheduler จะรายงานว่าสำเร็จ**
+ถ้า `LastTaskResult` ไม่ใช่ 0 หรือ `LastRunTime` เก่ากว่าที่ควร (เช่น ไม่มี backup ใหม่มาหลายวันแล้ว) ให้
+เปิด Task Scheduler GUI → เลือก task นี้ → แท็บ "History" เพื่อดู event log ละเอียดของแต่ละรอบที่รัน
+(ต้องเปิด "Enable All Tasks History" ในเมนู Action ของ Task Scheduler ก่อนครั้งแรก ถ้ายังไม่เห็น
+ประวัติ)
+
+### วิธีรัน task ทันที (ทดสอบ โดยไม่ต้องรอถึง 02:00)
+
+```powershell
+Start-ScheduledTask -TaskName "thai-amulet-backup"
+# รอสักครู่แล้วเช็คผล
+Get-ScheduledTaskInfo -TaskName "thai-amulet-backup" | Select-Object LastRunTime, LastTaskResult
+```
+
+แล้วตรวจที่ `C:\Users\maxim\thai-amulet-backups\` ว่ามีโฟลเดอร์ backup ใหม่เกิดขึ้นจริง
+
+### วิธีปิดใช้งาน task ชั่วคราว (ไม่ลบ ตั้งค่าไว้เผื่อกลับมาเปิดใหม่)
+
+```powershell
+Disable-ScheduledTask -TaskName "thai-amulet-backup"
+# เปิดกลับมาใช้งานอีกครั้งด้วย:
+Enable-ScheduledTask -TaskName "thai-amulet-backup"
+```
+
+### วิธีลบ task ทิ้งถาวร
+
+```powershell
+Unregister-ScheduledTask -TaskName "thai-amulet-backup" -Confirm:$false
+```
+
+### วิธีตรวจดู backup ล่าสุด
+
+```powershell
+Get-ChildItem "C:\Users\maxim\thai-amulet-backups" | Sort-Object Name -Descending | Select-Object -First 1
+```
+
+แล้วเปิด `manifest.json` ข้างในโฟลเดอร์นั้นเพื่อดูจำนวนแถวแต่ละตาราง ณ เวลา backup
+
+### Retention (การลบ backup เก่า) — ยังไม่ได้ทำอัตโนมัติ ตั้งใจ (STEP 30 กำหนดไว้แล้วว่านอกขอบเขต)
+
+Task นี้ **ไม่ลบ backup เก่าเลย** — ทุกคืนจะได้โฟลเดอร์ใหม่เพิ่มขึ้นเรื่อยๆ ต้องลบเองด้วยตนเองเป็นระยะ
+(เช่น เปิด `C:\Users\maxim\thai-amulet-backups\` แล้วลบโฟลเดอร์ที่เก่าเกินความจำเป็นออก) การทำ retention
+อัตโนมัติเป็นงานที่ตั้งใจเก็บไว้เป็น STEP ในอนาคต ไม่ใช่ส่วนหนึ่งของ STEP 30/33

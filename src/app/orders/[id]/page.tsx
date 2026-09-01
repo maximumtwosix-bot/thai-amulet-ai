@@ -18,6 +18,50 @@ type OrderItem = {
   cost: number;
 };
 
+// STEP 38 — order-linked transactions, read-only visibility. Local label maps duplicated rather
+// than imported from @/lib/transactions (touches server-only db.ts / better-sqlite3) — same
+// Client Component constraint already documented in finance/page.tsx and tax/page.tsx, same fix.
+const expenseCategoryLabels: Record<string, string> = {
+  PRODUCT_PURCHASE: "ซื้อสินค้าเข้าสต็อก",
+  SHIPPING: "ค่าขนส่งจริงที่ร้านจ่าย",
+  COD_FEE: "ค่าธรรมเนียม COD",
+  RETURNED_PARCEL: "พัสดุตีกลับ",
+  PACKAGING: "บรรจุภัณฑ์ / กล่อง",
+  FACEBOOK_ADS: "ค่าโฆษณา Facebook / Meta",
+  FUEL: "ค่าน้ำมัน",
+  OTHER: "อื่นๆ",
+};
+
+const incomeCategoryLabels: Record<string, string> = {
+  PRODUCT_SALE: "ขายสินค้า",
+  OTHER_INCOME: "รายรับอื่นๆ",
+};
+
+function categoryLabel(type: "income" | "expense", category: string): string {
+  if (type === "income") {
+    return incomeCategoryLabels[category] || category;
+  }
+  return expenseCategoryLabels[category] || category;
+}
+
+type OrderTransaction = {
+  id: number;
+  transactionType: "income" | "expense";
+  amount: number;
+  transactionDate: string;
+  category: string;
+  description: string | null;
+  paymentMethod: string | null;
+  notes: string | null;
+  linkedOrderStatus: OrderStatus | null;
+};
+
+type AttachmentInfo = {
+  loaded: boolean;
+  hasAttachment: boolean;
+  fileUrl: string | null;
+};
+
 type OrderDetail = {
   id: number;
   order_number: string;
@@ -74,6 +118,16 @@ export default function OrderDetailPage() {
   // a distinct, later action against an already-loaded order.
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [statusError, setStatusError] = useState("");
+
+  // STEP 38 — order-linked transactions, read-only. Fetched via the existing
+  // GET /api/transactions?orderId= filter (src/lib/transactions.ts listTransactions()) — no new API
+  // route needed. Attachment presence fetched per-transaction via the existing
+  // GET /api/transactions/[id]/attachments endpoint (same one Finance already uses), not
+  // duplicated/reimplemented here.
+  const [orderTransactions, setOrderTransactions] = useState<OrderTransaction[] | null>(null);
+  const [transactionsLoading, setTransactionsLoading] = useState(true);
+  const [transactionsError, setTransactionsError] = useState("");
+  const [attachments, setAttachments] = useState<Record<number, AttachmentInfo>>({});
 
   async function changeStatus(nextStatus: OrderStatus) {
     // กันการกดซ้ำระหว่างที่ยังอัปเดตอยู่ (เหมือน pattern submitting/saving ที่ใช้อยู่แล้วในหน้าอื่นๆ)
@@ -153,6 +207,109 @@ export default function OrderDetailPage() {
       cancelled = true;
     };
   }, [orderId]);
+
+  // STEP 38 — order-linked transactions + their attachment presence. Separate effect/loading state
+  // from the order load above so a failure here never blocks the order itself from rendering.
+  useEffect(() => {
+    if (!orderId) return;
+
+    let cancelled = false;
+
+    async function loadOrderTransactions() {
+      setTransactionsLoading(true);
+      setTransactionsError("");
+
+      try {
+        const response = await fetch(`/api/transactions?orderId=${orderId}`, {
+          cache: "no-store",
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.error || "ไม่สามารถโหลดธุรกรรมที่เกี่ยวข้องได้");
+        }
+
+        if (cancelled) return;
+
+        const rows: OrderTransaction[] = data.data;
+        setOrderTransactions(rows);
+
+        // Fetch attachment presence for each transaction in parallel, reusing the existing
+        // Finance attachments endpoint as-is (list only — no upload/delete on this read-only page).
+        const results = await Promise.all(
+          rows.map(async (t) => {
+            try {
+              const attachmentResponse = await fetch(`/api/transactions/${t.id}/attachments`, {
+                cache: "no-store",
+              });
+              const attachmentData = await attachmentResponse.json();
+
+              if (!attachmentResponse.ok || !attachmentData?.success) {
+                return [t.id, { loaded: true, hasAttachment: false, fileUrl: null }] as const;
+              }
+
+              const items: Array<{ fileUrl: string }> = attachmentData.data;
+
+              return [
+                t.id,
+                {
+                  loaded: true,
+                  hasAttachment: items.length > 0,
+                  fileUrl: items.length > 0 ? items[0].fileUrl : null,
+                },
+              ] as const;
+            } catch {
+              return [t.id, { loaded: true, hasAttachment: false, fileUrl: null }] as const;
+            }
+          })
+        );
+
+        if (cancelled) return;
+
+        setAttachments(Object.fromEntries(results));
+      } catch (err) {
+        if (cancelled) return;
+        setTransactionsError(
+          err instanceof Error ? err.message : "ไม่สามารถโหลดธุรกรรมที่เกี่ยวข้องได้"
+        );
+        setOrderTransactions(null);
+      } finally {
+        if (!cancelled) {
+          setTransactionsLoading(false);
+        }
+      }
+    }
+
+    loadOrderTransactions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId]);
+
+  // STEP 38 — shipping/COD breakdown, derived read-only from orderTransactions. N/A (never 0, never
+  // guessed) whenever no linked transaction of that category exists — order.shipping_fee (the
+  // customer-facing fee, a plain orders column) is the only one of the four always known.
+  function sumByCategory(category: string): number | null {
+    if (!orderTransactions) return null;
+    const matches = orderTransactions.filter(
+      (t) => t.transactionType === "expense" && t.category === category
+    );
+    if (matches.length === 0) return null;
+    return matches.reduce((sum, t) => sum + t.amount, 0);
+  }
+
+  const actualShippingExpense = sumByCategory("SHIPPING");
+  const returnShippingExpense = sumByCategory("RETURNED_PARCEL");
+  const codFee = sumByCategory("COD_FEE");
+
+  const totalIncome = (orderTransactions ?? [])
+    .filter((t) => t.transactionType === "income")
+    .reduce((sum, t) => sum + t.amount, 0);
+  const totalExpense = (orderTransactions ?? [])
+    .filter((t) => t.transactionType === "expense")
+    .reduce((sum, t) => sum + t.amount, 0);
 
   return (
     <main className="min-h-screen bg-slate-50 p-6">
@@ -335,6 +492,157 @@ export default function OrderDetailPage() {
                   <span>{formatCurrency(order.total)}</span>
                 </div>
               </div>
+            </section>
+
+            <section className="mt-6 rounded-2xl border bg-white shadow-sm">
+              <div className="border-b p-5">
+                <h2 className="text-lg font-semibold text-slate-900">
+                  🚚 สรุปค่าจัดส่ง
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  แยกระหว่างเงินที่เรียกเก็บจากลูกค้ากับต้นทุนจริงที่ร้านจ่าย — ตัวเลขมาจากข้อมูลจริงใน
+                  ระบบเท่านั้น แสดง N/A เมื่อไม่มีข้อมูล
+                </p>
+              </div>
+
+              <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl border bg-slate-50 p-4">
+                  <p className="text-xs text-slate-500">ค่าส่งที่เรียกเก็บจากลูกค้า</p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">
+                    {formatCurrency(order.shipping_fee)}
+                  </p>
+                </div>
+                <div className="rounded-xl border bg-slate-50 p-4">
+                  <p className="text-xs text-slate-500">ค่าขนส่งจริงที่ร้านจ่าย</p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">
+                    {transactionsLoading
+                      ? "..."
+                      : actualShippingExpense === null
+                        ? "N/A"
+                        : formatCurrency(actualShippingExpense)}
+                  </p>
+                </div>
+                <div className="rounded-xl border bg-slate-50 p-4">
+                  <p className="text-xs text-slate-500">ค่าเสียหายจากพัสดุตีกลับ</p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">
+                    {transactionsLoading
+                      ? "..."
+                      : returnShippingExpense === null
+                        ? "N/A"
+                        : formatCurrency(returnShippingExpense)}
+                  </p>
+                </div>
+                <div className="rounded-xl border bg-slate-50 p-4">
+                  <p className="text-xs text-slate-500">ค่าธรรมเนียม COD</p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">
+                    {transactionsLoading ? "..." : codFee === null ? "N/A" : formatCurrency(codFee)}
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            <section className="mt-6 rounded-2xl border bg-white shadow-sm">
+              <div className="border-b p-5">
+                <h2 className="text-lg font-semibold text-slate-900">
+                  💳 ธุรกรรมที่เกี่ยวข้องกับออเดอร์
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  รายการนี้เป็นข้อมูลอ่านอย่างเดียว — ไม่สามารถแก้ไข/ลบธุรกรรมจากหน้านี้ได้
+                </p>
+              </div>
+
+              {transactionsError && (
+                <div className="m-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                  {transactionsError}
+                </div>
+              )}
+
+              {transactionsLoading ? (
+                <p className="p-5 text-sm text-slate-500">กำลังโหลดข้อมูล...</p>
+              ) : !orderTransactions || orderTransactions.length === 0 ? (
+                <p className="p-5 text-sm text-slate-500">
+                  ยังไม่มีธุรกรรมที่ผูกกับออเดอร์นี้
+                </p>
+              ) : (
+                <>
+                  <div className="divide-y">
+                    {orderTransactions.map((t) => {
+                      const attachment = attachments[t.id];
+
+                      return (
+                        <div key={t.id} className="flex flex-col gap-2 p-5 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <span
+                              className={`w-fit rounded-full px-3 py-1 text-xs font-medium ${
+                                t.transactionType === "income"
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : "bg-red-50 text-red-700"
+                              }`}
+                            >
+                              {t.transactionType === "income" ? "รายได้" : "ค่าใช้จ่าย"}
+                            </span>
+                            <p className="mt-2 text-sm font-semibold text-slate-900">
+                              {categoryLabel(t.transactionType, t.category)}
+                            </p>
+                            {t.description && (
+                              <p className="mt-1 text-xs text-slate-500">{t.description}</p>
+                            )}
+                            <p className="mt-1 text-xs text-slate-400">{t.transactionDate}</p>
+                            {t.linkedOrderStatus && (
+                              <p className="mt-1 text-xs text-slate-500">
+                                สถานะออเดอร์: {ORDER_STATUS_LABELS[t.linkedOrderStatus] || t.linkedOrderStatus}
+                              </p>
+                            )}
+                            <p className="mt-1 text-xs text-slate-500">
+                              {attachment?.loaded
+                                ? attachment.hasAttachment
+                                  ? (
+                                    <>
+                                      📎 มีหลักฐานแนบ —{" "}
+                                      <a
+                                        href={attachment.fileUrl ?? "#"}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-amber-700 underline hover:text-amber-900"
+                                      >
+                                        ดูหลักฐาน
+                                      </a>
+                                    </>
+                                  )
+                                  : "ไม่มีหลักฐานแนบ"
+                                : "กำลังตรวจสอบหลักฐาน..."}
+                            </p>
+                          </div>
+
+                          <p
+                            className={`text-lg font-bold ${
+                              t.transactionType === "income" ? "text-emerald-600" : "text-red-600"
+                            }`}
+                          >
+                            {t.transactionType === "income" ? "+" : "-"}
+                            {formatCurrency(t.amount)}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="space-y-2 border-t bg-slate-50 p-5 text-sm">
+                    <div className="flex justify-between text-slate-600">
+                      <span>รายได้รวม</span>
+                      <span className="font-semibold text-emerald-600">
+                        {formatCurrency(totalIncome)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>ค่าใช้จ่ายรวม</span>
+                      <span className="font-semibold text-red-600">
+                        {formatCurrency(totalExpense)}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              )}
             </section>
           </>
         ) : null}

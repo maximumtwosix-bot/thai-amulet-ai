@@ -4309,9 +4309,128 @@ Content Studio — not touched at all in this STEP.
 
 **Git**: nothing committed, nothing pushed, per instructions.
 
-**No STEP 38 was started.**
-
 **STEP 37 STATUS: PASS**
+
+---
+
+## STEP 38 — ORDER DETAIL LINKED TRANSACTIONS + SHIPPING VISIBILITY
+
+**Goal**: read-only visibility on `/orders/[id]` for every transaction linked to that order
+(income, expense, shipping, COD/return, etc.), plus a clear breakdown of customer-facing shipping
+fee vs. actual shipping/return/COD costs — using only data that already exists, N/A wherever it
+doesn't.
+
+**Mandatory audit (before writing any code)**: dumped the live schema for `orders`, `order_items`,
+`transactions`, `transaction_attachments` — confirmed no schema change is needed. Found that
+`GET /api/transactions?orderId=` (`listTransactions()` in `src/lib/transactions.ts`) already exists,
+already filters by exact `t.order_id = ?` equality (no leakage risk), already LEFT JOINs `orders` for
+`linkedOrderStatus`/`linkedOrderNumber` (STEP 34), and is already behind auth (`proxy.ts`'s existing
+`/api/transactions*` rule) — **reused as-is, no new API route created**. Also found
+`GET /api/transactions/[id]/attachments` already exists (STEP 21) and is read-only-safe to call from
+this page — **reused as-is, no attachment logic duplicated**. `orders.shipping_fee` is the only one
+of the four shipping figures that is a plain column (always known); actual shipping/return/COD costs
+have nowhere to live except as `transactions` rows with `category` = `SHIPPING`/`RETURNED_PARCEL`/
+`COD_FEE` and `order_id` set (same mechanism STEP 37 already established) — confirmed working, so
+**no STOP condition triggered, no schema change**.
+
+**Design**: `src/app/orders/[id]/page.tsx` now fetches `GET /api/transactions?orderId=<id>` after the
+order loads (separate effect/loading state from the order fetch, so a failure here never blocks the
+order itself from rendering), then fetches attachment presence per-transaction via the existing
+attachments endpoint in parallel. Two new read-only sections render below the existing items table:
+"🚚 สรุปค่าจัดส่ง" (4 cards: Customer Shipping Fee from `order.shipping_fee`; Actual Shipping Expense,
+Return Shipping Expense, COD Fee — each summed from this order's linked expense transactions by
+category, or **N/A** if none exist, never guessed/defaulted to 0) and "💳 ธุรกรรมที่เกี่ยวข้องกับออเดอร์"
+(every linked transaction, income/expense with sign and color, category label, the order's own status
+label per row, attachment presence + link if any, and รายได้รวม/ค่าใช้จ่ายรวม totals) — or
+"ยังไม่มีธุรกรรมที่ผูกกับออเดอร์นี้" when the order has none. **No mutation anywhere on this page for
+transactions** — no create, no edit, no delete; the existing STEP 32 status-change buttons are
+untouched and unrelated. Cancelled orders display their linked transactions completely unaltered
+(the STEP 32 boundary is a property of the data this page reads, not something this page enforces
+itself — nothing here writes to `transactions` or `orders.status`).
+
+**New files**: none. **Modified**: `src/app/orders/[id]/page.tsx` only. **No dependencies added. No
+database schema change. No new API route** (both reused, per audit above).
+**Backup created**: `src/app/orders/[id]/page.tsx.step38-backup-<timestamp>`.
+
+**Tested (real dev server, real browser via chrome-devtools MCP + curl; a fresh `pnpm backup` was run
+immediately before testing)**:
+
+Baseline: `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+transaction_attachments:0, customers:0, ai_cost_ledger:10`; product 3 stock `13`/`active`; products
+41/33/4 stock `0`/`out_of_stock`; order id 1 untouched throughout.
+
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**. `pnpm.cmd run build` → **compiled successfully**, route
+   list unchanged (confirms no new API route was added, as intended).
+2. **Authentication regression, checked before any functional testing**: unauthenticated
+   `GET /orders/1` → `307`; unauthenticated `GET /api/transactions?orderId=1` → `401`; unauthenticated
+   `GET /api/transactions/1/attachments` → `401` — **PASS**.
+3. **Test data** (4 orders, ids 28–31): Order F — single item, progressed to `completed`, with one
+   linked `PACKAGING` expense (₿20) that had a real image file attached via the existing attachments
+   endpoint — covers income visibility, expense visibility, income+expense combo, and attachment
+   visibility. Order G — progressed `pending→paid→shipped→cancelled` (COD-reject pattern), with three
+   linked expenses: `SHIPPING` ₿40, `RETURNED_PARCEL` ₿40, `COD_FEE` ₿15 — covers cancelled-order
+   visibility and all three shipping/COD categories simultaneously. Order H — zero-total (full
+   discount, so no automatic income transaction), with one linked `FUEL` ₿20 expense — covers
+   "order with an expense transaction and no income". Order I — zero-total, no manual transaction
+   added — covers the empty state.
+4. **Order F (`/orders/28`), real browser**: Shipping summary showed Customer Shipping Fee ₿0.00 (real
+   column value) and N/A for all three others (no linked SHIPPING/RETURNED_PARCEL/COD_FEE transaction
+   exists for this order) — **PASS**. Transaction list showed the expense (`-₿20.00`, "📎 มีหลักฐานแนบ —
+   ดูหลักฐาน" link) and the income (`+₿199.00`, "ไม่มีหลักฐานแนบ"), both labeled "สถานะออเดอร์: ✅ สำเร็จ";
+   totals รายได้รวม ₿199.00 / ค่าใช้จ่ายรวม ₿20.00 — **PASS**. The attachment link resolved
+   (`200 image/png`) — **PASS**. Zero console errors.
+5. **Order G (`/orders/29`), the critical cancelled-order check**: order badge clearly showed "🚫
+   ยกเลิก"; shipping summary showed all four real figures (₿50 / ₿40 / ₿40 / ₿15, none guessed); all
+   4 linked transactions (including the ₿249 income) displayed completely unaltered, each labeled
+   "สถานะออเดอร์: 🚫 ยกเลิก"; totals รายได้รวม ₿249.00 / ค่าใช้จ่ายรวม ₿95.00 — **PASS**, confirming STEP 32's
+   rule holds (the income transaction itself is untouched — this page only displays it, cancellation
+   never modified it). Zero console errors.
+6. **Order H (`/orders/30`)**: expense-only order correctly showed รายได้รวม ₿0.00 / ค่าใช้จ่ายรวม
+   ₿20.00, pre-existing "ยังไม่มีรายรับที่บันทึกไว้" badge unaffected — **PASS**. Zero console errors.
+7. **Order I (`/orders/31`)**: correctly showed "ยังไม่มีธุรกรรมที่ผูกกับออเดอร์นี้" — **PASS**. Zero console
+   errors.
+8. **Transaction isolation**: `GET /api/transactions?orderId=28/29/30/31` each returned exactly that
+   order's own rows (2/4/1/0 respectively) — cross-checked no order's response contained another
+   order's transaction ids — **PASS**.
+9. **Historical order id 1 (`/orders/1`)**: renders correctly with both new sections (shipping summary
+   all N/A except the real ₿0.00 customer fee; "ยังไม่มีธุรกรรมที่ผูกกับออเดอร์นี้", since order 1 predates
+   STEP 31's automatic income linking) — confirmed untouched by any test/cleanup step — **PASS**. Zero
+   console errors.
+10. **Full regression, real browser, zero console errors on every page**: `/products`, `/inventory`,
+    `/orders`, `/orders/new` (2 pre-existing, STEP-38-unrelated accessibility lint issues, not errors),
+    `/finance`, `/tax` (Profit/Margin and Finance totals both correctly reflected the new test data —
+    Revenue ₿199/COGS ₿100/Gross Profit ₿99 excluding Order G's cancelled income, while Finance's own
+    รายรับรวม ₿448 correctly still included it, per the STEP 32/37 boundary), `/customers` — **PASS**.
+11. **API regression**: `/api/health`, `/api/products`, `/api/orders`, `/api/orders/1`,
+    `/api/inventory/movements`, `/api/transactions`, `/api/tax/summary`, `/api/costs/summary`,
+    `/api/profit/summary` all responded correctly (the two summary endpoints' bare `400`s were the
+    pre-existing "year or dateFrom/dateTo required" validation, confirmed `200` once given params —
+    not a regression) — **PASS**.
+
+**Cleanup**: all 4 test orders and their `order_items`/`inventory_movements` rows, all 7 test
+transactions, the 1 test attachment row **and its physical file on disk**, and the 1 stock-bump
+`inventory_movements` row were deleted by exact id via a temporary script (deleted immediately after
+use). **One mistake caught and fixed**: the cleanup script restored product 4's stock/status but I
+initially forgot product 3 (consumed by Orders F and G, 2 units total) — live-verified against the
+recorded baseline afterward, caught the `13→11` discrepancy, and corrected it with a direct, scoped
+fix before finishing. Final table counts and every product's `stock`/`status` verified identical to
+baseline; order id 1 was never touched by either the tests or the cleanup.
+
+**Defects found**: none in the STEP 38 code itself. The one issue above was in my own cleanup
+procedure (an incomplete stock restore), not a defect in `orders/[id]/page.tsx` or the reused APIs —
+caught and fixed before finishing.
+
+**Files changed**: `src/app/orders/[id]/page.tsx` (modified only). `PROJECT_STATUS.md` updated with
+this entry. `PROJECT_CHECKPOINT.md` not touched, per instructions. Video Studio, AI Video, Voice
+Studio, Social, Content Studio — not touched at all in this STEP. Order status workflow, the STEP 32
+cancellation boundary, STEP 34's transaction integrity rules, STEP 36 customer management, and STEP 37
+profit calculation logic were all read from but not modified.
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**No STEP 39 was started.**
+
+**STEP 38 STATUS: PASS**
 
 ---
 

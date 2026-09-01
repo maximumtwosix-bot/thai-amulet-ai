@@ -343,6 +343,23 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_transaction_attachments_transaction_id
     ON transaction_attachments(transaction_id);
+
+  -- STEP 49: order fulfillment tracking (carrier / tracking number / delivery status) — a distinct
+  -- concept from orders.status (approved 2026-09-01), kept as a separate table to avoid conflating
+  -- the two: delivery proof photos are evidence *of a physical delivery event*, not transaction
+  -- evidence (transaction_attachments, STEP 21). Mirrors transaction_attachments's exact shape.
+  -- No ON DELETE CASCADE — same convention as every other table here.
+  CREATE TABLE IF NOT EXISTS order_delivery_proofs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    file_name TEXT NOT NULL,
+    file_url TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (order_id) REFERENCES orders(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_order_delivery_proofs_order_id
+    ON order_delivery_proofs(order_id);
 `);
 
 // STEP 15 — เก็บ duration/size ของวิดีโอที่ดาวน์โหลดสำเร็จจริง (ยืนยันด้วย ffprobe) ไว้แสดงใน UI
@@ -453,6 +470,30 @@ const contentColumnNames = new Set(contentColumns.map((column) => column.name));
 
 if (!contentColumnNames.has("product_id")) {
   db.exec("ALTER TABLE content ADD COLUMN product_id INTEGER REFERENCES products(id)");
+}
+
+// STEP 49 — order fulfillment tracking. Fully independent of orders.status (approved 2026-09-01):
+// no existing row's status/transition behavior is affected. carrier/tracking_number are nullable
+// (every existing order, including historical order id 1, gets NULL — not backfilled/guessed).
+// delivery_status defaults to 'pending' for every existing order, matching orders.status's own
+// DEFAULT 'pending' convention, but is a separate column with its own separate enum
+// (src/lib/orderDelivery.ts) — never read or written by updateOrderStatus()/createOrder().
+const orderColumns = db
+  .prepare("PRAGMA table_info(orders)")
+  .all() as Array<{ name: string }>;
+
+const orderColumnNames = new Set(orderColumns.map((column) => column.name));
+
+if (!orderColumnNames.has("carrier")) {
+  db.exec("ALTER TABLE orders ADD COLUMN carrier TEXT");
+}
+
+if (!orderColumnNames.has("tracking_number")) {
+  db.exec("ALTER TABLE orders ADD COLUMN tracking_number TEXT");
+}
+
+if (!orderColumnNames.has("delivery_status")) {
+  db.exec("ALTER TABLE orders ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'pending'");
 }
 
 export default db;

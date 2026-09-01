@@ -8,6 +8,11 @@ import {
   getAllowedNextStatuses,
   type OrderStatus,
 } from "@/lib/orderStatus";
+import {
+  DELIVERY_STATUSES,
+  DELIVERY_STATUS_LABELS,
+  type DeliveryStatus,
+} from "@/lib/deliveryStatus";
 
 type OrderItem = {
   id: number;
@@ -79,11 +84,24 @@ type OrderDetail = {
   discount: number;
   total: number;
   status: OrderStatus;
+  // STEP 49 — fulfillment tracking, fully independent of `status` above (approved 2026-09-01).
+  // carrier/tracking_number are null for every order created before STEP 49 (not backfilled).
+  carrier: string | null;
+  tracking_number: string | null;
+  delivery_status: DeliveryStatus;
   created_at: string;
   items: OrderItem[];
   // STEP 31 — id of the automatically-created income transaction for this order, or null (every
   // order created before STEP 31, including historical order id 1, is null — not backfilled)
   linkedIncomeTransactionId: number | null;
+};
+
+// STEP 49 — delivery proof photo, mirrors AttachmentInfo's shape/fetch pattern above.
+type DeliveryProof = {
+  id: number;
+  fileName: string;
+  fileUrl: string;
+  createdAt: string;
 };
 
 function formatDate(value: string) {
@@ -128,6 +146,129 @@ export default function OrderDetailPage() {
   const [transactionsLoading, setTransactionsLoading] = useState(true);
   const [transactionsError, setTransactionsError] = useState("");
   const [attachments, setAttachments] = useState<Record<number, AttachmentInfo>>({});
+
+  // STEP 49 — order fulfillment tracking (carrier / tracking number / delivery status), approved
+  // 2026-09-01. Separate state from the existing order-status workflow above — this never touches
+  // order.status. Edit fields are local (carrierInput/trackingInput) so typing doesn't immediately
+  // write to the server; only saveDelivery() below sends the PATCH.
+  const [carrierInput, setCarrierInput] = useState("");
+  const [trackingInput, setTrackingInput] = useState("");
+  const [deliveryStatusInput, setDeliveryStatusInput] = useState<DeliveryStatus>("pending");
+  const [savingDelivery, setSavingDelivery] = useState(false);
+  const [deliveryError, setDeliveryError] = useState("");
+  const [deliveryProofs, setDeliveryProofs] = useState<DeliveryProof[]>([]);
+  const [proofsLoading, setProofsLoading] = useState(true);
+  const [uploadingProof, setUploadingProof] = useState(false);
+  const [proofError, setProofError] = useState("");
+  const [deletingProofId, setDeletingProofId] = useState<number | null>(null);
+
+  async function saveDelivery() {
+    if (savingDelivery || !order) return;
+
+    setSavingDelivery(true);
+    setDeliveryError("");
+
+    try {
+      const response = await fetch(`/api/orders/${order.id}/delivery`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          carrier: carrierInput,
+          trackingNumber: trackingInput,
+          deliveryStatus: deliveryStatusInput,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกข้อมูลการจัดส่งได้");
+      }
+
+      setOrder((current) =>
+        current
+          ? {
+              ...current,
+              carrier: data.data.carrier,
+              tracking_number: data.data.trackingNumber,
+              delivery_status: data.data.deliveryStatus,
+            }
+          : current
+      );
+      setCarrierInput(data.data.carrier ?? "");
+      setTrackingInput(data.data.trackingNumber ?? "");
+      setDeliveryStatusInput(data.data.deliveryStatus);
+    } catch (err) {
+      setDeliveryError(
+        err instanceof Error ? err.message : "ไม่สามารถบันทึกข้อมูลการจัดส่งได้"
+      );
+    } finally {
+      setSavingDelivery(false);
+    }
+  }
+
+  async function uploadDeliveryProof(file: File) {
+    if (uploadingProof || !order) return;
+
+    setUploadingProof(true);
+    setProofError("");
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch(`/api/orders/${order.id}/delivery-proofs`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถอัปโหลดรูปหลักฐานได้");
+      }
+
+      setDeliveryProofs((current) => [
+        ...current,
+        {
+          id: data.data.id,
+          fileName: data.data.fileName,
+          fileUrl: data.data.fileUrl,
+          createdAt: data.data.createdAt,
+        },
+      ]);
+    } catch (err) {
+      setProofError(err instanceof Error ? err.message : "ไม่สามารถอัปโหลดรูปหลักฐานได้");
+    } finally {
+      setUploadingProof(false);
+    }
+  }
+
+  async function deleteDeliveryProof(proofId: number) {
+    if (deletingProofId !== null || !order) return;
+
+    setDeletingProofId(proofId);
+    setProofError("");
+
+    try {
+      const response = await fetch(
+        `/api/orders/${order.id}/delivery-proofs/${proofId}`,
+        { method: "DELETE" }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถลบรูปหลักฐานได้");
+      }
+
+      setDeliveryProofs((current) => current.filter((p) => p.id !== proofId));
+    } catch (err) {
+      setProofError(err instanceof Error ? err.message : "ไม่สามารถลบรูปหลักฐานได้");
+    } finally {
+      setDeletingProofId(null);
+    }
+  }
 
   async function changeStatus(nextStatus: OrderStatus) {
     // กันการกดซ้ำระหว่างที่ยังอัปเดตอยู่ (เหมือน pattern submitting/saving ที่ใช้อยู่แล้วในหน้าอื่นๆ)
@@ -188,6 +329,10 @@ export default function OrderDetailPage() {
         }
 
         setOrder(data.data);
+        // STEP 49 — seed the edit form from the freshly-loaded order once, on initial load.
+        setCarrierInput(data.data.carrier ?? "");
+        setTrackingInput(data.data.tracking_number ?? "");
+        setDeliveryStatusInput(data.data.delivery_status ?? "pending");
       } catch (err) {
         if (cancelled) return;
         console.error("Load order detail error:", err);
@@ -282,6 +427,49 @@ export default function OrderDetailPage() {
     }
 
     loadOrderTransactions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId]);
+
+  // STEP 49 — delivery proof photos, read on load. Separate effect so a failure here never blocks
+  // the order or its transactions from rendering.
+  useEffect(() => {
+    if (!orderId) return;
+
+    let cancelled = false;
+
+    async function loadDeliveryProofs() {
+      setProofsLoading(true);
+
+      try {
+        const response = await fetch(`/api/orders/${orderId}/delivery-proofs`, {
+          cache: "no-store",
+        });
+
+        const data = await response.json();
+
+        if (cancelled) return;
+
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.error || "ไม่สามารถโหลดรูปหลักฐานการจัดส่งได้");
+        }
+
+        setDeliveryProofs(data.data);
+      } catch (err) {
+        if (cancelled) return;
+        setProofError(
+          err instanceof Error ? err.message : "ไม่สามารถโหลดรูปหลักฐานการจัดส่งได้"
+        );
+      } finally {
+        if (!cancelled) {
+          setProofsLoading(false);
+        }
+      }
+    }
+
+    loadDeliveryProofs();
 
     return () => {
       cancelled = true;
@@ -558,6 +746,137 @@ export default function OrderDetailPage() {
                     {transactionsLoading ? "..." : codFee === null ? "N/A" : formatCurrency(codFee)}
                   </p>
                 </div>
+              </div>
+            </section>
+
+            {/* STEP 49 — order fulfillment tracking (carrier / tracking number / delivery status /
+                delivery proof photos), approved 2026-09-01. Fully independent of the order-status
+                card above — no automatic sync, no effect on transactions/inventory in either
+                direction. */}
+            <section className="mt-6 rounded-2xl border bg-white shadow-sm">
+              <div className="border-b p-5">
+                <h2 className="text-lg font-semibold text-slate-900">
+                  🚚 การจัดส่งพัสดุ
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  ข้อมูลขนส่ง/เลขพัสดุ/สถานะการจัดส่ง แยกต่างหากจากสถานะออเดอร์ด้านบน แก้ไขได้อิสระ
+                  โดยไม่กระทบรายรับ/สต็อก/สถานะออเดอร์
+                </p>
+              </div>
+
+              <div className="grid gap-4 p-5 sm:grid-cols-2">
+                <label className="text-sm text-slate-700">
+                  ขนส่ง (บริษัทขนส่ง)
+                  <input
+                    type="text"
+                    value={carrierInput}
+                    onChange={(e) => setCarrierInput(e.target.value)}
+                    placeholder="เช่น Kerry, Flash, ไปรษณีย์ไทย, J&T"
+                    className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-700">
+                  เลขพัสดุ (Tracking Number)
+                  <input
+                    type="text"
+                    value={trackingInput}
+                    onChange={(e) => setTrackingInput(e.target.value)}
+                    placeholder="เลขพัสดุ"
+                    className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-700 sm:col-span-2">
+                  สถานะการจัดส่ง
+                  <select
+                    value={deliveryStatusInput}
+                    onChange={(e) =>
+                      setDeliveryStatusInput(e.target.value as DeliveryStatus)
+                    }
+                    className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                  >
+                    {DELIVERY_STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {DELIVERY_STATUS_LABELS[s]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 border-t p-5">
+                <button
+                  type="button"
+                  onClick={saveDelivery}
+                  disabled={savingDelivery}
+                  className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                >
+                  {savingDelivery ? "กำลังบันทึก..." : "บันทึกข้อมูลการจัดส่ง"}
+                </button>
+
+                <span className="w-fit rounded-full bg-amber-50 px-4 py-1.5 text-sm font-medium text-amber-700">
+                  {DELIVERY_STATUS_LABELS[order.delivery_status] || order.delivery_status}
+                </span>
+
+                {deliveryError && (
+                  <p className="w-full text-xs text-red-600">{deliveryError}</p>
+                )}
+              </div>
+
+              <div className="border-t p-5">
+                <h3 className="text-sm font-semibold text-slate-900">รูปหลักฐานการจัดส่ง</h3>
+
+                <div className="mt-3">
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp"
+                    disabled={uploadingProof}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        uploadDeliveryProof(file);
+                      }
+                      e.target.value = "";
+                    }}
+                    className="text-sm text-slate-600"
+                  />
+                  {uploadingProof && (
+                    <p className="mt-1 text-xs text-slate-500">กำลังอัปโหลด...</p>
+                  )}
+                </div>
+
+                {proofError && (
+                  <p className="mt-2 text-xs text-red-600">{proofError}</p>
+                )}
+
+                {proofsLoading ? (
+                  <p className="mt-3 text-sm text-slate-500">กำลังโหลดรูปหลักฐาน...</p>
+                ) : deliveryProofs.length === 0 ? (
+                  <p className="mt-3 text-sm text-slate-500">ยังไม่มีรูปหลักฐานการจัดส่ง</p>
+                ) : (
+                  <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                    {deliveryProofs.map((proof) => (
+                      <div key={proof.id} className="overflow-hidden rounded-xl border">
+                        <a href={proof.fileUrl} target="_blank" rel="noopener noreferrer">
+                          <img
+                            src={proof.fileUrl}
+                            alt="รูปหลักฐานการจัดส่ง"
+                            className="h-28 w-full object-cover"
+                          />
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => deleteDeliveryProof(proof.id)}
+                          disabled={deletingProofId === proof.id}
+                          className="w-full border-t bg-white px-2 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          {deletingProofId === proof.id ? "กำลังลบ..." : "ลบรูปนี้"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </section>
 

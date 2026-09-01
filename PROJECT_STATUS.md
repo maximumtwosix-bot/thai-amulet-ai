@@ -4976,6 +4976,142 @@ Products, Video Studio, Voice Studio, Content Studio, or Social.
 
 ---
 
+## STEP 49 — ORDER FULFILLMENT TRACKING (CARRIER / TRACKING NUMBER / DELIVERY STATUS / DELIVERY PROOF)
+
+Date: 2026-09-01 / 2026-09-02
+
+**Audit (read-only, before implementation)**: confirmed via exhaustive search (schema dump,
+`ripgrep` across all back-office files, full read of `src/lib/db.ts`, `src/app/api/orders/[id]/
+route.ts`, `src/app/api/orders/[id]/status/route.ts`) that zero shipping-carrier, tracking-number,
+delivery-status, or delivery-proof capability existed anywhere in the schema, API, or UI. Confirmed
+`src/proxy.ts`'s existing `pathname === "/api/orders" || pathname.startsWith("/api/orders/")` rule
+already covers any new sub-route under `/api/orders/[id]/...` — no `proxy.ts` change needed.
+
+**Approved implementation plan (2026-09-01)**, then approved decisions before coding:
+1. `delivery_status` (`pending`/`shipping`/`shipped`/`returned`) is freely operator-editable — no
+   strict transition graph (unlike `orders.status`'s `ORDER_STATUS_TRANSITIONS`).
+2. `orders.status` and the new `delivery_status` are kept **completely independent** — no automatic
+   sync in either direction, no shared column, no shared code path. `updateOrderStatus()` in
+   `src/lib/orders.ts` was not modified at all.
+3. `delivery_status = "returned"` never automatically creates a transaction and never automatically
+   cancels the order — purely a manual, informational field.
+4. STEP 48's print/receipt view was **not** modified in this STEP (carrier/tracking can be added to
+   it in a future STEP).
+5. Delivery proof photos use a new table named `order_delivery_proofs`.
+
+**Database migration (additive only, no destructive change)** — applied via the existing
+`PRAGMA table_info` + conditional `ALTER TABLE` convention in `src/lib/db.ts`:
+- `orders` gained 3 nullable/defaulted columns: `carrier TEXT`, `tracking_number TEXT`,
+  `delivery_status TEXT NOT NULL DEFAULT 'pending'`.
+- New table `order_delivery_proofs` (`id`, `order_id`, `file_name`, `file_url`, `created_at`, FK to
+  `orders`, no `ON DELETE CASCADE` — same convention as every other table) + index on `order_id`.
+- Verified live: every pre-existing order (historical order id 1, real order id 38) received
+  `delivery_status='pending'`, `carrier=NULL`, `tracking_number=NULL` automatically — zero data loss,
+  no backfilled/guessed values.
+
+**Implemented**:
+- `src/lib/deliveryStatus.ts` (new) — plain `DeliveryStatus` type/enum/labels, zero imports, mirrors
+  `src/lib/orderStatus.ts`'s split so it can be imported by the Client Component page too.
+- `src/lib/orderDelivery.ts` (new) — `updateOrderDelivery()`/`getOrderDelivery()`; the `UPDATE`
+  statement uses an explicit column list (`carrier, tracking_number, delivery_status` only) — never a
+  blind full-row write — so it structurally cannot touch `status`/`total`/`subtotal`/`shipping_fee`/
+  `discount`/`customer_id`/etc. Never calls `createTransaction()`, never touches
+  `inventory_movements` or `products.stock`.
+- `src/lib/orderDeliveryProofs.ts` (new) — CRUD for `order_delivery_proofs`, mirrors
+  `src/lib/transactionAttachments.ts`'s exact shape/conventions (parent-scoped lookup so a
+  cross-order `proofId` returns `undefined` → route maps to `404`, no existence leak).
+- `src/app/api/orders/[id]/delivery/route.ts` (new) — `PATCH`, sibling of the existing
+  `PATCH /api/orders/[id]/status` route (which was left completely untouched).
+- `src/app/api/orders/[id]/delivery-proofs/route.ts` + `[proofId]/route.ts` (new) — `GET`/`POST`/
+  `DELETE`, reusing the exact hardened validation already proven in
+  `src/app/api/transactions/[id]/attachments/route.ts` (extension allowlist, MIME cross-check,
+  magic-byte content verification, fail-closed) — copied, not re-derived. Files stored under
+  `public/generated/order-delivery-proofs/` (same convention as `transaction-attachments`/
+  `product-media`, already covered by the existing backup script's `public/generated/**` copy).
+- `src/app/api/orders/[id]/route.ts` — 3-line addition only: `o.carrier, o.tracking_number,
+  o.delivery_status` added to the existing `GET` handler's `SELECT` list so Order Detail can display
+  them. No other line changed.
+- `src/app/orders/[id]/page.tsx` — new "🚚 การจัดส่งพัสดุ" section (carrier/tracking-number inputs,
+  delivery-status dropdown, save button, status badge, proof-photo upload/thumbnail-grid/delete) added
+  entirely inside the existing `print:hidden` wrapper. STEP 48's print-only block was not touched at
+  all (no carrier/tracking shown there, per approved decision #4). Every existing section, handler,
+  and piece of state from STEP 32/38/48 is unchanged — purely additive JSX/state/effects.
+
+**Files changed** (3, all additive-only diffs, zero deletions): `src/lib/db.ts` (+41 lines),
+`src/app/api/orders/[id]/route.ts` (+3 lines), `src/app/orders/[id]/page.tsx` (+319 lines).
+**Files created** (5): `src/lib/deliveryStatus.ts`, `src/lib/orderDelivery.ts`,
+`src/lib/orderDeliveryProofs.ts`, `src/app/api/orders/[id]/delivery/route.ts`,
+`src/app/api/orders/[id]/delivery-proofs/route.ts`, `src/app/api/orders/[id]/delivery-proofs/
+[proofId]/route.ts`.
+**Not touched**: `src/lib/orders.ts`, `src/lib/orderStatus.ts`,
+`src/app/api/orders/[id]/status/route.ts`, `src/proxy.ts`, `src/lib/transactions.ts`,
+`src/lib/taxSummary.ts`, `src/lib/profitSummary.ts`, `src/lib/inventory.ts`,
+`src/lib/customers.ts`, `src/app/api/orders/route.ts`, and all of Finance, Tax, Customers, Inventory,
+Products, Video Studio, Voice Studio, Content Studio, Social.
+**No dependencies added.**
+**Backups created**: `src/lib/db.ts.step49-backup-20260902-001154`,
+`src/app/api/orders/[id]/route.ts.step49-backup-20260902-001154`,
+`src/app/orders/[id]/page.tsx.step49-backup-20260902-001154`.
+
+**Tested (`npx tsc --noEmit`, `npm run build`, real dev server, real browser via chrome-devtools
+MCP, and direct API/DB scripts)**:
+1. `npx tsc --noEmit` → **PASS**, zero errors. `npm run build` → **PASS**, all 3 new routes
+   (`/api/orders/[id]/delivery`, `/api/orders/[id]/delivery-proofs`,
+   `/api/orders/[id]/delivery-proofs/[proofId]`) registered correctly, route list otherwise
+   unchanged.
+2. **Temporary test order** (id 40, `TEST-STEP49-<timestamp>`, product 47 × 1) created via the real
+   `POST /api/orders` API for all live testing — no existing real order/customer/product touched.
+3. **Carrier / tracking number**: `PATCH .../delivery` with `carrier: "Kerry Express"`,
+   `trackingNumber: "KE123456789TH"` → saved and returned correctly; later updated to
+   `"Flash Express"` / `"FL987654321"` via the live UI form and the save button — **PASS**.
+4. **All 4 delivery statuses**: `pending`/`shipping`/`shipped`/`returned` each set successfully with
+   no transition restriction, confirming the approved "freely editable" decision — **PASS**. Invalid
+   value (`"bogus_status"`) → `400 Invalid delivery status value`. Nonexistent order id → `404`.
+5. **Independence from `orders.status` — the critical check**: changed `orders.status`
+   `pending → paid → cancelled` via the existing, untouched `PATCH /api/orders/[id]/status` — the
+   delivery fields (`carrier`, `tracking_number`, `delivery_status`) were unaffected at every step.
+   Conversely, updating delivery fields **after** the order was cancelled still succeeded (no
+   cross-block in either direction) — **PASS**, confirms zero coupling between the two systems.
+6. **Delivery proof upload — security tests**:
+   - Valid PNG upload → `201`, file written to `public/generated/order-delivery-proofs/`, served
+     correctly (`200`, `image/png`) — **PASS**.
+   - Non-image content disguised with an `image/png` `Content-Type` → rejected `400` by the
+     magic-byte signature check ("ไม่สามารถตรวจสอบชนิดไฟล์จากเนื้อไฟล์จริงได้") — **PASS**.
+   - Deleting a real proof id while impersonating a different (nonexistent) order id → `404`
+     ("Delivery proof not found"), same no-existence-leak behavior as
+     `transaction_attachments` — **PASS**.
+   - Correct delete (matching order id) → `200`, DB row removed, file removed from disk
+     (`unlink`, verified by a follow-up `404` on the file URL) — **PASS**.
+7. **Live browser UI test** (`/orders/40`): delivery form displayed and saved carrier/tracking/status
+   correctly (badge updated live); file upload via the actual file input rendered a thumbnail +
+   delete button; clicking delete removed it and correctly restored the "ยังไม่มีรูปหลักฐานการจัดส่ง"
+   empty state — **PASS**, zero console errors throughout.
+8. **Browser regression**: `/orders`, `/finance`, `/tax`, `/customers` all loaded with **zero new
+   console errors**.
+9. **Database integrity, before/after cleanup** (exact row-count match):
+   `orders` 2 → 3 (test order) → **2**; `order_items` 2 → 3 → **2**; `transactions` 1 → 2 → **1**;
+   `inventory_movements` 5 → 6 → **5**; `order_delivery_proofs` 0 → 0 (deleted via API before
+   cleanup) → **0**; product 47 stock `19 → 18 → 19`. All temporary test rows removed by exact id via
+   a disposable script, deleted immediately after use; no leftover files in
+   `public/generated/order-delivery-proofs/` (confirmed empty).
+10. **Historical order id 1 and real order id 38**: read-only throughout this STEP — never updated,
+    never had delivery fields set, never appeared in any test/cleanup mutation.
+11. **Financial/inventory/order-status safeguards explicitly re-verified unaffected**: STEP 31's
+    automatic income-transaction creation, STEP 32's cancellation-accounting boundary and status
+    transition graph, and STEP 34/40's duplicate-income guards were not exercised by any code in this
+    STEP — `createOrder()` and `updateOrderStatus()` remain byte-for-byte identical to before this
+    STEP (confirmed: `src/lib/orders.ts` does not appear in `git status`).
+
+**Defects found**: none — implementation matched the approved plan and all 5 approved decisions
+exactly on the first pass.
+
+**Git**: nothing committed, nothing pushed, per instructions. `PROJECT_STATUS.md` updated with this
+entry only. `PROJECT_CHECKPOINT.md` not touched, per instructions.
+
+**STEP 49 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

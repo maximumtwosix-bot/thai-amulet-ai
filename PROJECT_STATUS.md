@@ -4903,6 +4903,79 @@ Inventory, Products, Customers, Video Studio, Voice Studio, Content Studio, or S
 
 ---
 
+## STEP 48 — ORDER FULFILLMENT AUDIT + PRINT-FRIENDLY RECEIPT / PACKING SLIP
+
+Date: 2026-09-01
+
+**Audit (read-only, before implementation)**: confirmed `src/app/api/orders/[id]/route.ts` exports
+only `GET` (no `PATCH`/`PUT`/`DELETE`), and `src/lib/orders.ts` exports only `createOrder()` and
+`updateOrderStatus()` — Edit Order and Delete Order are unavailable because those code paths were
+simply never built, not due to a hidden bug. The only order mutation anywhere is
+`PATCH /api/orders/[id]/status` (status-only, gated by `src/lib/orderStatus.ts`'s fixed transition
+graph). No carrier/tracking-number field, no order-level shipping-proof storage, and no `ใบปะหน้า`/
+`เลขพัสดุ` capability exist anywhere in the schema (`orders` has only `shipping_fee REAL`, a monetary
+amount) — confirmed via exhaustive search across all back-office files. `shipped` already exists as a
+real order status (no schema change needed for that specific case). The only capability achievable
+with zero schema/API change was a print-friendly receipt/packing-slip view, since every field it
+needs (customer name/phone/address, items, subtotal/shipping/discount/total, payment method, channel)
+is already returned by the existing `GET /api/orders/[id]`.
+
+**Real-data discovery during audit-follow-up testing**: historical order id 1's `status` changed from
+`pending` (unchanged through every prior STEP this session) to `cancelled` between STEP 47 and this
+STEP's testing. No action in this STEP performed any mutation (only navigation, read-only script
+evaluation, and a stubbed `window.print()` click) — this was the user's own live activity on the app.
+**Documented as an observation only; not reverted, per instructions.**
+
+**Implemented, isolated entirely to `src/app/orders/[id]/page.tsx`**:
+- A "🖨️ พิมพ์ใบเสร็จ / ใบปะหน้าพัสดุ" button next to the existing back link, calling the browser's
+  native `window.print()` (which already offers "Save as PDF" on every major browser — no extra code
+  needed for that).
+- The entire existing on-screen Order Detail UI (status card, status-change buttons, items table,
+  shipping summary, linked-transactions section) wrapped in one `print:hidden` div — completely
+  unchanged internally, only the wrapping element and one className are new.
+- A new, separate `hidden print:block` section: a plain black-on-white receipt/packing-slip layout
+  (order number, date, "จัดส่งถึง" customer block, item table, subtotal/shipping/discount/grand total,
+  channel, payment method, and a COD-amount box shown only when `order.payment_method === "cod"`,
+  always equal to `order.total`) — built entirely from the same `order` object the page already
+  fetches. No carrier/tracking fields shown or invented, since none exist in the data.
+
+**Files changed**: `src/app/orders/[id]/page.tsx` only. **No changes to** any API route, `src/lib/orders.ts`,
+`src/lib/db.ts`, `src/lib/transactions.ts`, any database schema, Finance, Inventory, Customers,
+Products, Video Studio, Voice Studio, Content Studio, or Social.
+**No dependencies added.**
+**Backup created**: `src/app/orders/[id]/page.tsx.step48-backup-20260901-225907`.
+
+**Tested (real dev server, real browser via chrome-devtools MCP)**:
+1. `pnpm exec tsc --noEmit` → **PASS**. `pnpm run build` → **PASS**, route list unchanged.
+2. Real Order Detail pages (a real live order and historical order id 1) both load with zero console
+   errors; existing status card, status-change buttons, items table, shipping summary, and
+   linked-transactions section all render exactly as before.
+3. Print button visible only once the order has loaded; clicking it correctly invoked `window.print()`
+   — verified by stubbing `window.print` and confirming the stub was called, avoiding a real native
+   print dialog that would have hung the automated browser.
+4. **Print CSS verified at the source**: fetched the actual served CSS bundle and confirmed
+   `@media print { .print\:block { display: block } .print\:hidden { display: none } }` compiled
+   correctly — proving the on-screen UI is hidden and the receipt block shown when printing/saving as
+   PDF.
+5. Print-only block correctly rendered order number, date, customer name/phone/address, item table,
+   subtotal/shipping/discount/grand total, channel, payment method — tested against two different real
+   orders, including one with no customer (correctly showed "ไม่มีข้อมูลลูกค้า" instead of breaking).
+6. COD banner logic present and derived entirely from the existing `order.total` — not exercised live
+   (neither available real order is COD) but the same pattern was already proven correct end-to-end in
+   STEP 47's live testing.
+7. `/orders`, `/finance`, `/tax` regression-checked — zero console errors.
+8. **Data integrity**: row counts identical before/after this STEP's testing
+   (`products:5, orders:2, order_items:2, inventory_movements:5, transactions:1, customers:1`) —
+   confirms this was a pure read/print-view feature with no write path at all.
+
+**Defects found**: none.
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**STEP 48 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

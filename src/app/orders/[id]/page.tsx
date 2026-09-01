@@ -314,29 +314,49 @@ export default function OrderDetailPage() {
   return (
     <main className="min-h-screen bg-slate-50 p-6">
       <div className="mx-auto max-w-4xl">
-        <div className="mb-6">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 print:hidden">
           <Link
             href="/orders"
             className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
           >
             ← กลับไปรายการออเดอร์
           </Link>
+
+          {/* STEP 48 — print-friendly receipt/packing-slip view. Uses only order data already
+              loaded by this page (no new fetch, no new endpoint). window.print() is the browser's
+              own print dialog, which already supports "Save as PDF" as a destination on every major
+              browser — nothing extra is needed to satisfy that requirement. */}
+          {order && (
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="w-fit rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700"
+            >
+              🖨️ พิมพ์ใบเสร็จ / ใบปะหน้าพัสดุ
+            </button>
+          )}
         </div>
 
         {loading ? (
-          <div className="rounded-2xl border bg-white p-10 text-center text-sm text-slate-500 shadow-sm">
+          <div className="rounded-2xl border bg-white p-10 text-center text-sm text-slate-500 shadow-sm print:hidden">
             กำลังโหลดข้อมูลออเดอร์...
           </div>
         ) : notFound ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-10 text-center text-sm text-red-700 shadow-sm">
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-10 text-center text-sm text-red-700 shadow-sm print:hidden">
             ไม่พบออเดอร์ที่ต้องการ
           </div>
         ) : error ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-10 text-center text-sm text-red-700 shadow-sm">
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-10 text-center text-sm text-red-700 shadow-sm print:hidden">
             {error}
           </div>
         ) : order ? (
           <>
+            {/* STEP 48 — print:hidden wraps the entire existing on-screen Order Detail UI (status
+                card, items table, shipping summary, linked-transactions section) so none of it
+                appears in the printed output — a dedicated, separate printable block (below) is
+                rendered instead. Nothing inside this div changed: same JSX, same handlers, same
+                data, only the wrapping element and this one className are new. */}
+            <div className="print:hidden">
             <div className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
@@ -644,6 +664,103 @@ export default function OrderDetailPage() {
                 </>
               )}
             </section>
+            </div>
+
+            {/* STEP 48 — print-only receipt / packing-slip. hidden on screen, shown only when
+                printing (Tailwind's print: variant). Built entirely from the same `order` object
+                already loaded above — no new fetch, no new endpoint, no carrier/tracking fields
+                (none exist in the data, so none are shown or invented). Plain black-on-white, no
+                background colors, so it stays readable on a black & white printer; compact enough
+                to be practical as a packing slip while still fitting A4. */}
+            <div className="hidden print:block">
+              <div className="mb-4">
+                <h1 className="text-xl font-bold text-black">ใบเสร็จ / ใบปะหน้าพัสดุ</h1>
+                <p className="text-sm text-black">เลขที่ออเดอร์: {order.order_number}</p>
+                <p className="text-sm text-black">วันที่สั่งซื้อ: {formatDate(order.created_at)}</p>
+              </div>
+
+              <div className="mb-4 border border-black p-3">
+                <p className="text-xs font-semibold uppercase text-black">จัดส่งถึง</p>
+                <p className="mt-1 text-sm font-semibold text-black">
+                  {order.customer_name || "ไม่มีข้อมูลลูกค้า"}
+                </p>
+                {order.customer_phone && (
+                  <p className="text-sm text-black">โทร: {order.customer_phone}</p>
+                )}
+                {(order.customer_address ||
+                  order.customer_district ||
+                  order.customer_province) && (
+                  <p className="text-sm text-black">
+                    {[
+                      order.customer_address,
+                      order.customer_district,
+                      order.customer_province,
+                      order.customer_postal_code,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  </p>
+                )}
+              </div>
+
+              <table className="mb-4 w-full border border-black text-left text-sm text-black">
+                <thead>
+                  <tr className="border-b border-black">
+                    <th className="border-r border-black p-2">สินค้า</th>
+                    <th className="border-r border-black p-2 text-right">จำนวน</th>
+                    <th className="border-r border-black p-2 text-right">ราคา/ชิ้น</th>
+                    <th className="p-2 text-right">รวม</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {order.items.map((item) => (
+                    <tr key={item.id} className="border-b border-black">
+                      <td className="border-r border-black p-2">
+                        {item.product_name || `สินค้ารหัส ${item.product_id}`}
+                      </td>
+                      <td className="border-r border-black p-2 text-right">{item.quantity}</td>
+                      <td className="border-r border-black p-2 text-right">
+                        {formatCurrency(item.price)}
+                      </td>
+                      <td className="p-2 text-right">
+                        {formatCurrency(item.price * item.quantity)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="mb-4 space-y-1 text-sm text-black">
+                <div className="flex justify-between">
+                  <span>ยอดรวมสินค้า</span>
+                  <span>{formatCurrency(order.subtotal)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>ค่าจัดส่ง</span>
+                  <span>{formatCurrency(order.shipping_fee)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>ส่วนลด</span>
+                  <span>-{formatCurrency(order.discount)}</span>
+                </div>
+                <div className="flex justify-between border-t border-black pt-1 text-base font-bold">
+                  <span>ยอดรวมสุทธิ</span>
+                  <span>{formatCurrency(order.total)}</span>
+                </div>
+              </div>
+
+              <div className="mb-4 text-sm text-black">
+                <p>ช่องทางการขาย: {order.channel || "-"}</p>
+                <p>วิธีชำระเงิน: {order.payment_method || "-"}</p>
+              </div>
+
+              {order.payment_method === "cod" && (
+                <div className="border-2 border-black p-3">
+                  <p className="text-sm font-semibold">ยอดเก็บเงินปลายทาง (COD)</p>
+                  <p className="text-2xl font-bold">{formatCurrency(order.total)}</p>
+                </div>
+              )}
+            </div>
           </>
         ) : null}
       </div>

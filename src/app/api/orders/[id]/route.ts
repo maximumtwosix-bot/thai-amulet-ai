@@ -71,11 +71,27 @@ export async function GET(request: NextRequest, context: RouteContext) {
       )
       .all(orderId);
 
+    // STEP 31 — read-only lookup only, no new logic: if createOrder() (src/lib/orders.ts) recorded
+    // an automatic income transaction for this order, surface its id so the order detail page can
+    // show a small "revenue recorded" indicator. null for every order created before STEP 31
+    // (including historical order id 1) — intentionally not backfilled, per instructions.
+    const linkedIncomeTransaction = db
+      .prepare(
+        `
+        SELECT id FROM transactions
+        WHERE order_id = ? AND transaction_type = 'income'
+        ORDER BY id ASC
+        LIMIT 1
+        `
+      )
+      .get(orderId) as { id: number } | undefined;
+
     return NextResponse.json({
       success: true,
       data: {
         ...order,
         items,
+        linkedIncomeTransactionId: linkedIncomeTransaction?.id ?? null,
       },
     });
   } catch (error) {

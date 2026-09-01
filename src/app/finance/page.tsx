@@ -1294,7 +1294,20 @@ export default function FinancePage() {
                         {categoryLabel(t.transactionType, t.category)}
                       </td>
 
-                      <td className="p-4 max-w-xs text-slate-600">{t.description || "-"}</td>
+                      <td className="p-4 max-w-xs text-slate-600">
+                        {t.description || "-"}
+                        {/* STEP 31 — orderId is set either by the automatic order→income link
+                            (src/lib/orders.ts) or by manually picking an order in the form above;
+                            either way it's a meaningful "this entry is tied to an order" signal, so
+                            it's shown generically rather than trying to detect "auto-generated"
+                            specifically (which would need parsing notes text — brittle, and not
+                            more informative to the user than just showing the order link itself). */}
+                        {t.orderId && (
+                          <span className="ml-2 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+                            🔗 ออเดอร์ #{t.orderId}
+                          </span>
+                        )}
+                      </td>
 
                       <td className="p-4 text-slate-600">
                         {t.salesChannel ? salesChannelLabels[t.salesChannel] : "-"}

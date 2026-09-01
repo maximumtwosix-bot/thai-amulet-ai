@@ -3,6 +3,11 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import {
+  ORDER_STATUS_LABELS,
+  getAllowedNextStatuses,
+  type OrderStatus,
+} from "@/lib/orderStatus";
 
 type OrderItem = {
   id: number;
@@ -29,17 +34,12 @@ type OrderDetail = {
   shipping_fee: number;
   discount: number;
   total: number;
-  status: string;
+  status: OrderStatus;
   created_at: string;
   items: OrderItem[];
-};
-
-const statusLabels: Record<string, string> = {
-  pending: "⏳ รอดำเนินการ",
-  paid: "✅ ชำระแล้ว",
-  shipped: "🚚 จัดส่งแล้ว",
-  completed: "✅ สำเร็จ",
-  cancelled: "🚫 ยกเลิก",
+  // STEP 31 — id of the automatically-created income transaction for this order, or null (every
+  // order created before STEP 31, including historical order id 1, is null — not backfilled)
+  linkedIncomeTransactionId: number | null;
 };
 
 function formatDate(value: string) {
@@ -69,6 +69,41 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notFound, setNotFound] = useState(false);
+
+  // STEP 32 — order status workflow. Separate from `error` above (page-load failure) since this is
+  // a distinct, later action against an already-loaded order.
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [statusError, setStatusError] = useState("");
+
+  async function changeStatus(nextStatus: OrderStatus) {
+    // กันการกดซ้ำระหว่างที่ยังอัปเดตอยู่ (เหมือน pattern submitting/saving ที่ใช้อยู่แล้วในหน้าอื่นๆ)
+    if (updatingStatus || !order) return;
+
+    setUpdatingStatus(true);
+    setStatusError("");
+
+    try {
+      const response = await fetch(`/api/orders/${order.id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถเปลี่ยนสถานะออเดอร์ได้");
+      }
+
+      setOrder((current) => (current ? { ...current, status: nextStatus } : current));
+    } catch (err) {
+      setStatusError(
+        err instanceof Error ? err.message : "ไม่สามารถเปลี่ยนสถานะออเดอร์ได้"
+      );
+    } finally {
+      setUpdatingStatus(false);
+    }
+  }
 
   useEffect(() => {
     if (!orderId) return;
@@ -156,9 +191,47 @@ export default function OrderDetailPage() {
                   </p>
                 </div>
 
-                <span className="w-fit rounded-full bg-amber-50 px-4 py-1.5 text-sm font-medium text-amber-700">
-                  {statusLabels[order.status] || order.status}
-                </span>
+                <div className="flex flex-col items-end gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="w-fit rounded-full bg-amber-50 px-4 py-1.5 text-sm font-medium text-amber-700">
+                      {ORDER_STATUS_LABELS[order.status] || order.status}
+                    </span>
+
+                    {order.linkedIncomeTransactionId ? (
+                      <span className="w-fit rounded-full bg-emerald-50 px-4 py-1.5 text-sm font-medium text-emerald-700">
+                        ✅ บันทึกรายรับแล้ว (#{order.linkedIncomeTransactionId})
+                      </span>
+                    ) : (
+                      <span className="w-fit rounded-full bg-slate-100 px-4 py-1.5 text-sm font-medium text-slate-500">
+                        ยังไม่มีรายรับที่บันทึกไว้
+                      </span>
+                    )}
+                  </div>
+
+                  {/* STEP 32 — only shows buttons for statuses actually reachable from the current
+                      one (src/lib/orderStatus.ts's transition table); nothing renders once the
+                      order reaches a terminal status (completed/cancelled) */}
+                  {getAllowedNextStatuses(order.status).length > 0 && (
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <span className="text-xs text-slate-400">เปลี่ยนสถานะ:</span>
+                      {getAllowedNextStatuses(order.status).map((next) => (
+                        <button
+                          key={next}
+                          type="button"
+                          onClick={() => changeStatus(next)}
+                          disabled={updatingStatus}
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                        >
+                          {updatingStatus ? "กำลังบันทึก..." : ORDER_STATUS_LABELS[next]}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {statusError && (
+                    <p className="text-xs text-red-600">{statusError}</p>
+                  )}
+                </div>
               </div>
 
               <div className="mt-6 grid gap-4 sm:grid-cols-2">

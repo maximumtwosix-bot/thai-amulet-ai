@@ -3482,6 +3482,326 @@ its own explicit commit step.
 
 ---
 
+## STEP 31 — AUTOMATIC ORDER → INCOME TRANSACTION LINK
+
+Date: 2026-09-01
+
+Scope: closes the "Orders and Transactions/Tax are disconnected ledgers" BLOCKING gap identified in
+this session's earlier back-office readiness audit — a sale recorded via "New Order" previously never
+appeared in Finance/Tax unless someone *also* manually created a matching income transaction. Every
+successfully created order now automatically creates exactly one linked income transaction, in the
+same atomic operation as the order itself.
+
+**Audit before implementing**: confirmed `createOrder()` (`src/lib/orders.ts`) already runs entirely
+inside a single `db.transaction(() => {...})()` callback (order insert → per-item stock deduction via
+`decreaseStockForSale()`/`adjustProductStock()` → `order_items` inserts), and that better-sqlite3
+auto-rolls-back the whole callback on any thrown error — this is the safest and only place to add the
+income transaction, since it gets atomicity for free rather than needing a new transaction wrapper.
+Confirmed `createTransaction()` (`src/lib/transactions.ts`) never opens its own `db.transaction()` —
+it only issues plain `db.prepare().run()` calls on the shared connection — so calling it from inside
+`createOrder()`'s callback correctly participates in the same atomic unit; specifically confirmed its
+internal `assertOrderExists(orderId)` (`SELECT id FROM orders WHERE id = ?`) successfully sees the
+just-inserted, still-uncommitted order row, since both run on the same connection before commit.
+Confirmed two data-integrity traps that would have broken things if not handled: (1)
+`src/app/orders/new/page.tsx` never sends a `channel` at all, so `POST /api/orders` always defaults it
+to the free-text `"manual"` — which is **not** a valid `transactions.sales_channel` enum value
+(`facebook/tiktok_shop/shopee/lazada/line/walk_in/other`); passing it straight through would have
+thrown `INVALID_SALES_CHANNEL` and rolled back every single order. (2) `createOrder()` has always
+allowed a `total === 0` order (only `total < 0` is rejected), but `createTransaction()` requires
+`amount > 0` — would have turned every legitimate free/fully-discounted order into a hard failure.
+Confirmed `submitOrder()` in `orders/new/page.tsx` already guards double-clicks via a `submitting`
+state (pre-existing, STEP 27), and `orders.order_number` already has a `UNIQUE` constraint enforced
+server-side — together these already prevent a genuine duplicate order (and therefore a duplicate
+income transaction) without any new schema/index. **No database schema change was made or found
+necessary.**
+
+**Approach** (`src/lib/orders.ts`): after the `order_items` insert loop, still inside the same
+`db.transaction()` callback, if `total > 0`:
+```
+createTransaction({
+  transactionType: "income",
+  amount: total,                          // server-computed subtotal + shippingFee - discount —
+                                            // never a client-submitted figure; using `total` (not
+                                            // `subtotal`) means shipping revenue is counted exactly
+                                            // once, never double-counted
+  transactionDate: <today, ISO date>,
+  category: "PRODUCT_SALE",                // existing INCOME_CATEGORIES value, no new enum added
+  description: `รายรับจากออเดอร์ ${orderNumber}`,
+  salesChannel: mapOrderChannelToSalesChannel(input.channel),  // new small helper — the order's
+                                            // channel only if it's a recognized SalesChannel value,
+                                            // else null (never invents/coerces an invalid value)
+  productId: null,                         // orders can have multiple line items; transactions.
+                                            // product_id is a single nullable FK with no meaningful
+                                            // multi-item representation — left null uniformly
+                                            // (not just for multi-item orders) so behavior doesn't
+                                            // silently differ by item count; orderId already gives
+                                            // full traceability via order_items
+  orderId,
+  paymentMethod: input.paymentMethod ?? null,
+  notes: `สร้างอัตโนมัติจากออเดอร์ ${orderNumber} (STEP 31)`,
+});
+```
+`total === 0` orders skip this block entirely (not an error) — preserves the pre-existing
+zero-total-order behavior exactly instead of turning it into a new failure mode.
+
+Two small, read-only-adjacent additions to make the new link visible without redesigning anything:
+- `GET /api/orders/[id]` (`src/app/api/orders/[id]/route.ts`) — added one extra `SELECT id FROM
+  transactions WHERE order_id = ? AND transaction_type = 'income' LIMIT 1` and returns it as
+  `linkedIncomeTransactionId: number | null`. Pure read addition, no existing field changed.
+- `src/app/orders/[id]/page.tsx` — small badge next to the existing status pill: "✅ บันทึกรายรับแล้ว
+  (#id)" or "ยังไม่มีรายรับที่บันทึกไว้" (the latter is what every pre-STEP-31 order, including
+  historical order id 1, shows — intentionally not backfilled per instructions).
+- `src/app/finance/page.tsx` — small "🔗 ออเดอร์ #N" badge next to the description cell whenever a
+  transaction row has `orderId` set. Deliberately generic (any order-linked transaction, not just
+  auto-generated ones) rather than parsing `notes` text to detect "auto-generated" specifically —
+  a manually-entered transaction someone links to an order via the existing "ออเดอร์ที่เกี่ยวข้อง"
+  dropdown is just as legitimately "order-linked," and the badge conveys exactly that either way.
+
+`POST /api/orders` (`src/app/api/orders/route.ts`) was **not modified at all** — since the new logic
+lives entirely inside `createOrder()`, the route's request/response shape is byte-for-byte unchanged,
+which is what "preserve existing STEP 27 order behavior" required.
+
+**New files**: none. **Modified**: `src/lib/orders.ts`, `src/app/api/orders/[id]/route.ts`,
+`src/app/orders/[id]/page.tsx`, `src/app/finance/page.tsx`. **No dependencies added.** **No database
+schema change.**
+**Backups created**: `src/lib/orders.ts.step31-backup-20260901-143605`,
+`src/app/api/orders/[id]/route.ts.step31-backup-20260901-143638`,
+`src/app/finance/page.tsx.step31-backup-20260901-143707` (order detail page had no prior STEP-31
+backup convention entry since it was untouched before this STEP).
+
+**Tested (real dev server, real browser via chrome-devtools MCP + curl for precise/concurrent
+requests; a fresh `pnpm backup` — STEP 30 — was run immediately before testing, per instructions)**:
+
+Baseline recorded: `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+transaction_attachments:0, customers:0, ai_cost_ledger:10`; product 3 (เบี้ยแก้) stock 13, product 4
+(ตะกรุด) stock 0.
+
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**. `pnpm.cmd run build` → **compiled successfully**.
+2. **Test 1 (single-item order)**: `POST /api/orders` with 1× product 3 → order created, total `199`
+   (server-computed) — verified: exactly 1 new order, 1 new `order_items` row, stock 13→12, exactly 1
+   new `inventory_movements` row (`movement_type='sale'`, `-1`), **exactly 1 income transaction**
+   (`amount:199`, `category:PRODUCT_SALE`, `orderId:7`, `salesChannel:null` — correctly rejected the
+   invalid `"manual"` default rather than passing it through) — **PASS**. Confirmed via `GET
+   /api/transactions` and `GET /api/tax/summary?year=2026&month=9` that both immediately reflected
+   the new income (`totalIncome:199`) — **PASS**.
+3. **Test 2 (multi-item order + shipping + discount)**: temporarily topped up product 4's stock via
+   the existing `POST /api/products/[id]/stock-adjustment` endpoint (needed a second in-stock product
+   for a real multi-item order; reversed in cleanup below), then created an order with 2× product 3 +
+   1× product 4, `shippingFee:30`, `discount:10`, `channel:"facebook"` → server total `717` (=
+   398+299+30-10) — verified: correct stock deduction on **both** products, 2 correct
+   `inventory_movements` rows, **exactly 1** income transaction with `amount:717` (matches the full
+   order total exactly — shipping counted once, not double-counted) and `salesChannel:"facebook"`
+   (correctly forwarded this time, since `"facebook"` *is* a valid enum value) — **PASS**.
+4. **Test 3 (double-submit / concurrency)**: fired two `POST /api/orders` requests with the
+   **identical** explicit `orderNumber` concurrently (backgrounded shell jobs) — one succeeded
+   (order 9), the other correctly failed `409 "Order number already exists"` (pre-existing STEP 18
+   `UNIQUE` constraint behavior, unmodified) — verified exactly 1 order with that number and
+   **exactly 1** income transaction exist afterward, no duplicate — **PASS**.
+5. **Test 4 (failure paths)**: attempted an order exceeding available stock (`409 "Insufficient
+   stock"`) and an order for a nonexistent product (`404 "Product not found"`) — verified **zero**
+   change in every table count before vs. after both attempts, and zero orphan orders/transactions
+   matching either attempt — **PASS**, confirming the whole-callback rollback covers the new income-
+   transaction step exactly like every other step in `createOrder()`.
+6. **Finance UI** (real browser): all 3 test orders' income entries appeared immediately with correct
+   amounts (199/717/199, totalIncome ฿1,115.00) and the new "🔗 ออเดอร์ #N" badges — **PASS**, zero
+   console errors.
+7. **Order detail UI** (real browser): order 8's page showed "✅ บันทึกรายรับแล้ว (#25)" next to its
+   status pill, matching the transaction actually created for it — **PASS**, zero console errors.
+8. **Tax UI** (real browser, `/tax`, September 2026): `รายรับรวม ฿1,115.00`, correctly split by sales
+   channel (`Facebook: ฿717.00`, `ไม่ระบุช่องทาง: ฿398.00` = 199+199) — **PASS**, zero console errors.
+   Tax aggregation logic itself (`src/lib/taxSummary.ts`) was not touched, exactly as instructed —
+   this is purely the pre-existing aggregation now having real data to sum.
+9. **AI slip extraction (STEP 29) regression**: confirmed via `git diff` that
+   `src/app/api/transactions/ai-extract/route.ts` has **zero** changes from this STEP. Live-verified
+   (no AI cost incurred): unauthenticated request still `401`; authenticated request with an invalid
+   file still correctly rejected `400` with the same validation message as before — **PASS**, no
+   regression, and confirmed the AI-extract confirm flow (`POST /api/transactions`, unmodified) is a
+   fully separate code path from the new automatic order-income logic — no duplicate income is ever
+   created from an AI-extracted slip.
+10. **Regression** (authenticated): `GET /api/health`, `/api/products`, `/api/orders`, `/api/orders/1`,
+    `/api/inventory/movements`, `/api/transactions`, `/api/tax/summary`, `/api/costs/summary` → all
+    `200`. `/products`, `/inventory`, `/orders`, `/orders/new`, `/finance`, `/tax` → all load with
+    **zero console errors** (verified individually per page).
+11. **Historical order id 1 verified untouched**: `linkedIncomeTransactionId: null` (correctly not
+    backfilled), `order_number`/`total` unchanged (`TEST-36-...`/`299`) — **PASS**.
+
+**Cleanup**: all 3 test orders (ids 7-9), their 4 `order_items` rows, their 3 income transactions
+(ids 24-26), and all 5 `inventory_movements` rows created during testing (including the temporary
+stock top-up for product 4) were deleted by exact id via a temporary script (deleted immediately
+after use, per this project's established convention). Product 3 stock restored to `13`, product 4
+restored to `0`/`out_of_stock`. **Final table counts verified identical to baseline** in every column
+(`transactions:0` again, etc.) — historical order id 1 was never touched by either the test or the
+cleanup.
+
+**Defects found**: none. Two design traps were caught during the audit (not live bugs, since they
+were designed around before any code was written) — the invalid `"manual"` sales-channel default and
+the zero-total-order edge case, both described above.
+
+**Files changed**: see New/Modified above. `PROJECT_STATUS.md` updated with this entry.
+`PROJECT_CHECKPOINT.md` not touched, per instructions. Video Studio, AI Video, Voice Studio, Social,
+Content Studio — not touched at all in this STEP.
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**No STEP 32 was started.**
+
+**STEP 31 STATUS: PASS**
+
+---
+
+## STEP 32 — ORDER STATUS WORKFLOW
+
+Date: 2026-09-01
+
+Scope: adds a real order status lifecycle (`pending → paid → shipped → completed`, with cancellation
+from any of `pending`/`paid`/`shipped`) on top of the existing order system — previously `status` was
+hardcoded to `'pending'` at creation with no way to ever change it. Business rules approved before
+implementation (2026-09-01): the 5 status values and exact transition graph above; `completed` and
+`cancelled` are both terminal (no outgoing transitions, including no self-transition); status changes
+persist **only** `orders.status` — explicitly must NOT reverse the STEP 31 income transaction, modify
+Finance totals, modify Tax aggregation, restore inventory, modify inventory movements, or modify
+customers; refund/reversal/stock-restoration is explicitly out of scope for this STEP.
+
+**Audit before implementing** (this project uses raw SQL via `better-sqlite3`, not Prisma — no
+`schema.prisma` exists anywhere, confirmed by search; audited the actual `orders` table DDL in
+`src/lib/db.ts` instead): `status TEXT NOT NULL DEFAULT 'pending'`, no `CHECK` constraint (matches
+this codebase's established convention of validating enum-like columns in the TS layer). Confirmed
+`'pending'` in `createOrder()`'s `INSERT` (STEP 18/27) was the **only** place `status` was ever
+written anywhere in the codebase — full-repo search for every status literal (`pending`/`paid`/
+`shipped`/`completed`/`cancelled`) found zero other order-status writers, only a duplicated **display-
+only** `statusLabels` map independently defined in both `src/app/orders/page.tsx` and
+`src/app/orders/[id]/page.tsx`. Confirmed `src/app/api/orders/[id]/route.ts` was GET-only (no PATCH/
+PUT/DELETE existed for orders anywhere). Confirmed no automated tests exist anywhere in this repo —
+testing methodology here is entirely live/manual, documented per-STEP in this file (consistent with
+STEPs 28–31). **No database schema change was needed or made.** **No dependencies added.**
+
+**Approach**:
+- New `src/lib/orderStatus.ts` — plain, **zero-import** constants: `OrderStatus` type,
+  `ORDER_STATUSES`, `isValidOrderStatus()`, `ORDER_STATUS_LABELS`, the approved
+  `ORDER_STATUS_TRANSITIONS` table, `isValidOrderStatusTransition()`, `getAllowedNextStatuses()`.
+  This file was **not** in the originally-approved modify list (only `src/lib/orders.ts` was) — added
+  because `src/lib/orders.ts` imports `./db` (`better-sqlite3`), which cannot be imported from a
+  Client Component (confirmed failure mode: `Module not found: Can't resolve 'fs'` — the exact
+  constraint `src/app/finance/page.tsx`'s own header comment already documents, where it's worked
+  around by duplicating constants locally). Since this STEP's explicit requirement was "one shared
+  plain definition, used everywhere instead of duplicated local maps," and duplicating status labels
+  a third time would have contradicted that, this small new file is the correct fix for a codebase
+  constraint the original file list couldn't have anticipated — not a business-rule change or scope
+  expansion. Flagged here for visibility rather than silently added.
+- `src/lib/orders.ts` — new `updateOrderStatus(orderId, nextStatus)`: validates `orderId` is a
+  positive integer, validates `nextStatus` against `isValidOrderStatus()`, loads the order (404 if
+  missing), validates the transition via `isValidOrderStatusTransition(current, next)` — which also
+  correctly rejects a duplicate/repeated request for a status the order has already reached, since
+  every status's transition list excludes itself as a valid target — then runs exactly one
+  `UPDATE orders SET status = ? WHERE id = ?`. Nothing else is touched, for any target status
+  including `cancelled`, per the approved rules.
+- New `src/app/api/orders/[id]/status/route.ts` (`PATCH` only) — validates the id, parses the body,
+  calls `updateOrderStatus()`, maps its typed errors to `400` (invalid id/status value), `404` (order
+  not found), `409` (disallowed transition), or a generic `500` with no raw error detail. Already
+  covered by the existing `src/proxy.ts` rule (`pathname.startsWith("/api/orders/")`) — no proxy.ts
+  change needed, same pattern as STEP 31's `/api/orders/[id]` field and STEP 29's
+  `/api/transactions/ai-extract`.
+- `src/app/orders/[id]/page.tsx` — replaced the local `statusLabels` map with the shared
+  `ORDER_STATUS_LABELS`; added a small "เปลี่ยนสถานะ:" control row next to the existing status pill,
+  rendering one button per value from `getAllowedNextStatuses(order.status)` (so it shows nothing at
+  all once an order reaches a terminal status); a `changeStatus()` handler PATCHes the new endpoint,
+  disables the buttons for the duration of the request (same `submitting`-state guard pattern already
+  used elsewhere in this codebase), and updates the local `order` state's `status` field immediately
+  on success — no page reload needed to see the new status or the newly-recomputed set of next-step
+  buttons.
+- `src/app/orders/page.tsx` — replaced its own independently-duplicated `statusLabels` map with the
+  same shared `ORDER_STATUS_LABELS` import. Cosmetic dedup only; no new controls added to the list
+  page (status changes happen on the detail page).
+
+**New files**: `src/lib/orderStatus.ts`, `src/app/api/orders/[id]/status/route.ts`.
+**Modified**: `src/lib/orders.ts`, `src/app/api/orders/[id]/route.ts` (no changes needed beyond what
+STEP 31 already added — confirmed, not re-touched), `src/app/orders/[id]/page.tsx`,
+`src/app/orders/page.tsx`. **No dependencies added. No database schema change.**
+**Backups created**: `src/lib/orders.ts.step32-backup-20260901-151847`,
+`src/app/orders/page.tsx.step32-backup-20260901-151933`,
+`src/app/orders/[id]/page.tsx.step32-backup-20260901-151957`.
+
+**Tested (real dev server, real browser via chrome-devtools MCP + curl for precise/concurrent
+requests; a fresh `pnpm backup` — STEP 30 — was run immediately before testing, per instructions,
+confirming baseline counts matched exactly what STEP 31 left them at)**:
+
+Baseline: `products:4, orders:1, order_items:1, inventory_movements:4, transactions:0,
+transaction_attachments:0, customers:0, ai_cost_ledger:10`; product 3 (เบี้ยแก้) stock `13`; order id 1
+status `pending`.
+
+1. `pnpm.cmd exec tsc --noEmit` → **PASSED**. `pnpm.cmd run build` → **compiled successfully**,
+   `/api/orders/[id]/status` present in the route list; the client build compiling cleanly with
+   `orderStatus.ts` imported into both client pages confirms the client/server split actually works
+   as designed, not just in theory.
+2. **STEP 31 regression, confirmed before any status testing**: created a fresh order (id 10) →
+   exactly one linked income transaction auto-created (`amount:199, category:PRODUCT_SALE`), status
+   `'pending'` as always — **PASS**.
+3. **Full valid chain** (order 10): `pending→paid` `200`, `paid→shipped` `200`, `shipped→completed`
+   `200` — **PASS**.
+4. **Terminal-state rejections** (order 10, now `completed`): `completed→pending` `409`,
+   `completed→cancelled` `409`, `completed→completed` (repeat) `409` — all correctly
+   `"This status transition is not allowed"` — **PASS**.
+5. **Skip-ahead rejections** (fresh order 11): `pending→shipped` `409`, `pending→completed` `409` —
+   **PASS**.
+6. **Invalid status value**: `pending→"bogus-status"` → `400 "Invalid status value"` — **PASS**.
+7. **Nonexistent order**: `PATCH /api/orders/999999/status` → `404 "Order not found"` — **PASS**.
+8. **Cancellation from every allowed source state**: order 11 `pending→cancelled` `200`; fresh order
+   12 `pending→paid→cancelled` (`paid→cancelled` `200`); fresh order 13
+   `pending→paid→shipped→cancelled` (`shipped→cancelled` `200`) — **PASS** for all three approved
+   cancellation paths.
+9. **Backward-from-terminal rejection**: order 11 `cancelled→pending` `409`; order 12
+   `cancelled→paid` `409` — **PASS**.
+10. **Concurrency / duplicate-request test** (fresh order 14): fired two **simultaneous** `PATCH
+    .../status {status:"paid"}` requests (backgrounded shell jobs, same instant) — exactly one
+    succeeded (`200`), the other correctly failed (`409`, since by the time it read the row the status
+    was already `paid`, and `paid→paid` is excluded from `paid`'s transition list) — **PASS**, proving
+    the duplicate-protection holds under real concurrency, not just sequential re-requests.
+11. **Finance/Tax totals unaffected by status, including cancellation** — the critical approved-rule
+    check: queried all 5 test orders' (10–14) linked transactions directly — every one still exists
+    with its original `amount:199` and `transaction_type:'income'` regardless of the order now being
+    `completed`/`cancelled`/`paid` — **PASS**. `GET /api/tax/summary?year=2026&month=9` →
+    `totalIncome:995` (= 199×5, all 5 orders counted equally) — **PASS**, confirms cancellation did
+    **not** reverse or exclude its income.
+12. **No orphan inventory/customer records from any status change**: exactly one
+    `inventory_movements` row per order (5 total for orders 10–14), all `movement_type:'sale'` from
+    the original order **creation** — zero new movements from any of the ~10 status PATCH calls made
+    during testing; `customers` table still `0` rows — **PASS**.
+13. **UI, real browser** (fresh order 15): detail page correctly showed only the two valid next-step
+    buttons for `pending` ("✅ ชำระแล้ว" / "🚫 ยกเลิก"); clicking "ชำระแล้ว" updated the status pill to
+    "✅ ชำระแล้ว" **immediately, no reload**, and the button row correctly re-rendered to the two new
+    valid next steps for `paid` ("🚚 จัดส่งแล้ว" / "🚫 ยกเลิก") — **PASS**, zero console errors.
+    `/orders` list page correctly displayed every test order's status via the same shared label map,
+    with historical order id 1 still showing "⏳ รอดำเนินการ" — **PASS**, zero console errors.
+14. **Regression** (authenticated): `GET /api/health`, `/api/products`, `/api/orders`, `/api/orders/1`,
+    `/api/inventory/movements`, `/api/transactions`, `/api/tax/summary`, `/api/costs/summary` → all
+    `200`. `/products`, `/inventory`, `/orders`, `/orders/new`, `/finance`, `/tax` → all load with
+    **zero console errors** (verified individually per page).
+15. **AI slip extraction (STEP 29) regression**: confirmed via `git diff` that
+    `src/app/api/transactions/ai-extract/route.ts` has **zero** changes from this STEP; live-verified
+    unauthenticated request still `401` — **PASS**, no regression.
+16. **Historical order id 1 verified untouched** throughout all of the above: `status:'pending'`,
+    `order_number`/`total` unchanged (`TEST-36-...`/`299`) — **PASS**.
+
+**Cleanup**: all 6 test orders (ids 10–15), their 6 `order_items` rows, their 6 income transactions
+(ids 27–32), and all 6 `inventory_movements` rows created during testing were deleted by exact id via
+a temporary script (deleted immediately after use). Product 3 stock restored from `7` back to `13`.
+**Final table counts verified identical to baseline** in every column; order id 1 was never touched by
+either the tests or the cleanup.
+
+**Defects found**: none.
+
+**Files changed**: see New/Modified above. `PROJECT_STATUS.md` updated with this entry.
+`PROJECT_CHECKPOINT.md` not touched, per instructions. Video Studio, AI Video, Voice Studio, Social,
+Content Studio — not touched at all in this STEP.
+
+**Git**: nothing committed, nothing pushed, per instructions.
+
+**No STEP 33 was started.**
+
+**STEP 32 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

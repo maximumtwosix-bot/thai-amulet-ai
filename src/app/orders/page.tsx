@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import { ORDER_STATUS_LABELS } from "@/lib/orderStatus";
 
 type OrderListItem = {
   id: number;
@@ -19,14 +20,6 @@ type OrderListItem = {
   created_at: string;
   item_count: number;
   total_quantity: number;
-};
-
-const statusLabels: Record<string, string> = {
-  pending: "⏳ รอดำเนินการ",
-  paid: "✅ ชำระแล้ว",
-  shipped: "🚚 จัดส่งแล้ว",
-  completed: "✅ สำเร็จ",
-  cancelled: "🚫 ยกเลิก",
 };
 
 function formatDate(value: string) {
@@ -204,7 +197,7 @@ export default function OrdersPage() {
 
                       <td className="p-4">
                         <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
-                          {statusLabels[order.status] || order.status}
+                          {ORDER_STATUS_LABELS[order.status as keyof typeof ORDER_STATUS_LABELS] || order.status}
                         </span>
                       </td>
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
 import { ORDER_STATUS_LABELS } from "@/lib/orderStatus";
+import { DELIVERY_STATUS_LABELS, type DeliveryStatus } from "@/lib/deliveryStatus";
 
 type OrderListItem = {
   id: number;
@@ -17,6 +18,9 @@ type OrderListItem = {
   discount: number;
   total: number;
   status: string;
+  // STEP 50 — surfaced read-only on the list, independent of `status` above (STEP 49). May be
+  // absent/null on old client-cached responses; a safe "pending" fallback is used when rendering.
+  delivery_status: DeliveryStatus | null;
   created_at: string;
   item_count: number;
   total_quantity: number;
@@ -161,6 +165,7 @@ export default function OrdersPage() {
                     <th className="p-4">จำนวนสินค้า</th>
                     <th className="p-4">ยอดรวม</th>
                     <th className="p-4">สถานะ</th>
+                    <th className="p-4">สถานะการจัดส่ง</th>
                     <th className="p-4"></th>
                   </tr>
                 </thead>
@@ -198,6 +203,12 @@ export default function OrdersPage() {
                       <td className="p-4">
                         <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
                           {ORDER_STATUS_LABELS[order.status as keyof typeof ORDER_STATUS_LABELS] || order.status}
+                        </span>
+                      </td>
+
+                      <td className="p-4">
+                        <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700">
+                          {DELIVERY_STATUS_LABELS[order.delivery_status ?? "pending"]}
                         </span>
                       </td>
 

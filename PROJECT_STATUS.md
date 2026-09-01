@@ -5112,6 +5112,84 @@ entry only. `PROJECT_CHECKPOINT.md` not touched, per instructions.
 
 ---
 
+## STEP 50 — SURFACE DELIVERY STATUS ON THE ORDERS LIST
+
+Date: 2026-09-02
+
+**Purpose**: STEP 49 added carrier/tracking-number/delivery-status entirely to Order Detail; a
+follow-up read-only audit (this same date) found no defects but identified that the Orders list
+(`/orders`) had zero visibility into that new data — an operator had to open every order
+individually to see its fulfillment state. This STEP closes exactly that one gap.
+
+**Audit result (read-only, before implementation)**:
+- **No actual defects** found anywhere in the STEP 49 delivery-tracking feature — static grep
+  confirmed `delivery_status`/`deliveryStatus` appears in exactly the 6 files STEP 49 created/touched
+  and nowhere in `src/lib/orders.ts`/`src/lib/orderStatus.ts`/the `/status` route, confirming
+  `orders.status` and `delivery_status` remain completely independent with no accidental
+  synchronization. All 6 regression pages checked loaded with zero console errors.
+- **Missing capability identified**: delivery status not visible on `/orders` (this STEP's scope).
+- **Secondary finding (B2), explicitly not implemented in this STEP**: STEP 48's print/packing-slip
+  view still does not show carrier/tracking/delivery status now that the data exists. Left as a
+  separate, future STEP per instructions.
+
+**Approved implementation, isolated to exactly 2 files**:
+- `src/app/api/orders/route.ts` — added `o.carrier, o.tracking_number, o.delivery_status` to the
+  existing list `GET` handler's `SELECT` only. No business logic or mutation change — the `POST`
+  handler and every validation/error branch are untouched.
+- `src/app/orders/page.tsx` — added a `delivery_status` field to the `OrderListItem` type and one new
+  "สถานะการจัดส่ง" table column, rendered with `DELIVERY_STATUS_LABELS` imported from
+  `src/lib/deliveryStatus.ts` (the same label map already live-tested against all 4 values in
+  STEP 49's Order Detail page) inside a sky-colored badge (`bg-sky-50 text-sky-700`) — deliberately a
+  different color from the existing amber order-status badge so the two independent fields aren't
+  visually confused with each other. Existing `orders.status` display, buttons, filters, pagination,
+  and navigation are all unchanged.
+
+**Files changed** (2, additive-only diffs, zero deletions): `src/app/api/orders/route.ts` (+7 lines),
+`src/app/orders/page.tsx` (+11 lines) — 18 insertions total.
+**No database/schema changes** (the 3 columns already existed from STEP 49's migration).
+**No dependency changes. No financial/inventory logic changes. No changes to order-status transition
+logic, the delivery update/proof APIs, STEP 48's print view, or Video Studio/Voice Studio/Content
+Studio/Social.**
+**Backups created**: `src/app/api/orders/route.ts.step50-backup-20260902-004751`,
+`src/app/orders/page.tsx.step50-backup-20260902-004751`.
+
+**Tested (`npx tsc --noEmit`, `npm run build`, real dev server, real browser via chrome-devtools
+MCP)**:
+1. `npx tsc --noEmit` → **PASS**, zero errors. `npm run build` → **PASS**, route list identical to
+   STEP 49 (no new routes needed).
+2. `/orders` browser test → **PASS**: new "สถานะการจัดส่ง" column renders correctly for both real
+   orders — order id 38 and historical order id 1 both display `⏳ รอจัดส่ง` (matching their DB
+   `delivery_status='pending'` default) via `DELIVERY_STATUS_LABELS`. Every existing column (order
+   number, date, customer, channel, item count, total, order-status badge) unchanged and correct.
+3. "ดูรายละเอียด →" still opens the correct Order Detail page — verified for order 38 — **PASS**.
+4. `/orders/[id]` (order 38) — **PASS**, zero console errors.
+5. `/finance` — **PASS**. `/tax` (includes the embedded Profit report from STEP 37, no separate
+   `/profit` route exists by design) — **PASS**. `/customers` — **PASS**. `/products` — **PASS**. All
+   zero console errors.
+6. Mobile viewport (390px width) — **PASS**, no page-level horizontal overflow; the table's
+   pre-existing `overflow-x-auto` wrapper correctly contains the now-wider table.
+7. Console: zero new errors on every page checked. Two unrelated stray native dialogs surfaced from
+   leftover browser state during testing (`window.confirm` from Products' pre-existing image-delete
+   flow, `window.alert` "กรุณากรอกราคาขาย" from Products' pre-existing form validation) — both
+   pre-existing and unrelated to this STEP's 2 files, dismissed with no side effects.
+8. **No test database records created** — this STEP is a pure read/display addition, so read-only
+   verification against real data was sufficient and preferred per instructions.
+9. **Database integrity**: row counts unchanged throughout
+   (`orders:2, order_items:2, transactions:1, inventory_movements:5, order_delivery_proofs:0,
+   customers:1, products:5`).
+10. Historical order id 1 and real order id 38: read-only throughout — not modified.
+
+**Defects found**: none — implementation matched the approved scope exactly on the first pass.
+
+**Git**: nothing staged, nothing committed, nothing pushed, per instructions. `PROJECT_STATUS.md`
+updated with this entry only (the one intentional documentation change made by this update).
+`PROJECT_CHECKPOINT.md` not touched, per instructions. All `.step*-backup-*` files (including this
+STEP's 2 new ones) remain untracked and must not be committed.
+
+**STEP 50 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

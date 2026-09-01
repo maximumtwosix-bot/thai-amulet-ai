@@ -5,6 +5,10 @@ import db from "@/lib/db";
 // STEP 18 — read-only list, ไม่แตะ POST เดิมด้านล่างเลย (order creation / stock deduction logic
 // เหมือนเดิมทุกประการ) รวม customer name + item count ต่อออเดอร์ให้พอสำหรับตาราง /orders โดยไม่ต้อง
 // query แยกทีละแถวใน UI
+//
+// STEP 50 — added o.carrier/o.tracking_number/o.delivery_status to the SELECT list only, so
+// src/app/orders/page.tsx can show a delivery-status column. Read-only addition, same pattern as
+// STEP 49's identical addition to GET /api/orders/[id] — no other line in this file changed.
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -44,6 +48,9 @@ export async function GET(request: NextRequest) {
           o.discount,
           o.total,
           o.status,
+          o.carrier,
+          o.tracking_number,
+          o.delivery_status,
           o.created_at,
           COUNT(oi.id) AS item_count,
           COALESCE(SUM(oi.quantity), 0) AS total_quantity

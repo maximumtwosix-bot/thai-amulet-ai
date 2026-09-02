@@ -418,6 +418,16 @@ export default function OrdersPage() {
                           <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700">
                             {DELIVERY_STATUS_LABELS[order.delivery_status ?? "pending"]}
                           </span>
+                          {/* STEP 65 — returned-but-not-cancelled warning, same condition/wording
+                              as Order Detail (STEP 61) and Finance/Tax (STEP 63). Purely visual:
+                              uses only order.status/order.delivery_status already returned by the
+                              existing GET /api/orders response — no new field, no new API call, no
+                              mutation. Hidden once the order is already cancelled. */}
+                          {order.delivery_status === "returned" && order.status !== "cancelled" && (
+                            <span className="ml-2 inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                              ⚠️ พัสดุตีกลับ — ยังไม่ยกเลิก
+                            </span>
+                          )}
                         </td>
 
                         <td className="p-4">

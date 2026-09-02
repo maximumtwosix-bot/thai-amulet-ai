@@ -61,6 +61,12 @@ function isProtectedApi(pathname: string): boolean {
   // already-protected /tax page), needs its own rule same as /api/customers above.
   if (pathname.startsWith("/api/profit/")) return true;
 
+  // STEP 70 — Local AI Assistant backend. New prefix, needs its own rule same as /api/customers/
+  // /api/profit above. Session-gated the same way as every other admin API in this codebase — no
+  // new auth mechanism, this route relies entirely on this existing gate (same convention already
+  // documented on /api/orders/[id]/status/route.ts etc.: the route itself does not re-check auth).
+  if (pathname.startsWith("/api/assistant/")) return true;
+
   return false;
 }
 
@@ -109,5 +115,6 @@ export const config = {
     "/api/customers",
     "/api/customers/:path*",
     "/api/profit/:path*",
+    "/api/assistant/:path*",
   ],
 };

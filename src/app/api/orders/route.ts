@@ -9,6 +9,14 @@ import db from "@/lib/db";
 // STEP 50 — added o.carrier/o.tracking_number/o.delivery_status to the SELECT list only, so
 // src/app/orders/page.tsx can show a delivery-status column. Read-only addition, same pattern as
 // STEP 49's identical addition to GET /api/orders/[id] — no other line in this file changed.
+//
+// STEP 59 — added an optional `date` query param (YYYY-MM-DD) so /orders can show "today's orders"
+// as a daily-operations view. orders.created_at is stored as SQLite CURRENT_TIMESTAMP, which is
+// UTC — filtering with a naive `date(created_at) = ?` would misclassify any order created between
+// 00:00-06:59 Bangkok time into the previous UTC calendar day (Bangkok is UTC+7 with no DST, so
+// this is a fixed, always-correct offset, not a full timezone-database lookup). `date(o.created_at,
+// '+7 hours')` shifts to Bangkok local time before extracting the calendar day, avoiding that
+// off-by-one-day bug. Omitting `date` preserves the exact prior behavior (no WHERE clause at all).
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -31,6 +39,20 @@ export async function GET(request: NextRequest) {
       }
 
       limit = parsedLimit;
+    }
+
+    const dateParam = searchParams.get("date");
+    let dateFilter: string | null = null;
+
+    if (dateParam !== null && dateParam !== "") {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+        return NextResponse.json(
+          { success: false, error: "Invalid date. Must be in YYYY-MM-DD format" },
+          { status: 400 }
+        );
+      }
+
+      dateFilter = dateParam;
     }
 
     const rows = db
@@ -57,12 +79,13 @@ export async function GET(request: NextRequest) {
         FROM orders o
         LEFT JOIN customers c ON c.id = o.customer_id
         LEFT JOIN order_items oi ON oi.order_id = o.id
+        ${dateFilter ? "WHERE date(o.created_at, '+7 hours') = ?" : ""}
         GROUP BY o.id
         ORDER BY o.id DESC
         LIMIT ?
         `
       )
-      .all(limit);
+      .all(...(dateFilter ? [dateFilter, limit] : [limit]));
 
     return NextResponse.json({
       success: true,

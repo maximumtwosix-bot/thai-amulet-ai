@@ -3,7 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
-import { ORDER_STATUS_LABELS } from "@/lib/orderStatus";
+import {
+  getAllowedNextStatuses,
+  ORDER_STATUS_LABELS,
+  type OrderStatus,
+} from "@/lib/orderStatus";
 import { DELIVERY_STATUS_LABELS, type DeliveryStatus } from "@/lib/deliveryStatus";
 
 type OrderListItem = {
@@ -45,17 +49,64 @@ function formatCurrency(value: number) {
   return `฿${value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// STEP 59 — Bangkok "today" for the date picker's default value, computed via Intl with an
+// explicit Asia/Bangkok timezone rather than trusting the browser's own local timezone setting
+// (which could differ if an operator's device is set to a different zone) — this must always
+// reflect the shop's actual business day, matching the same fixed UTC+7 reasoning the API's
+// `date(o.created_at, '+7 hours')` filter uses server-side.
+function todayBangkok(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = parts.find((p) => p.type === "year")?.value ?? "";
+  const month = parts.find((p) => p.type === "month")?.value ?? "";
+  const day = parts.find((p) => p.type === "day")?.value ?? "";
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateThai(value: string): string {
+  const date = new Date(`${value}T00:00:00+07:00`);
+
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleDateString("th-TH", { dateStyle: "long" });
+}
+
+// STEP 59 — "needs attention" (📋 ต้องดำเนินการ) is derived purely from the existing status enum:
+// anything not yet in either terminal state (completed/cancelled, per src/lib/orderStatus.ts's
+// ORDER_STATUS_TRANSITIONS). No new status value invented, no guessing.
+type StatusFilter = "all" | "active" | "completed" | "cancelled";
+
 export default function OrdersPage() {
   const [orders, setOrders] = useState<OrderListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  async function loadOrders() {
+  // STEP 59 — daily-operations date filter. "" means no date filter (show everything, up to the
+  // existing 100-row cap) — the existing pre-STEP-59 behavior, reachable via "ทั้งหมด" below.
+  const [selectedDate, setSelectedDate] = useState<string>(todayBangkok());
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+
+  // STEP 59 — "✅ ยืนยันออเดอร์สำเร็จ" per row. Calls the EXISTING PATCH /api/orders/[id]/status
+  // (STEP 32) — the exact same endpoint/flow Order Detail's own status buttons already use — never
+  // a direct DB write from this page. confirmingId guards against double-submit per row.
+  const [confirmingId, setConfirmingId] = useState<number | null>(null);
+  const [confirmErrors, setConfirmErrors] = useState<Record<number, string>>({});
+
+  async function loadOrders(date: string) {
     setLoading(true);
     setError("");
 
     try {
-      const response = await fetch("/api/orders?limit=100", {
+      const query = date
+        ? `?limit=100&date=${encodeURIComponent(date)}`
+        : "?limit=100";
+      const response = await fetch(`/api/orders${query}`, {
         cache: "no-store",
       });
 
@@ -77,9 +128,64 @@ export default function OrdersPage() {
   }
 
   useEffect(() => {
-    loadOrders();
-  }, []);
+    loadOrders(selectedDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate]);
 
+  async function confirmComplete(orderId: number) {
+    if (confirmingId !== null) return;
+
+    setConfirmingId(orderId);
+    setConfirmErrors((current) => {
+      const next = { ...current };
+      delete next[orderId];
+      return next;
+    });
+
+    try {
+      const response = await fetch(`/api/orders/${orderId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "completed" }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถยืนยันออเดอร์สำเร็จได้");
+      }
+
+      await loadOrders(selectedDate);
+    } catch (err) {
+      setConfirmErrors((current) => ({
+        ...current,
+        [orderId]: err instanceof Error ? err.message : "ไม่สามารถยืนยันออเดอร์สำเร็จได้",
+      }));
+    } finally {
+      setConfirmingId(null);
+    }
+  }
+
+  // Summary counts always reflect the current date filter's FULL breakdown, independent of which
+  // status tab is currently selected — switching tabs only changes which rows the table shows.
+  const activeCount = orders.filter(
+    (o) => o.status !== "completed" && o.status !== "cancelled"
+  ).length;
+  const completedCount = orders.filter((o) => o.status === "completed").length;
+  const cancelledCount = orders.filter((o) => o.status === "cancelled").length;
+
+  const filteredOrders = orders.filter((o) => {
+    if (statusFilter === "completed") return o.status === "completed";
+    if (statusFilter === "cancelled") return o.status === "cancelled";
+    if (statusFilter === "active") {
+      return o.status !== "completed" && o.status !== "cancelled";
+    }
+    return true;
+  });
+
+  // STEP 59 — summary always reflects the FULL selected-date set (all statuses), independent of
+  // the status tab currently shown below — "ยอดขายรวม" answers "how much did today sell in total,"
+  // not "how much did the currently-filtered tab sell."
   const totalOrders = orders.length;
   const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0);
 
@@ -113,9 +219,39 @@ export default function OrdersPage() {
           </div>
         </div>
 
-        <div className="mb-6 grid gap-4 md:grid-cols-2">
+        {/* STEP 59 — daily-operations date filter. Clearing (empty selectedDate) restores the
+            exact pre-STEP-59 "show everything, up to 100 rows" behavior. */}
+        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl border bg-white p-4 shadow-sm">
+          <label className="text-sm font-medium text-slate-700">
+            📅 วันที่:
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="ml-2 rounded-xl border px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+            />
+          </label>
+
+          {selectedDate && (
+            <button
+              type="button"
+              onClick={() => setSelectedDate("")}
+              className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+            >
+              ดูทั้งหมด (ล้างวันที่)
+            </button>
+          )}
+
+          {selectedDate && (
+            <span className="text-xs text-slate-400">{formatDateThai(selectedDate)}</span>
+          )}
+        </div>
+
+        <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">จำนวนออเดอร์</p>
+            <p className="text-sm text-slate-500">
+              {selectedDate ? "ออเดอร์วันนี้" : "จำนวนออเดอร์"}
+            </p>
             <p className="mt-2 text-3xl font-bold text-slate-900">
               {totalOrders.toLocaleString()}
             </p>
@@ -125,6 +261,27 @@ export default function OrdersPage() {
             <p className="text-sm text-slate-500">ยอดขายรวม</p>
             <p className="mt-2 text-3xl font-bold text-emerald-600">
               {formatCurrency(totalRevenue)}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border bg-white p-5 shadow-sm">
+            <p className="text-sm text-slate-500">📋 ต้องดำเนินการ</p>
+            <p className="mt-2 text-3xl font-bold text-amber-600">
+              {activeCount.toLocaleString()}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border bg-white p-5 shadow-sm">
+            <p className="text-sm text-slate-500">✅ สำเร็จ</p>
+            <p className="mt-2 text-3xl font-bold text-emerald-600">
+              {completedCount.toLocaleString()}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border bg-white p-5 shadow-sm">
+            <p className="text-sm text-slate-500">🚫 ยกเลิก</p>
+            <p className="mt-2 text-3xl font-bold text-slate-400">
+              {cancelledCount.toLocaleString()}
             </p>
           </div>
         </div>
@@ -137,6 +294,32 @@ export default function OrdersPage() {
             <p className="mt-1 text-sm text-slate-500">
               เรียงจากออเดอร์ล่าสุดไปเก่าสุด
             </p>
+
+            {/* STEP 59 — status tabs, purely a client-side filter over the already date-filtered
+                `orders` — no new API query param needed for this part. */}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(
+                [
+                  { key: "all", label: "ทั้งหมด" },
+                  { key: "active", label: "📋 ต้องดำเนินการ" },
+                  { key: "completed", label: "✅ สำเร็จ" },
+                  { key: "cancelled", label: "🚫 ยกเลิก" },
+                ] as Array<{ key: StatusFilter; label: string }>
+              ).map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setStatusFilter(tab.key)}
+                  className={`rounded-xl border px-3 py-1.5 text-xs font-medium ${
+                    statusFilter === tab.key
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {error && (
@@ -149,13 +332,17 @@ export default function OrdersPage() {
             <div className="p-10 text-center text-sm text-slate-500">
               กำลังโหลดรายการออเดอร์...
             </div>
-          ) : orders.length === 0 ? (
+          ) : filteredOrders.length === 0 ? (
             <div className="p-10 text-center text-sm text-slate-500">
-              ยังไม่มีออเดอร์ในระบบ
+              {statusFilter === "active"
+                ? "🎉 ไม่มีออเดอร์ที่ค้างดำเนินการ"
+                : selectedDate
+                  ? "ไม่มีออเดอร์สำหรับวันที่เลือก"
+                  : "ยังไม่มีออเดอร์ในระบบ"}
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] text-left text-sm">
+              <table className="w-full min-w-[1000px] text-left text-sm">
                 <thead className="bg-slate-50 text-slate-600">
                   <tr>
                     <th className="p-4">เลขที่ออเดอร์</th>
@@ -171,57 +358,88 @@ export default function OrdersPage() {
                 </thead>
 
                 <tbody>
-                  {orders.map((order) => (
-                    <tr key={order.id} className="border-t hover:bg-slate-50">
-                      <td className="p-4 font-semibold text-slate-900">
-                        {order.order_number}
-                      </td>
+                  {filteredOrders.map((order) => {
+                    // STEP 59 — reuses the EXISTING getAllowedNextStatuses() (src/lib/orderStatus.ts,
+                    // STEP 32) — the button only appears when the existing transition graph actually
+                    // allows moving this order to 'completed' (i.e. only from 'shipped' today); the
+                    // backend re-validates this independently via the same updateOrderStatus() Order
+                    // Detail's own status buttons already call, so this is never trusted client-side
+                    // alone.
+                    const canComplete = getAllowedNextStatuses(
+                      order.status as OrderStatus
+                    ).includes("completed");
 
-                      <td className="p-4 whitespace-nowrap text-slate-500">
-                        {formatDate(order.created_at)}
-                      </td>
+                    return (
+                      <tr key={order.id} className="border-t hover:bg-slate-50">
+                        <td className="p-4 font-semibold text-slate-900">
+                          {order.order_number}
+                        </td>
 
-                      <td className="p-4 text-slate-700">
-                        {order.customer_name || "-"}
-                      </td>
+                        <td className="p-4 whitespace-nowrap text-slate-500">
+                          {formatDate(order.created_at)}
+                        </td>
 
-                      <td className="p-4 text-slate-700">
-                        {order.channel || "-"}
-                      </td>
+                        <td className="p-4 text-slate-700">
+                          {order.customer_name || "-"}
+                        </td>
 
-                      <td className="p-4 text-slate-700">
-                        {order.total_quantity.toLocaleString()} ชิ้น
-                        <span className="ml-1 text-xs text-slate-400">
-                          ({order.item_count} รายการ)
-                        </span>
-                      </td>
+                        <td className="p-4 text-slate-700">
+                          {order.channel || "-"}
+                        </td>
 
-                      <td className="p-4 font-semibold text-slate-900">
-                        {formatCurrency(order.total)}
-                      </td>
+                        <td className="p-4 text-slate-700">
+                          {order.total_quantity.toLocaleString()} ชิ้น
+                          <span className="ml-1 text-xs text-slate-400">
+                            ({order.item_count} รายการ)
+                          </span>
+                        </td>
 
-                      <td className="p-4">
-                        <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
-                          {ORDER_STATUS_LABELS[order.status as keyof typeof ORDER_STATUS_LABELS] || order.status}
-                        </span>
-                      </td>
+                        <td className="p-4 font-semibold text-slate-900">
+                          {formatCurrency(order.total)}
+                        </td>
 
-                      <td className="p-4">
-                        <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700">
-                          {DELIVERY_STATUS_LABELS[order.delivery_status ?? "pending"]}
-                        </span>
-                      </td>
+                        <td className="p-4">
+                          <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                            {ORDER_STATUS_LABELS[order.status as keyof typeof ORDER_STATUS_LABELS] || order.status}
+                          </span>
+                        </td>
 
-                      <td className="p-4">
-                        <Link
-                          href={`/orders/${order.id}`}
-                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                        >
-                          ดูรายละเอียด →
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
+                        <td className="p-4">
+                          <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700">
+                            {DELIVERY_STATUS_LABELS[order.delivery_status ?? "pending"]}
+                          </span>
+                        </td>
+
+                        <td className="p-4">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            {canComplete && (
+                              <button
+                                type="button"
+                                onClick={() => confirmComplete(order.id)}
+                                disabled={confirmingId === order.id}
+                                className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                              >
+                                {confirmingId === order.id
+                                  ? "กำลังยืนยัน..."
+                                  : "✅ ยืนยันออเดอร์สำเร็จ"}
+                              </button>
+                            )}
+                            <Link
+                              href={`/orders/${order.id}`}
+                              className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            >
+                              ดูรายละเอียด →
+                            </Link>
+                          </div>
+                          {confirmErrors[order.id] && (
+                            <p className="mt-1 text-right text-xs text-red-600">
+                              {confirmErrors[order.id]}
+                            </p>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

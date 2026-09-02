@@ -5390,6 +5390,92 @@ Studio/Voice Studio/Content Studio/Social.
 
 ---
 
+## STEP 54 — SHIPPING FEE / DISCOUNT EDITING (OPTION C)
+
+Date: 2026-09-02
+
+**Purpose**: allow correcting an existing order's shipping fee and/or discount from Order Detail
+(e.g. a typo at order-entry time), without touching order items, quantity, price, product, or stock.
+
+**Audit result (before implementation)**: no capability existed — `shipping_fee`/`discount` were
+writable only once, inside `createOrder()`, with no update path anywhere. `subtotal`/`total` are
+derived values (STEP 53 already established this for `subtotal`, recomputed from `order_items`).
+Four scope options were analyzed: shipping-only, discount-only, both together (Option C), and direct
+subtotal/total editing (rejected — would break the STEP 53 invariant that totals are always
+server-derived, never client-supplied). **Option C was explicitly approved.**
+
+**Approved implementation, isolated to 2 modified + 1 new file** — reuses STEP 53's mechanism
+directly, no new pattern invented:
+- `src/lib/orders.ts` — added `updateOrderShippingAndDiscount(orderId, { shippingFee?, discount? })`.
+  Either field omitted keeps its current value (same "undefined = unchanged" convention as
+  `updateCustomer()`/`updateTransaction()`). Inside one `db.transaction()`: same terminal-status
+  guard as `updateOrderItemPrices()` (`getAllowedNextStatuses(order.status).length === 0` →
+  `ORDER_TERMINAL_STATUS`), validates both fields (`Number.isFinite && >= 0`, rejecting
+  `NaN`/`Infinity`/`-Infinity`/negative), recomputes `subtotal` live from `order_items` (never
+  accepted from the caller — same rule as STEP 53), computes
+  `total = subtotal + shippingFee − discount` (`INVALID_ORDER_TOTAL` if negative), updates
+  `orders.shipping_fee/discount/subtotal/total`, then reuses `updateTransaction()` as-is (STEP 40)
+  to sync the linked STEP 31 income transaction's `amount` to the new total — including STEP 53's
+  `LINKED_INCOME_REQUIRES_POSITIVE_TOTAL` guard for the total-would-become-≤0-with-a-linked-
+  transaction edge case. No `order_items`, `quantity`, `product_id`, `products.stock`, or
+  `inventory_movements` are ever read or written by this function.
+- `src/app/api/orders/[id]/summary/route.ts` (new) — `PATCH`, its own narrow sub-route matching the
+  `/status`/`/delivery`/`/items` convention. Explicitly rejects (400) any request body containing
+  `subtotal`, `total`, `items`, `quantity`, `unitPrice`/`unit_price`, or `productId`/`product_id`.
+  Same 404/400/409/500 error-mapping shape as `/items`. Protected automatically by the existing
+  `src/proxy.ts` gate — no proxy change made.
+- `src/app/orders/[id]/page.tsx` — added a "✏️ แก้ไขค่าจัดส่ง/ส่วนลด" button next to the shipping/
+  discount summary lines, hidden once `getAllowedNextStatuses(order.status).length === 0` (server
+  enforces the same rule independently). Edit mode replaces the ค่าจัดส่ง/ส่วนลด display values with
+  number inputs only — `subtotal`/`total` are never given input fields anywhere on this page. The
+  existing STEP 53 preview logic was extended (not replaced) so the "(ตัวอย่าง)" total preview
+  composes correctly whether the STEP 53 item-price edit, this STEP's summary edit, both, or
+  neither are active. Save PATCHes the new endpoint then calls the existing `loadOrder()`; cancel
+  only resets local state.
+
+**Files changed**: `src/lib/orders.ts` (+109/−0, net new function), `src/app/orders/[id]/page.tsx`
+(+175/−9), `src/app/api/orders/[id]/summary/route.ts` (new).
+**No database/schema changes. No dependency changes.** No changes to `src/lib/transactions.ts` or
+`src/proxy.ts` (both reused as-is). No changes to item-price editing (STEP 53), customer edit
+(STEP 52), delivery tracking (STEP 49), print view (STEP 48/51), STEP 50's Orders list, order-status
+workflow logic itself, Products/Inventory/Customers pages, or Video Studio/Voice Studio/Content
+Studio/Social.
+
+**Tested**:
+1. `npm run build` → **PASS**, zero type errors; new route `ƒ /api/orders/[id]/summary` appears
+   alongside all existing routes, unchanged.
+2. Data-layer test (no HTTP/auth needed, same approach as STEP 53) → **PASS**, 34 assertions, using
+   two TEST orders inserted directly via raw SQL referencing an existing real product (id 47)
+   read-only:
+   - Shipping-only edit (0→50): discount/subtotal unchanged, total recomputed correctly, linked
+     income transaction synced, `order_items` byte-for-byte unchanged.
+   - Discount-only edit (0→30, on top of shipping=50): shipping unchanged, total recomputed
+     correctly, transaction synced.
+   - Combined edit (shipping→15, discount→5 simultaneously): total recomputed correctly
+     (200+15−5=210), transaction synced, `order_items` still unchanged.
+   - Invalid inputs all rejected with the exact expected error: negative shipping/discount,
+     `NaN`/`Infinity`/`-Infinity`, and a discount exceeding subtotal+shipping (`INVALID_ORDER_TOTAL`,
+     since total would go negative) — order row confirmed completely unchanged (full-row equality)
+     after all 6 rejected attempts.
+   - Terminal-status: a TEST order walked through the real `pending → paid → shipped → completed`
+     workflow; a subsequent shipping-fee edit attempt threw `ORDER_TERMINAL_STATUS`, order row and
+     linked transaction both confirmed unchanged afterward.
+   - Stock/inventory safety: reference product's `stock` and `inventory_movements` count confirmed
+     EXACTLY unchanged after each successful edit and again at the end of the run.
+   - Finance isolation: total `transactions` row count increased by exactly 2 (the two TEST linked
+     incomes) across the whole run — no other transaction row touched.
+   - Cleanup by exact ids, independently re-verified: zero `TEST-STEP54-%` orders, zero
+     `TEST STEP54` transactions remain.
+3. **Protected records verified untouched throughout**: Order ID 1, Order ID 38, and Customer ID 5
+   read before and after the full test run, compared via exact JSON equality — all three
+   byte-for-byte unchanged.
+
+**Defects found**: none.
+
+**STEP 54 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

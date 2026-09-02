@@ -468,3 +468,112 @@ export function updateOrderItemPrices(
 
   return run();
 }
+
+// STEP 54 — shipping fee / discount correction on an existing order. Approved scope (2026-09-02,
+// Option C): edits ONLY orders.shipping_fee and orders.discount. Never accepts subtotal, total,
+// order_items, quantity, unit_price, or product_id — the input type below has no such fields, and
+// this function has no code path capable of writing any of them. subtotal is always recomputed live
+// from order_items (same as updateOrderItemPrices() above), never accepted from the caller. Reuses
+// the exact same terminal-status guard, total formula, and updateTransaction()-based Finance sync
+// STEP 53 already established — no new mechanism invented.
+export interface UpdateOrderShippingAndDiscountInput {
+  shippingFee?: number;
+  discount?: number;
+}
+
+export interface UpdateOrderShippingAndDiscountResult {
+  orderId: number;
+  shippingFee: number;
+  discount: number;
+  subtotal: number;
+  total: number;
+  linkedIncomeTransactionId: number | null;
+}
+
+export function updateOrderShippingAndDiscount(
+  orderId: number,
+  input: UpdateOrderShippingAndDiscountInput
+): UpdateOrderShippingAndDiscountResult {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    throw new Error("INVALID_ORDER_ID");
+  }
+
+  const run = db.transaction(() => {
+    const order = db
+      .prepare("SELECT id, status, shipping_fee, discount FROM orders WHERE id = ?")
+      .get(orderId) as
+      | { id: number; status: string; shipping_fee: number; discount: number }
+      | undefined;
+
+    if (!order) {
+      throw new Error("ORDER_NOT_FOUND");
+    }
+
+    // Same terminal-status guard as updateOrderItemPrices() (STEP 53) — completed/cancelled orders
+    // cannot have their financial summary edited, enforced here regardless of what the client shows.
+    if (isValidOrderStatus(order.status) && getAllowedNextStatuses(order.status).length === 0) {
+      throw new Error("ORDER_TERMINAL_STATUS");
+    }
+
+    // Undefined means "keep the current value" — matches updateCustomer()/updateTransaction()'s
+    // existing "undefined = unchanged" convention elsewhere in this codebase.
+    const nextShippingFee =
+      input.shippingFee === undefined ? order.shipping_fee : Number(input.shippingFee);
+    const nextDiscount = input.discount === undefined ? order.discount : Number(input.discount);
+
+    if (!Number.isFinite(nextShippingFee) || nextShippingFee < 0) {
+      throw new Error("INVALID_SHIPPING_FEE");
+    }
+
+    if (!Number.isFinite(nextDiscount) || nextDiscount < 0) {
+      throw new Error("INVALID_DISCOUNT");
+    }
+
+    // subtotal is always recomputed live from order_items — never accepted from the caller, same
+    // rule updateOrderItemPrices() (STEP 53) already enforces for the identical reason.
+    const items = db
+      .prepare("SELECT quantity, price FROM order_items WHERE order_id = ?")
+      .all(orderId) as Array<{ quantity: number; price: number }>;
+
+    const subtotal = items.reduce((sum, row) => sum + row.price * row.quantity, 0);
+    const total = subtotal + nextShippingFee - nextDiscount;
+
+    if (total < 0) {
+      throw new Error("INVALID_ORDER_TOTAL");
+    }
+
+    const linkedIncome = db
+      .prepare(
+        "SELECT id FROM transactions WHERE order_id = ? AND transaction_type = 'income' ORDER BY id ASC LIMIT 1"
+      )
+      .get(orderId) as { id: number } | undefined;
+
+    // Same guard as updateOrderItemPrices() (STEP 53) — a shipping/discount edit that would leave
+    // an order with an existing linked income transaction at total <= 0 is rejected outright rather
+    // than silently leaving that transaction's amount stale/out of sync.
+    if (linkedIncome && total <= 0) {
+      throw new Error("LINKED_INCOME_REQUIRES_POSITIVE_TOTAL");
+    }
+
+    db.prepare(
+      "UPDATE orders SET shipping_fee = ?, discount = ?, subtotal = ?, total = ? WHERE id = ?"
+    ).run(nextShippingFee, nextDiscount, subtotal, total, orderId);
+
+    // Reconcile the STEP 31 auto-created income transaction, same reused mechanism as STEP 53 —
+    // nests safely inside this db.transaction() via better-sqlite3's SAVEPOINT support.
+    if (linkedIncome) {
+      updateTransaction(linkedIncome.id, { amount: total });
+    }
+
+    return {
+      orderId,
+      shippingFee: nextShippingFee,
+      discount: nextDiscount,
+      subtotal,
+      total,
+      linkedIncomeTransactionId: linkedIncome?.id ?? null,
+    };
+  });
+
+  return run();
+}

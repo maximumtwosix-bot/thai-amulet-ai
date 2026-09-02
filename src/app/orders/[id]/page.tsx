@@ -329,6 +329,77 @@ export default function OrderDetailPage() {
     }
   }
 
+  // STEP 54 — shipping fee / discount correction (Option C), approved 2026-09-02. Independent of
+  // the STEP 53 price-edit state above: PATCHes the dedicated /api/orders/[id]/summary route
+  // (src/lib/orders.ts updateOrderShippingAndDiscount()), never order_items. subtotal/total are
+  // never given input fields — server-derived only, matching the STEP 54 audit's rejection of
+  // direct subtotal/total editing.
+  const [editingSummary, setEditingSummary] = useState(false);
+  const [shippingFeeInput, setShippingFeeInput] = useState("");
+  const [discountInput, setDiscountInput] = useState("");
+  const [savingSummary, setSavingSummary] = useState(false);
+  const [summaryError, setSummaryError] = useState("");
+
+  function startEditSummary() {
+    if (!order) return;
+
+    setShippingFeeInput(String(order.shipping_fee));
+    setDiscountInput(String(order.discount));
+    setSummaryError("");
+    setEditingSummary(true);
+  }
+
+  function cancelEditSummary() {
+    setEditingSummary(false);
+    setShippingFeeInput("");
+    setDiscountInput("");
+    setSummaryError("");
+  }
+
+  async function saveSummary() {
+    if (savingSummary || !order) return;
+
+    setSummaryError("");
+
+    const shippingFee = Number(shippingFeeInput);
+    const discount = Number(discountInput);
+
+    if (!Number.isFinite(shippingFee) || shippingFee < 0) {
+      setSummaryError("ค่าจัดส่งต้องเป็นตัวเลขที่ไม่ติดลบ");
+      return;
+    }
+
+    if (!Number.isFinite(discount) || discount < 0) {
+      setSummaryError("ส่วนลดต้องเป็นตัวเลขที่ไม่ติดลบ");
+      return;
+    }
+
+    setSavingSummary(true);
+
+    try {
+      const response = await fetch(`/api/orders/${order.id}/summary`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shippingFee, discount }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกค่าจัดส่ง/ส่วนลดได้");
+      }
+
+      cancelEditSummary();
+      await loadOrder();
+    } catch (err) {
+      setSummaryError(
+        err instanceof Error ? err.message : "ไม่สามารถบันทึกค่าจัดส่ง/ส่วนลดได้"
+      );
+    } finally {
+      setSavingSummary(false);
+    }
+  }
+
   async function saveDelivery() {
     if (savingDelivery || !order) return;
 
@@ -1025,9 +1096,10 @@ export default function OrderDetailPage() {
               )}
 
               <div className="space-y-2 border-t p-5 text-sm">
-                {/* STEP 53 — preview only, computed from local (unsaved) priceInputs while editing;
+                {/* STEP 53/54 — preview only, computed from local (unsaved) input while editing;
                     the server recomputes subtotal/total authoritatively on save and loadOrder()
-                    replaces these with the real values afterward. */}
+                    replaces these with the real values afterward. subtotal/total themselves are
+                    never given input fields anywhere on this page — always server-derived. */}
                 {(() => {
                   const previewSubtotal = editingPrices
                     ? order.items.reduce((sum, item) => {
@@ -1036,8 +1108,22 @@ export default function OrderDetailPage() {
                         return sum + price * item.quantity;
                       }, 0)
                     : order.subtotal;
-                  const previewTotal = editingPrices
-                    ? previewSubtotal + order.shipping_fee - order.discount
+
+                  const editedShippingFee = Number(shippingFeeInput);
+                  const effectiveShippingFee =
+                    editingSummary && Number.isFinite(editedShippingFee)
+                      ? editedShippingFee
+                      : order.shipping_fee;
+
+                  const editedDiscount = Number(discountInput);
+                  const effectiveDiscount =
+                    editingSummary && Number.isFinite(editedDiscount)
+                      ? editedDiscount
+                      : order.discount;
+
+                  const previewing = editingPrices || editingSummary;
+                  const previewTotal = previewing
+                    ? previewSubtotal + effectiveShippingFee - effectiveDiscount
                     : order.total;
 
                   return (
@@ -1046,18 +1132,89 @@ export default function OrderDetailPage() {
                         <span>ยอดรวมสินค้า{editingPrices ? " (ตัวอย่าง)" : ""}</span>
                         <span>{formatCurrency(previewSubtotal)}</span>
                       </div>
-                      <div className="flex justify-between text-slate-600">
+
+                      <div className="flex items-center justify-between text-slate-600">
                         <span>ค่าจัดส่ง</span>
-                        <span>{formatCurrency(order.shipping_fee)}</span>
+                        {editingSummary ? (
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={shippingFeeInput}
+                            onChange={(e) => setShippingFeeInput(e.target.value)}
+                            className="w-28 rounded-lg border px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                          />
+                        ) : (
+                          <span>{formatCurrency(order.shipping_fee)}</span>
+                        )}
                       </div>
-                      <div className="flex justify-between text-slate-600">
+
+                      <div className="flex items-center justify-between text-slate-600">
                         <span>ส่วนลด</span>
-                        <span>-{formatCurrency(order.discount)}</span>
+                        {editingSummary ? (
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={discountInput}
+                            onChange={(e) => setDiscountInput(e.target.value)}
+                            className="w-28 rounded-lg border px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                          />
+                        ) : (
+                          <span>-{formatCurrency(order.discount)}</span>
+                        )}
                       </div>
+
                       <div className="flex justify-between border-t pt-2 text-base font-bold text-slate-900">
-                        <span>ยอดรวมสุทธิ{editingPrices ? " (ตัวอย่าง)" : ""}</span>
+                        <span>ยอดรวมสุทธิ{previewing ? " (ตัวอย่าง)" : ""}</span>
                         <span>{formatCurrency(previewTotal)}</span>
                       </div>
+
+                      {/* STEP 54 — shipping fee / discount edit. Hidden entirely once the order has
+                          reached a terminal status; the server enforces this same rule
+                          independently in updateOrderShippingAndDiscount(). */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                        {!editingSummary &&
+                          (getAllowedNextStatuses(order.status).length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={startEditSummary}
+                              className="text-xs font-medium text-amber-700 hover:underline"
+                            >
+                              ✏️ แก้ไขค่าจัดส่ง/ส่วนลด
+                            </button>
+                          ) : (
+                            <span className="text-xs text-slate-400">
+                              ออเดอร์นี้อยู่ในสถานะสิ้นสุดแล้ว ไม่สามารถแก้ไขค่าจัดส่ง/ส่วนลดได้
+                            </span>
+                          ))}
+                      </div>
+
+                      {editingSummary && (
+                        <div className="pt-2">
+                          {summaryError && (
+                            <p className="mb-2 text-xs text-red-600">{summaryError}</p>
+                          )}
+                          <div className="flex flex-wrap items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={saveSummary}
+                              disabled={savingSummary}
+                              className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                            >
+                              {savingSummary ? "กำลังบันทึก..." : "บันทึก"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditSummary}
+                              disabled={savingSummary}
+                              className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                              ยกเลิก
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </>
                   );
                 })()}

@@ -76,6 +76,10 @@ type TransactionRow = {
   // set and that order still exists.
   linkedOrderStatus: OrderStatus | null;
   linkedOrderNumber: string | null;
+  // STEP 63 — display-only, from the same existing order LEFT JOIN as linkedOrderStatus above
+  // (GET /api/transactions). Drives only the warning badge below — never read anywhere else on
+  // this page, never affects any total.
+  linkedDeliveryStatus: string | null;
 };
 
 type ProductOption = { id: number; name: string };
@@ -1341,6 +1345,18 @@ export default function FinancePage() {
                               : ""}
                           </span>
                         )}
+                        {/* STEP 63 — returned-but-not-cancelled warning, same condition/wording as
+                            Order Detail's STEP 61 warning. Purely visual: no amount/transaction/
+                            status is changed by this block. Only ever shown when a real linked
+                            order exists (t.orderId set, i.e. linkedOrderStatus is non-null) — a
+                            transaction with no linked order never shows this, per instructions. */}
+                        {t.orderId &&
+                          t.linkedDeliveryStatus === "returned" &&
+                          t.linkedOrderStatus !== "cancelled" && (
+                            <span className="ml-2 inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                              ⚠️ พัสดุตีกลับ — ยังไม่ยกเลิก
+                            </span>
+                          )}
                       </td>
 
                       <td className="p-4 text-slate-600">

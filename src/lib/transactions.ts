@@ -134,6 +134,11 @@ export type TransactionRow = {
   // paths, so that's harmless, but worth knowing if a future caller needs it there too.
   linkedOrderStatus: OrderStatus | null;
   linkedOrderNumber: string | null;
+  // STEP 63 — display-only, same populated-only-when-joined caveat as linkedOrderStatus above.
+  // Added to the existing order LEFT JOIN in listTransactions()/getTaxSummary() only — no new join,
+  // no new query, no calculation anywhere reads this field (see finance/page.tsx and tax/page.tsx's
+  // STEP 63 warning, which is purely visual).
+  linkedDeliveryStatus: string | null;
 };
 
 type DbRow = {
@@ -152,6 +157,7 @@ type DbRow = {
   updated_at: string;
   linked_order_status?: string | null;
   linked_order_number?: string | null;
+  linked_delivery_status?: string | null;
 };
 
 function toRow(row: DbRow): TransactionRow {
@@ -171,6 +177,7 @@ function toRow(row: DbRow): TransactionRow {
     updatedAt: row.updated_at,
     linkedOrderStatus: (row.linked_order_status ?? null) as OrderStatus | null,
     linkedOrderNumber: row.linked_order_number ?? null,
+    linkedDeliveryStatus: row.linked_delivery_status ?? null,
   };
 }
 
@@ -400,10 +407,15 @@ export function listTransactions(filters: ListTransactionsFilters = {}): Transac
   // cancelled order's income clearly) without a schema change or a second round-trip per row.
   // Display-only: nothing here changes which rows are returned or their amount/type/category, so
   // Finance/Tax totals are unaffected by this join, exactly as required.
+  //
+  // STEP 63 — added o.delivery_status to the SAME existing LEFT JOIN above (no new join, no new
+  // query) so Finance can also flag a returned-but-not-cancelled order's income, per the STEP 61/62
+  // audit finding that delivery_status has no automatic accounting effect anywhere — this is
+  // display-only, identical reasoning to the STEP 34 addition immediately above.
   const rows = db
     .prepare(
       `
-      SELECT t.*, o.status AS linked_order_status, o.order_number AS linked_order_number
+      SELECT t.*, o.status AS linked_order_status, o.order_number AS linked_order_number, o.delivery_status AS linked_delivery_status
       FROM transactions t
       LEFT JOIN orders o ON o.id = t.order_id
       ${whereClause}

@@ -98,6 +98,10 @@ type SummaryTransaction = {
   // STEP 34 — display-only, from getTaxSummary()'s order-status join; null unless orderId is set.
   linkedOrderStatus: OrderStatus | null;
   linkedOrderNumber: string | null;
+  // STEP 63 — display-only, from the same existing order LEFT JOIN as linkedOrderStatus above
+  // (GET /api/tax/summary → getTaxSummary()). Drives only the warning badge below — never affects
+  // any total on this page.
+  linkedDeliveryStatus: string | null;
 };
 
 type TaxSummary = {
@@ -612,18 +616,30 @@ export default function TaxPage() {
                                 the right still counts toward รายรับรวม/สุทธิ per the STEP 32 rule
                                 that cancellation never changes Finance/Tax totals. */}
                             {t.orderId ? (
-                              <span
-                                className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                                  t.linkedOrderStatus === "cancelled"
-                                    ? "bg-red-100 text-red-700"
-                                    : "bg-slate-100 text-slate-500"
-                                }`}
-                              >
-                                #{t.orderId}
-                                {t.linkedOrderStatus
-                                  ? ` (${ORDER_STATUS_LABELS[t.linkedOrderStatus]})`
-                                  : ""}
-                              </span>
+                              <>
+                                <span
+                                  className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                                    t.linkedOrderStatus === "cancelled"
+                                      ? "bg-red-100 text-red-700"
+                                      : "bg-slate-100 text-slate-500"
+                                  }`}
+                                >
+                                  #{t.orderId}
+                                  {t.linkedOrderStatus
+                                    ? ` (${ORDER_STATUS_LABELS[t.linkedOrderStatus]})`
+                                    : ""}
+                                </span>
+                                {/* STEP 63 — returned-but-not-cancelled warning, same
+                                    condition/wording as Order Detail's STEP 61 warning and
+                                    Finance's STEP 63 badge. Purely visual — no total on this page
+                                    is affected. */}
+                                {t.linkedDeliveryStatus === "returned" &&
+                                  t.linkedOrderStatus !== "cancelled" && (
+                                    <span className="ml-1 inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                                      ⚠️ พัสดุตีกลับ — ยังไม่ยกเลิก
+                                    </span>
+                                  )}
+                              </>
                             ) : (
                               "-"
                             )}

@@ -59,6 +59,11 @@ export interface TaxSummaryTransaction {
   // without reversing or excluding it, per the STEP 32 rule that cancellation never changes totals.
   linkedOrderStatus: string | null;
   linkedOrderNumber: string | null;
+  // STEP 63 — display-only, same caveat as linkedOrderStatus above (populated only via the existing
+  // order LEFT JOIN below). Lets the Tax page flag a returned-but-not-cancelled order, per the
+  // STEP 61/62 audit finding that delivery_status has no automatic accounting effect anywhere —
+  // purely visual, never affects totalIncome/totalExpense/netIncome/monthlyBreakdown.
+  linkedDeliveryStatus: string | null;
 }
 
 export interface TaxSummaryResult {
@@ -303,7 +308,8 @@ export function getTaxSummary(params: TaxSummaryParams): TaxSummaryResult {
         t.notes,
         (SELECT COUNT(*) FROM transaction_attachments ta WHERE ta.transaction_id = t.id) AS attachment_count,
         o.status AS linked_order_status,
-        o.order_number AS linked_order_number
+        o.order_number AS linked_order_number,
+        o.delivery_status AS linked_delivery_status
       FROM transactions t
       LEFT JOIN orders o ON o.id = t.order_id
       WHERE t.transaction_date BETWEEN ? AND ?
@@ -325,6 +331,7 @@ export function getTaxSummary(params: TaxSummaryParams): TaxSummaryResult {
     attachment_count: number;
     linked_order_status: string | null;
     linked_order_number: string | null;
+    linked_delivery_status: string | null;
   }>;
 
   const transactions: TaxSummaryTransaction[] = transactionRows.map((row) => ({
@@ -342,6 +349,7 @@ export function getTaxSummary(params: TaxSummaryParams): TaxSummaryResult {
     hasAttachment: row.attachment_count > 0,
     linkedOrderStatus: row.linked_order_status,
     linkedOrderNumber: row.linked_order_number,
+    linkedDeliveryStatus: row.linked_delivery_status,
   }));
 
   return {

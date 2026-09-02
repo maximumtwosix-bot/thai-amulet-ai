@@ -5190,6 +5190,110 @@ STEP's 2 new ones) remain untracked and must not be committed.
 
 ---
 
+## STEP 51 — CARRIER / TRACKING NUMBER / DELIVERY STATUS ON THE PRINT VIEW
+
+Date: 2026-09-02
+
+**Purpose**: STEP 50's audit (secondary finding B2) identified that STEP 48's print/packing-slip
+view still did not show carrier, tracking number, or delivery status even though STEP 49 had already
+added that data to Order Detail. This STEP closes exactly that one gap.
+
+**Approved implementation, isolated to exactly 1 file**:
+- `src/app/orders/[id]/page.tsx` — inside the existing STEP 48 print-only block
+  (`hidden print:block`), added 3 lines to the existing channel/payment-method paragraph group:
+  `ขนส่ง: {order.carrier || "-"}`, `เลขพัสดุ: {order.tracking_number || "-"}`, and
+  `สถานะการจัดส่ง: {DELIVERY_STATUS_LABELS[order.delivery_status]}`. Reuses `order` state already
+  loaded by the page and the `DELIVERY_STATUS_LABELS` map already imported for STEP 49's on-screen
+  delivery section — no new fetch, no new state, no duplicated labels.
+
+**Files changed** (1, additive-only diff): `src/app/orders/[id]/page.tsx` — **6 lines added, 0
+removed**.
+**No database/schema changes. No API changes** (`GET /api/orders/[id]` already returned `carrier`,
+`tracking_number`, `delivery_status` since STEP 49). **No dependency changes.** No changes to
+`src/lib/deliveryStatus.ts`, STEP 49's delivery edit/save/proof functionality, or STEP 50's Orders
+list.
+
+**Tested**:
+1. `npm run build` → **PASS**, zero type errors, all routes compiled including `/orders/[id]`.
+2. Manual browser verification by the user (in their own authenticated session, after the
+   Chrome DevTools MCP tab was confirmed to be a separate, unauthenticated browser instance) →
+   **PASS** — carrier, tracking number, and delivery status confirmed visible in the print view.
+3. Fallback behavior (`"-"` for null/empty carrier/tracking, correct label for all 4
+   `delivery_status` values) verified by code inspection of the closed `DeliveryStatus` union and the
+   existing `|| "-"` convention already used elsewhere on this page.
+
+**Incidental finding during this STEP**: a stale `.next` Turbopack cache (from running `npm run
+build` immediately before `npm run dev` in the same session) caused `/api/auth/*` to 404 with an
+HTML body instead of JSON, breaking login. Root-caused via direct endpoint probing (dummy
+credentials only) and fixed by stopping the dev server, clearing `.next`, and restarting — unrelated
+to this STEP's source change, no source files touched by the fix.
+
+**Defects found**: none.
+
+**STEP 51 STATUS: PASS**
+
+---
+
+## STEP 52 — EDIT CUSTOMER INFO FROM ORDER DETAIL
+
+Date: 2026-09-02
+
+**Purpose**: allow correcting customer name/phone/address/district/province/postal code directly
+from the Order Detail page, so a typo affecting the printed receipt/packing slip can be fixed without
+leaving the page.
+
+**Audit result (before implementation)**: `orders.customer_id` is a plain FK with **no per-order
+snapshot** of customer fields — `GET /api/orders/[id]` reads customer name/phone/address live via a
+`LEFT JOIN customers` on every request. `PATCH /api/customers/[id]` (STEP 36) and its matching edit
+form (`src/app/customers/page.tsx`) already existed and already covered every field needed. Two
+implementation options were identified: **Option A** (reuse the existing customer PATCH as-is, no
+schema change, but edits the shared `customers` row — so the change is visible on every order tied to
+that `customer_id`, not just the one being viewed) and **Option B** (add per-order snapshot columns to
+`orders` so an edit here affects only this order — requires a schema change). **Option A was
+explicitly approved by the user**, with the shared-mutation behavior acknowledged and accepted.
+
+**Approved implementation, isolated to exactly 1 file**:
+- `src/app/orders/[id]/page.tsx` — added a "✏️ แก้ไขข้อมูลลูกค้า" button next to the existing
+  "ลูกค้า" label (shown only when `order.customer_id` is set), opening an edit form (name, phone,
+  address, district, province, postal code — same field set/pattern as `src/app/customers/page.tsx`'s
+  existing edit form) pre-filled from `order.customer_*`. On save, `PATCH`es the existing
+  `/api/customers/{order.customer_id}` (client-side validation mirrors the API's
+  `INVALID_CUSTOMER_NAME` check; double-submit guarded via a `savingCustomer` flag; errors shown
+  inline), then closes the form and calls `loadOrder()` — refactored out of its previous inline
+  `useEffect` into a reusable `useCallback` so both the initial page load and this save handler can
+  call it — to refetch the order. Because the print view (STEP 48/51) already reads the same
+  `order.customer_*` fields, it reflects the update automatically with no print-block changes needed.
+  "ยกเลิก" only resets local form state — no request is sent.
+
+**Files changed** (1): `src/app/orders/[id]/page.tsx` — **256 insertions, 46 deletions** (the
+deletions are the pre-existing `loadOrder` fetch logic being moved out of its `useEffect` into a
+standalone function with identical behavior, not functionality removed).
+**No database/schema changes. No API changes** (reuses `PATCH /api/customers/[id]` from STEP 36
+as-is). **No dependency changes.** No changes to order calculation, order items/products, stock,
+transactions/finance, `payment_method`, `channel`, `status` (order-status workflow), STEP 49's
+delivery tracking/proof functionality, or STEP 50's Orders list.
+
+**Tested**:
+1. `npm run build` → **PASS**, zero type errors.
+2. Data-layer test (no HTTP/auth needed) → **PASS**: a temporary throwaway script created a `TEST
+   STEP52 - DO NOT USE` customer, called the exact same `updateCustomer()` function the PATCH route
+   calls with the exact same field set the new UI form sends, verified all 6 fields updated and a
+   fresh `getCustomerById()` read reflected the change, confirmed the update touched zero rows in
+   `orders`/`order_items` (customer-only mutation, as expected from Option A), then deleted the TEST
+   customer row and independently re-verified no `TEST%`-named customers remained. The script itself
+   was deleted immediately after use — never committed.
+3. Manual browser verification by the user (own authenticated session) → **PASS** — button and form
+   confirmed visible and working on a real order.
+4. **Protected records verified untouched throughout**: Order ID 1 present and unmodified, Order ID
+   38 present and unmodified, Customer ID 5 (`name: "โน่"`) present and unmodified — the test never
+   referenced any of these ids, only its own freshly-created and since-deleted test customer.
+
+**Defects found**: none.
+
+**STEP 52 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

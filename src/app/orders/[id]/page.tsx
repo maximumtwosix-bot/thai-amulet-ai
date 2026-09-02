@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -162,6 +162,97 @@ export default function OrderDetailPage() {
   const [proofError, setProofError] = useState("");
   const [deletingProofId, setDeletingProofId] = useState<number | null>(null);
 
+  // STEP 52 — customer info edit (name/phone/address/district/province/postalCode), approved
+  // 2026-09-02, Option A: edits the shared `customers` row via the existing
+  // PATCH /api/customers/[id] (STEP 36) — same form/state pattern as src/app/customers/page.tsx's
+  // edit form. No per-order snapshot: since orders.customer_id is a plain FK with no snapshot
+  // columns, this intentionally updates every order tied to the same customer, not just this one
+  // (see STEP 52 audit). The print view needs no changes — it already reads order.customer_* from
+  // the same `order` state this refetches into.
+  const customerEmptyForm = {
+    name: "",
+    phone: "",
+    address: "",
+    district: "",
+    province: "",
+    postalCode: "",
+  };
+  const [editingCustomer, setEditingCustomer] = useState(false);
+  const [customerForm, setCustomerForm] = useState(customerEmptyForm);
+  const [savingCustomer, setSavingCustomer] = useState(false);
+  const [customerFormError, setCustomerFormError] = useState("");
+
+  function updateCustomerForm<K extends keyof typeof customerEmptyForm>(
+    key: K,
+    value: (typeof customerEmptyForm)[K]
+  ) {
+    setCustomerForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function startEditCustomer() {
+    if (!order) return;
+
+    setCustomerFormError("");
+    setCustomerForm({
+      name: order.customer_name || "",
+      phone: order.customer_phone || "",
+      address: order.customer_address || "",
+      district: order.customer_district || "",
+      province: order.customer_province || "",
+      postalCode: order.customer_postal_code || "",
+    });
+    setEditingCustomer(true);
+  }
+
+  function cancelEditCustomer() {
+    setEditingCustomer(false);
+    setCustomerForm(customerEmptyForm);
+    setCustomerFormError("");
+  }
+
+  async function saveCustomer() {
+    if (savingCustomer || !order?.customer_id) return;
+
+    setCustomerFormError("");
+
+    if (!customerForm.name.trim()) {
+      setCustomerFormError("กรุณาระบุชื่อลูกค้า");
+      return;
+    }
+
+    setSavingCustomer(true);
+
+    try {
+      const response = await fetch(`/api/customers/${order.customer_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: customerForm.name.trim(),
+          phone: customerForm.phone.trim() || null,
+          address: customerForm.address.trim() || null,
+          district: customerForm.district.trim() || null,
+          province: customerForm.province.trim() || null,
+          postalCode: customerForm.postalCode.trim() || null,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกข้อมูลลูกค้าได้");
+      }
+
+      cancelEditCustomer();
+      await loadOrder();
+    } catch (err) {
+      setCustomerFormError(
+        err instanceof Error ? err.message : "ไม่สามารถบันทึกข้อมูลลูกค้าได้"
+      );
+    } finally {
+      setSavingCustomer(false);
+    }
+  }
+
   async function saveDelivery() {
     if (savingDelivery || !order) return;
 
@@ -300,58 +391,49 @@ export default function OrderDetailPage() {
     }
   }
 
-  useEffect(() => {
+  // STEP 52 — pulled out of the effect below (was an inline nested function) so saveCustomer()
+  // above can also call it to refetch after a customer edit, same as the effect's initial load.
+  const loadOrder = useCallback(async () => {
     if (!orderId) return;
 
-    let cancelled = false;
+    setLoading(true);
+    setError("");
+    setNotFound(false);
 
-    async function loadOrder() {
-      setLoading(true);
-      setError("");
-      setNotFound(false);
+    try {
+      const response = await fetch(`/api/orders/${orderId}`, {
+        cache: "no-store",
+      });
 
-      try {
-        const response = await fetch(`/api/orders/${orderId}`, {
-          cache: "no-store",
-        });
+      const data = await response.json();
 
-        const data = await response.json();
-
-        if (cancelled) return;
-
-        if (response.status === 404) {
-          setNotFound(true);
-          return;
-        }
-
-        if (!response.ok || !data?.success) {
-          throw new Error(data?.error || "ไม่สามารถโหลดข้อมูลออเดอร์ได้");
-        }
-
-        setOrder(data.data);
-        // STEP 49 — seed the edit form from the freshly-loaded order once, on initial load.
-        setCarrierInput(data.data.carrier ?? "");
-        setTrackingInput(data.data.tracking_number ?? "");
-        setDeliveryStatusInput(data.data.delivery_status ?? "pending");
-      } catch (err) {
-        if (cancelled) return;
-        console.error("Load order detail error:", err);
-        setError(
-          err instanceof Error ? err.message : "ไม่สามารถโหลดข้อมูลออเดอร์ได้"
-        );
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+      if (response.status === 404) {
+        setNotFound(true);
+        return;
       }
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถโหลดข้อมูลออเดอร์ได้");
+      }
+
+      setOrder(data.data);
+      // STEP 49 — seed the edit form from the freshly-loaded order once, on initial load.
+      setCarrierInput(data.data.carrier ?? "");
+      setTrackingInput(data.data.tracking_number ?? "");
+      setDeliveryStatusInput(data.data.delivery_status ?? "pending");
+    } catch (err) {
+      console.error("Load order detail error:", err);
+      setError(
+        err instanceof Error ? err.message : "ไม่สามารถโหลดข้อมูลออเดอร์ได้"
+      );
+    } finally {
+      setLoading(false);
     }
-
-    loadOrder();
-
-    return () => {
-      cancelled = true;
-    };
   }, [orderId]);
+
+  useEffect(() => {
+    loadOrder();
+  }, [loadOrder]);
 
   // STEP 38 — order-linked transactions + their attachment presence. Separate effect/loading state
   // from the order load above so a failure here never blocks the order itself from rendering.
@@ -601,9 +683,22 @@ export default function OrderDetailPage() {
 
               <div className="mt-6 grid gap-4 sm:grid-cols-2">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    ลูกค้า
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      ลูกค้า
+                    </p>
+                    {/* STEP 52 — only editable when the order actually has a linked customer_id
+                        to PATCH; orders with no customer have nothing to edit here. */}
+                    {order.customer_id && !editingCustomer && (
+                      <button
+                        type="button"
+                        onClick={startEditCustomer}
+                        className="text-xs font-medium text-amber-700 hover:underline"
+                      >
+                        ✏️ แก้ไขข้อมูลลูกค้า
+                      </button>
+                    )}
+                  </div>
                   <p className="mt-1 text-sm text-slate-700">
                     {order.customer_name || "ไม่มีข้อมูลลูกค้า"}
                   </p>
@@ -638,6 +733,115 @@ export default function OrderDetailPage() {
                   </p>
                 </div>
               </div>
+
+              {/* STEP 52 — customer edit form, same field set/pattern as src/app/customers/page.tsx.
+                  PATCHes the existing /api/customers/[id] directly; on success, refetches this order
+                  via loadOrder() so both the on-screen info above and the print view (which reads
+                  the same order.customer_* fields) pick up the change automatically. */}
+              {editingCustomer && (
+                <div className="mt-6 rounded-xl border bg-slate-50 p-4">
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    ✏️ แก้ไขข้อมูลลูกค้า
+                  </h3>
+
+                  <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        ชื่อลูกค้า *
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.name}
+                        onChange={(e) => updateCustomerForm("name", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        เบอร์โทร (ถ้ามี)
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.phone}
+                        onChange={(e) => updateCustomerForm("phone", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        รหัสไปรษณีย์ (ถ้ามี)
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.postalCode}
+                        onChange={(e) => updateCustomerForm("postalCode", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2 lg:col-span-3">
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        ที่อยู่ (ถ้ามี)
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.address}
+                        onChange={(e) => updateCustomerForm("address", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        ตำบล/แขวง (ถ้ามี)
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.district}
+                        onChange={(e) => updateCustomerForm("district", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                        จังหวัด (ถ้ามี)
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.province}
+                        onChange={(e) => updateCustomerForm("province", e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+                    </div>
+                  </div>
+
+                  {customerFormError && (
+                    <p className="mt-3 text-xs text-red-600">{customerFormError}</p>
+                  )}
+
+                  <div className="mt-4 flex gap-3">
+                    <button
+                      type="button"
+                      onClick={saveCustomer}
+                      disabled={savingCustomer}
+                      className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      {savingCustomer ? "กำลังบันทึก..." : "บันทึกข้อมูลลูกค้า"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelEditCustomer}
+                      disabled={savingCustomer}
+                      className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      ยกเลิก
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <section className="rounded-2xl border bg-white shadow-sm">
@@ -1071,6 +1275,12 @@ export default function OrderDetailPage() {
               <div className="mb-4 text-sm text-black">
                 <p>ช่องทางการขาย: {order.channel || "-"}</p>
                 <p>วิธีชำระเงิน: {order.payment_method || "-"}</p>
+                {/* STEP 51 — carrier/tracking/delivery status, print-only. Reuses order state and
+                    DELIVERY_STATUS_LABELS already loaded/imported for the STEP 49 section above;
+                    no new fetch, no new state. */}
+                <p>ขนส่ง: {order.carrier || "-"}</p>
+                <p>เลขพัสดุ: {order.tracking_number || "-"}</p>
+                <p>สถานะการจัดส่ง: {DELIVERY_STATUS_LABELS[order.delivery_status]}</p>
               </div>
 
               {order.payment_method === "cod" && (

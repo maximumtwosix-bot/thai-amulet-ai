@@ -714,3 +714,56 @@ export function updateOrderPaymentMethod(
 
   return run();
 }
+
+// STEP 57 — reassign an order to a different EXISTING customer. Approved scope (2026-09-02):
+// distinct from STEP 52 (which edits the currently-linked customer's own data) — this changes
+// which customer_id the order points to, and never writes to the customers table at all. Edits
+// ONLY orders.customer_id. Never touches order_items, quantity, unit price, subtotal,
+// shipping_fee, discount, total, channel, payment_method, carrier, tracking_number,
+// delivery_status, stock, or inventory_movements. No Finance sync — the transactions table has no
+// customer_id column at all, so a reassignment cannot desynchronize any Finance record. `null` is
+// never accepted — a valid target customer is required (approved decision 2).
+export interface UpdateOrderCustomerResult {
+  orderId: number;
+  customerId: number;
+}
+
+export function updateOrderCustomer(orderId: number, customerId: number): UpdateOrderCustomerResult {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    throw new Error("INVALID_ORDER_ID");
+  }
+
+  if (!Number.isInteger(customerId) || customerId <= 0) {
+    throw new Error("INVALID_CUSTOMER_ID");
+  }
+
+  const run = db.transaction(() => {
+    const order = db
+      .prepare("SELECT id, status FROM orders WHERE id = ?")
+      .get(orderId) as { id: number; status: string } | undefined;
+
+    if (!order) {
+      throw new Error("ORDER_NOT_FOUND");
+    }
+
+    // Same terminal-status guard as updateOrderItemPrices()/updateOrderShippingAndDiscount()/
+    // updateOrderChannel()/updateOrderPaymentMethod() (STEP 53-56) — completed/cancelled orders
+    // cannot be reassigned, enforced here regardless of what the client shows.
+    if (isValidOrderStatus(order.status) && getAllowedNextStatuses(order.status).length === 0) {
+      throw new Error("ORDER_TERMINAL_STATUS");
+    }
+
+    // Reuses the exact same existence check createOrder() already applies to customerId — no new
+    // validation logic invented, same CUSTOMER_NOT_FOUND error on a nonexistent target.
+    assertCustomerExists(customerId);
+
+    db.prepare("UPDATE orders SET customer_id = ? WHERE id = ?").run(customerId, orderId);
+
+    return {
+      orderId,
+      customerId,
+    };
+  });
+
+  return run();
+}

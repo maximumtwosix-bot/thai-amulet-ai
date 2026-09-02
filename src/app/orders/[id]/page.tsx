@@ -67,6 +67,18 @@ type AttachmentInfo = {
   fileUrl: string | null;
 };
 
+// STEP 57 — search-result shape for the "reassign customer" picker below, same shape/fields as
+// src/app/orders/new/page.tsx's existing CustomerOption (that page's own STEP 36 customer picker).
+type CustomerOption = {
+  id: number;
+  name: string;
+  phone: string | null;
+  address: string | null;
+  district: string | null;
+  province: string | null;
+  postalCode: string | null;
+};
+
 type OrderDetail = {
   id: number;
   order_number: string;
@@ -538,6 +550,112 @@ export default function OrderDetailPage() {
     }
   }
 
+  // STEP 57 — reassign this order to a different EXISTING customer, approved 2026-09-02.
+  // Deliberately a separate control from STEP 52's "✏️ แก้ไขข้อมูลลูกค้า" above: STEP 52 edits the
+  // currently-linked customer's own data (PATCH /api/customers/[id]); this reassigns *which*
+  // customer_id the order points to (PATCH /api/orders/[id]/customer) and never writes to the
+  // customers table. Reuses the exact search/select pattern already proven in
+  // src/app/orders/new/page.tsx's customer picker (debounced GET /api/customers?search=).
+  const [reassigningCustomer, setReassigningCustomer] = useState(false);
+  const [reassignSearch, setReassignSearch] = useState("");
+  const [reassignResults, setReassignResults] = useState<CustomerOption[]>([]);
+  const [reassignDropdownOpen, setReassignDropdownOpen] = useState(false);
+  const [reassignSearchLoading, setReassignSearchLoading] = useState(false);
+  const [reassignTarget, setReassignTarget] = useState<CustomerOption | null>(null);
+  const [savingReassign, setSavingReassign] = useState(false);
+  const [reassignError, setReassignError] = useState("");
+
+  useEffect(() => {
+    if (!reassignDropdownOpen) return;
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setReassignSearchLoading(true);
+
+      try {
+        const query = reassignSearch.trim()
+          ? `?search=${encodeURIComponent(reassignSearch.trim())}`
+          : "";
+        const response = await fetch(`/api/customers${query}`, { cache: "no-store" });
+        const data = await response.json();
+
+        if (!cancelled && response.ok && data?.success) {
+          setReassignResults(Array.isArray(data.data) ? data.data : []);
+        }
+      } catch {
+        // ค้นหาลูกค้าล้มเหลวไม่ block การเปลี่ยนลูกค้า — เงียบไว้ แค่ไม่แสดงผลลัพธ์
+      } finally {
+        if (!cancelled) setReassignSearchLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [reassignSearch, reassignDropdownOpen]);
+
+  function startReassignCustomer() {
+    setReassignTarget(null);
+    setReassignSearch("");
+    setReassignResults([]);
+    setReassignDropdownOpen(false);
+    setReassignError("");
+    setReassigningCustomer(true);
+  }
+
+  function cancelReassignCustomer() {
+    setReassigningCustomer(false);
+    setReassignTarget(null);
+    setReassignSearch("");
+    setReassignResults([]);
+    setReassignDropdownOpen(false);
+    setReassignError("");
+  }
+
+  function pickReassignTarget(c: CustomerOption) {
+    setReassignTarget(c);
+    setReassignDropdownOpen(false);
+    setReassignSearch("");
+  }
+
+  async function saveReassignCustomer() {
+    if (savingReassign || !order) return;
+
+    setReassignError("");
+
+    // Requirement: an existing customer must be explicitly selected before Save — never send a
+    // missing/null customerId (matches the approved "customer_id must always point to an existing
+    // customer" policy).
+    if (!reassignTarget) {
+      setReassignError("กรุณาเลือกลูกค้าที่ต้องการเปลี่ยนไป");
+      return;
+    }
+
+    setSavingReassign(true);
+
+    try {
+      const response = await fetch(`/api/orders/${order.id}/customer`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customerId: reassignTarget.id }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถเปลี่ยนลูกค้าได้");
+      }
+
+      cancelReassignCustomer();
+      await loadOrder();
+    } catch (err) {
+      setReassignError(err instanceof Error ? err.message : "ไม่สามารถเปลี่ยนลูกค้าได้");
+    } finally {
+      setSavingReassign(false);
+    }
+  }
+
   async function saveDelivery() {
     if (savingDelivery || !order) return;
 
@@ -972,17 +1090,38 @@ export default function OrderDetailPage() {
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                       ลูกค้า
                     </p>
-                    {/* STEP 52 — only editable when the order actually has a linked customer_id
-                        to PATCH; orders with no customer have nothing to edit here. */}
-                    {order.customer_id && !editingCustomer && (
-                      <button
-                        type="button"
-                        onClick={startEditCustomer}
-                        className="text-xs font-medium text-amber-700 hover:underline"
-                      >
-                        ✏️ แก้ไขข้อมูลลูกค้า
-                      </button>
-                    )}
+                    <div className="flex items-center gap-3">
+                      {/* STEP 52 — edits the currently-linked customer's own data. Only shown when
+                          the order actually has a linked customer_id to PATCH; orders with no
+                          customer have nothing to edit here. */}
+                      {order.customer_id && !editingCustomer && !reassigningCustomer && (
+                        <button
+                          type="button"
+                          onClick={startEditCustomer}
+                          className="text-xs font-medium text-amber-700 hover:underline"
+                        >
+                          ✏️ แก้ไขข้อมูลลูกค้า
+                        </button>
+                      )}
+                      {/* STEP 57 — reassigns which customer_id this order points to (never edits
+                          the customer's own data). Deliberately separate from STEP 52's button
+                          above. Available even when the order currently has no customer. Hidden
+                          once the order is terminal; the server enforces the same rule
+                          independently in updateOrderCustomer(). */}
+                      {!editingCustomer &&
+                        !reassigningCustomer &&
+                        (getAllowedNextStatuses(order.status).length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={startReassignCustomer}
+                            className="text-xs font-medium text-sky-700 hover:underline"
+                          >
+                            🔁 เปลี่ยนลูกค้า
+                          </button>
+                        ) : (
+                          <span className="text-xs text-slate-400">สิ้นสุดแล้ว</span>
+                        ))}
+                    </div>
                   </div>
                   <p className="mt-1 text-sm text-slate-700">
                     {order.customer_name || "ไม่มีข้อมูลลูกค้า"}
@@ -1235,6 +1374,119 @@ export default function OrderDetailPage() {
                       type="button"
                       onClick={cancelEditCustomer}
                       disabled={savingCustomer}
+                      className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      ยกเลิก
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 57 — reassign this order to a different EXISTING customer. Distinct from the
+                  STEP 52 form above: never writes to the customers table, only PATCHes
+                  /api/orders/[id]/customer with the newly-selected customer's id. Requires
+                  explicitly picking a customer before Save (never sends a null/missing id). */}
+              {reassigningCustomer && (
+                <div className="mt-6 rounded-xl border bg-slate-50 p-4">
+                  <h3 className="text-sm font-semibold text-slate-900">🔁 เปลี่ยนลูกค้า</h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    เลือกลูกค้าที่มีอยู่แล้วในระบบเพื่อเปลี่ยนให้ออเดอร์นี้ผูกกับลูกค้ารายนั้นแทน
+                    (ไม่แก้ไขข้อมูลลูกค้าเดิม)
+                  </p>
+
+                  {reassignTarget ? (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4">
+                      <div>
+                        <p className="text-sm font-semibold text-sky-800">
+                          {reassignTarget.name}
+                        </p>
+                        {reassignTarget.phone && (
+                          <p className="text-xs text-sky-700">{reassignTarget.phone}</p>
+                        )}
+                        {(reassignTarget.address ||
+                          reassignTarget.district ||
+                          reassignTarget.province) && (
+                          <p className="text-xs text-sky-700">
+                            {[
+                              reassignTarget.address,
+                              reassignTarget.district,
+                              reassignTarget.province,
+                              reassignTarget.postalCode,
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setReassignTarget(null)}
+                        className="rounded-xl border bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        เปลี่ยน
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="relative mt-3">
+                      <input
+                        type="text"
+                        value={reassignSearch}
+                        onChange={(e) => setReassignSearch(e.target.value)}
+                        onFocus={() => setReassignDropdownOpen(true)}
+                        placeholder="ค้นหาชื่อหรือเบอร์โทรลูกค้าที่มีอยู่แล้ว..."
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      />
+
+                      {reassignDropdownOpen && (
+                        <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border bg-white shadow-lg">
+                          {reassignSearchLoading ? (
+                            <p className="p-3 text-sm text-slate-500">กำลังค้นหา...</p>
+                          ) : reassignResults.length === 0 ? (
+                            <p className="p-3 text-sm text-slate-500">
+                              {reassignSearch.trim() ? "ไม่พบลูกค้าที่ค้นหา" : "ยังไม่มีลูกค้าในระบบ"}
+                            </p>
+                          ) : (
+                            reassignResults.map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => pickReassignTarget(c)}
+                                className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-slate-50"
+                              >
+                                <span className="font-medium text-slate-900">{c.name}</span>
+                                {c.phone && <span className="ml-2 text-slate-500">{c.phone}</span>}
+                              </button>
+                            ))
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setReassignDropdownOpen(false)}
+                            className="block w-full border-t px-3 py-2 text-left text-xs text-slate-400 hover:bg-slate-50"
+                          >
+                            ปิด
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {reassignError && (
+                    <p className="mt-3 text-xs text-red-600">{reassignError}</p>
+                  )}
+
+                  <div className="mt-4 flex gap-3">
+                    <button
+                      type="button"
+                      onClick={saveReassignCustomer}
+                      disabled={savingReassign || !reassignTarget}
+                      className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      {savingReassign ? "กำลังบันทึก..." : "บันทึกการเปลี่ยนลูกค้า"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelReassignCustomer}
+                      disabled={savingReassign}
                       className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                     >
                       ยกเลิก

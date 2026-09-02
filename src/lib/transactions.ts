@@ -85,6 +85,20 @@ export function isValidSalesChannel(value: string): value is SalesChannel {
   return (SALES_CHANNELS as string[]).includes(value);
 }
 
+// STEP 56 — payment method, same shape/rigor as SalesChannel above. Matches the 2 values
+// src/app/orders/new/page.tsx has offered since STEP 47 (a TypeScript-only `"transfer" | "cod"`
+// union with no runtime-checked, importable source of truth until now) — this is that source of
+// truth. Some historical/legacy orders' payment_method predates this constraint (e.g. seeded
+// values outside this set) and are left as-is; this enum governs what can be newly written going
+// forward (order creation, and STEP 56's order payment_method edit), not a retroactive migration.
+export type PaymentMethod = "transfer" | "cod";
+
+export const PAYMENT_METHODS: PaymentMethod[] = ["transfer", "cod"];
+
+export function isValidPaymentMethod(value: string): value is PaymentMethod {
+  return (PAYMENT_METHODS as string[]).includes(value);
+}
+
 // ===== STEP 20 — CRUD layer =====
 // Reuses the STEP 19 schema/constants above. Row mapping (snake_case DB → camelCase TS) follows
 // the same toRow() convention as src/lib/costLedger.ts. productId/orderId are validated against

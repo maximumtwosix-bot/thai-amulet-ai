@@ -1,6 +1,11 @@
 ﻿import db from "./db";
 import { decreaseStockForSale } from "./inventory";
-import { createTransaction, isValidSalesChannel, updateTransaction } from "./transactions";
+import {
+  createTransaction,
+  isValidPaymentMethod,
+  isValidSalesChannel,
+  updateTransaction,
+} from "./transactions";
 import {
   getAllowedNextStatuses,
   isValidOrderStatus,
@@ -636,6 +641,73 @@ export function updateOrderChannel(orderId: number, channel: string): UpdateOrde
     return {
       orderId,
       channel,
+      linkedIncomeTransactionId: linkedIncome?.id ?? null,
+    };
+  });
+
+  return run();
+}
+
+// STEP 56 — order payment method correction. Approved scope (2026-09-02): edits ONLY
+// orders.payment_method, restricted to the 2 valid PAYMENT_METHODS values (isValidPaymentMethod())
+// — no arbitrary free text. Never touches order_items, quantity, unit price, subtotal,
+// shipping_fee, discount, total, channel, carrier, tracking_number, delivery_status, stock, or
+// inventory_movements, and never modifies customer data. Reuses the exact terminal-status guard and
+// updateTransaction()-based Finance sync pattern STEP 53/54/55 already established. Per approval,
+// the linked income transaction's payment_method is always resynced to the new value whenever a
+// linked transaction exists.
+export interface UpdateOrderPaymentMethodResult {
+  orderId: number;
+  paymentMethod: string;
+  linkedIncomeTransactionId: number | null;
+}
+
+export function updateOrderPaymentMethod(
+  orderId: number,
+  paymentMethod: string
+): UpdateOrderPaymentMethodResult {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    throw new Error("INVALID_ORDER_ID");
+  }
+
+  if (typeof paymentMethod !== "string" || !isValidPaymentMethod(paymentMethod)) {
+    throw new Error("INVALID_PAYMENT_METHOD");
+  }
+
+  const run = db.transaction(() => {
+    const order = db
+      .prepare("SELECT id, status FROM orders WHERE id = ?")
+      .get(orderId) as { id: number; status: string } | undefined;
+
+    if (!order) {
+      throw new Error("ORDER_NOT_FOUND");
+    }
+
+    // Same terminal-status guard as updateOrderItemPrices()/updateOrderShippingAndDiscount()/
+    // updateOrderChannel() (STEP 53/54/55) — completed/cancelled orders cannot have their payment
+    // method edited, enforced here regardless of what the client shows.
+    if (isValidOrderStatus(order.status) && getAllowedNextStatuses(order.status).length === 0) {
+      throw new Error("ORDER_TERMINAL_STATUS");
+    }
+
+    db.prepare("UPDATE orders SET payment_method = ? WHERE id = ?").run(paymentMethod, orderId);
+
+    const linkedIncome = db
+      .prepare(
+        "SELECT id FROM transactions WHERE order_id = ? AND transaction_type = 'income' ORDER BY id ASC LIMIT 1"
+      )
+      .get(orderId) as { id: number } | undefined;
+
+    // Per approval — always resync the linked income transaction's payment_method when one exists,
+    // so Order and Finance never disagree on how this sale was paid. `paymentMethod` here is
+    // already guaranteed valid (checked above), so it is passed straight through.
+    if (linkedIncome) {
+      updateTransaction(linkedIncome.id, { paymentMethod });
+    }
+
+    return {
+      orderId,
+      paymentMethod,
       linkedIncomeTransactionId: linkedIncome?.id ?? null,
     };
   });

@@ -138,6 +138,14 @@ const CHANNEL_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "other", label: "อื่นๆ" },
 ];
 
+// STEP 56 — payment method options, values match src/lib/transactions.ts's PAYMENT_METHODS exactly
+// (isValidPaymentMethod()), same duplication-for-Client-Component reasoning as CHANNEL_OPTIONS
+// above, and the same 2 values/labels src/app/orders/new/page.tsx's create form already uses.
+const PAYMENT_METHOD_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "transfer", label: "โอนเงิน" },
+  { value: "cod", label: "COD / เก็บเงินปลายทาง" },
+];
+
 export default function OrderDetailPage() {
   const params = useParams();
   const orderId = params?.id;
@@ -470,6 +478,63 @@ export default function OrderDetailPage() {
       );
     } finally {
       setSavingChannel(false);
+    }
+  }
+
+  // STEP 56 — order payment method correction, approved 2026-09-02. Independent of the STEP 55
+  // channel-edit state above (kept intact): PATCHes the dedicated /api/orders/[id]/payment-method
+  // route (src/lib/orders.ts updateOrderPaymentMethod()). Restricted to PAYMENT_METHOD_OPTIONS
+  // (the 2 valid PAYMENT_METHODS) via a <select> — never a free-text input.
+  const [editingPaymentMethod, setEditingPaymentMethod] = useState(false);
+  const [paymentMethodInput, setPaymentMethodInput] = useState("");
+  const [savingPaymentMethod, setSavingPaymentMethod] = useState(false);
+  const [paymentMethodError, setPaymentMethodError] = useState("");
+
+  function startEditPaymentMethod() {
+    if (!order) return;
+
+    const seedPaymentMethod = PAYMENT_METHOD_OPTIONS.some((o) => o.value === order.payment_method)
+      ? (order.payment_method as string)
+      : PAYMENT_METHOD_OPTIONS[0].value;
+
+    setPaymentMethodInput(seedPaymentMethod);
+    setPaymentMethodError("");
+    setEditingPaymentMethod(true);
+  }
+
+  function cancelEditPaymentMethod() {
+    setEditingPaymentMethod(false);
+    setPaymentMethodInput("");
+    setPaymentMethodError("");
+  }
+
+  async function savePaymentMethod() {
+    if (savingPaymentMethod || !order) return;
+
+    setPaymentMethodError("");
+    setSavingPaymentMethod(true);
+
+    try {
+      const response = await fetch(`/api/orders/${order.id}/payment-method`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentMethod: paymentMethodInput }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกวิธีชำระเงินได้");
+      }
+
+      cancelEditPaymentMethod();
+      await loadOrder();
+    } catch (err) {
+      setPaymentMethodError(
+        err instanceof Error ? err.message : "ไม่สามารถบันทึกวิธีชำระเงินได้"
+      );
+    } finally {
+      setSavingPaymentMethod(false);
     }
   }
 
@@ -946,8 +1011,7 @@ export default function OrderDetailPage() {
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                       ช่องทาง / การชำระเงิน
                     </p>
-                    {/* STEP 55 — channel-only edit; payment_method has no edit control here
-                        (explicitly out of scope). Hidden once the order is terminal; the server
+                    {/* STEP 55 — channel edit. Hidden once the order is terminal; the server
                         enforces the same rule independently in updateOrderChannel(). */}
                     {!editingChannel &&
                       (getAllowedNextStatuses(order.status).length > 0 ? (
@@ -1006,9 +1070,67 @@ export default function OrderDetailPage() {
                     </p>
                   )}
 
-                  <p className="text-sm text-slate-500">
-                    {order.payment_method || "-"}
-                  </p>
+                  {/* STEP 56 — payment method edit, same pattern as the channel editor above.
+                      Hidden once the order is terminal; the server enforces the same rule
+                      independently in updateOrderPaymentMethod(). */}
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    {!editingPaymentMethod && (
+                      getAllowedNextStatuses(order.status).length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={startEditPaymentMethod}
+                          className="text-xs font-medium text-amber-700 hover:underline"
+                        >
+                          ✏️ แก้ไขวิธีชำระเงิน
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400">สิ้นสุดแล้ว</span>
+                      )
+                    )}
+                  </div>
+
+                  {editingPaymentMethod ? (
+                    <div className="mt-1">
+                      <select
+                        value={paymentMethodInput}
+                        onChange={(e) => setPaymentMethodInput(e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      >
+                        {PAYMENT_METHOD_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {paymentMethodError && (
+                        <p className="mt-2 text-xs text-red-600">{paymentMethodError}</p>
+                      )}
+
+                      <div className="mt-2 flex gap-3">
+                        <button
+                          type="button"
+                          onClick={savePaymentMethod}
+                          disabled={savingPaymentMethod}
+                          className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                        >
+                          {savingPaymentMethod ? "กำลังบันทึก..." : "บันทึก"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEditPaymentMethod}
+                          disabled={savingPaymentMethod}
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          ยกเลิก
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-500">
+                      {order.payment_method || "-"}
+                    </p>
+                  )}
                 </div>
               </div>
 

@@ -5294,6 +5294,102 @@ delivery tracking/proof functionality, or STEP 50's Orders list.
 
 ---
 
+## STEP 53 — PRICE-ONLY ORDER ITEM EDITING
+
+Date: 2026-09-02
+
+**Purpose**: allow correcting an existing order item's unit price from Order Detail (e.g. a typo at
+order-entry time), without touching quantity, product, or stock.
+
+**Audit result (before implementation)**: no capability to edit `order_items` existed anywhere —
+`createOrder()` writes them once at creation; the only other order-mutating function was
+`updateOrderStatus()` (status only). `orders.subtotal`/`total` are plain stored columns, not
+recomputed on read. The STEP 31 auto-created income transaction's `amount` is a frozen snapshot with
+no existing sync mechanism — but `updateTransaction()` (STEP 40) already existed as a general
+"manual correction" function capable of updating a transaction's `amount` in isolation, and
+`GET /api/orders/[id]` already returns `linkedIncomeTransactionId` (STEP 31), so no new lookup or
+Finance code was needed — reuse only. Scope was explicitly narrowed to **price-only** (no add/remove
+item, no quantity change) specifically to avoid the stock-reversal problem a quantity-change feature
+would require.
+
+**Approved implementation, isolated to 2 modified + 1 new file**:
+- `src/lib/orders.ts` — added `updateOrderItemPrices(orderId, items)`. Input type accepts only
+  `{ orderItemId, price }` — `quantity`/`productId` do not exist on the type and are never read or
+  written. Inside one `db.transaction()`: verifies the order exists and is not in a terminal status
+  (`getAllowedNextStatuses(order.status).length === 0` — completed/cancelled — blocked with
+  `ORDER_TERMINAL_STATUS`, same convention already used to hide the status-change buttons),
+  verifies every submitted `orderItemId` actually belongs to this order (`ORDER_ITEM_NOT_FOUND`
+  otherwise — prevents cross-order tampering), updates only `order_items.price`, recomputes
+  `subtotal`/`total` from the live `order_items` rows using the same formula as `createOrder()`,
+  updates `orders.subtotal`/`total`, then — if a linked STEP 31 income transaction exists — calls
+  the existing `updateTransaction()` (nested safely via better-sqlite3's SAVEPOINT support, same
+  nesting `createTransaction()` already relies on inside `createOrder()`) to sync its `amount` to
+  the new total. A price edit that would leave a linked income transaction at a total ≤ 0 is
+  rejected outright (`LINKED_INCOME_REQUIRES_POSITIVE_TOTAL`) rather than silently leaving Finance
+  stale. No `inventory_movements` row is ever created and `products.stock` is never touched — no
+  stock-mutating function is imported into or called by this function.
+- `src/app/api/orders/[id]/items/route.ts` (new) — `PATCH` handler, its own narrow sub-route
+  matching the existing `/status` and `/delivery` convention. Explicitly rejects (400) any request
+  item containing `quantity`, `productId`, or `product_id` before calling the lib function. Maps
+  `ORDER_NOT_FOUND`/`ORDER_ITEM_NOT_FOUND` → 404, `ORDER_ITEMS_REQUIRED`/`INVALID_ORDER_ITEM_ID`/
+  `INVALID_PRICE`/`INVALID_ORDER_TOTAL` → 400, `ORDER_TERMINAL_STATUS`/
+  `LINKED_INCOME_REQUIRES_POSITIVE_TOTAL` → 409. Protected automatically by the existing
+  `src/proxy.ts` gate (`/api/orders/*` already in `isProtectedApi()`) — no proxy change made.
+- `src/app/orders/[id]/page.tsx` — added a "✏️ แก้ไขราคา" button on the items-table card, hidden
+  once `getAllowedNextStatuses(order.status).length === 0` (server enforces the same rule
+  independently). In edit mode, price cells become number inputs; product name and quantity stay
+  plain read-only text (no input element for either). A live client-side subtotal/total preview,
+  clearly labeled "(ตัวอย่าง)", is shown while editing; the server's authoritative values replace it
+  after `loadOrder()` refetches on save. "ยกเลิก" only resets local state — no network call.
+
+**Files changed**: `src/lib/orders.ts` (+174/−38 within the diff, net new function),
+`src/app/orders/[id]/page.tsx` (+230/−38), `src/app/api/orders/[id]/items/route.ts` (new, 137
+lines).
+**No database/schema changes. No dependency changes.** No changes to `src/lib/transactions.ts` or
+`src/app/api/transactions/[id]/route.ts` (`updateTransaction()` reused as-is). No changes to
+customer edit (STEP 52), delivery tracking (STEP 49), print view (STEP 48/51), STEP 50's Orders
+list, order-status workflow logic itself, Finance/Tax/Inventory/Products pages, or Video
+Studio/Voice Studio/Content Studio/Social.
+
+**Tested**:
+1. `npm run build` → **PASS**, zero type errors; new route `ƒ /api/orders/[id]/items` appears
+   alongside all existing routes, unchanged.
+2. Data-layer test (no HTTP/auth needed, same approach as STEP 52) → **PASS**, 27 assertions,
+   using two TEST orders inserted directly via raw SQL (bypassing `createOrder()` so no stock
+   function is ever invoked by the test setup itself) referencing an existing real product (id 47)
+   purely as a read-only FK target:
+   - Happy path: price edited 100→150 (qty 2) → `order_items.price` updated, `quantity`/`product_id`
+     confirmed EXACTLY unchanged, `subtotal`/`total` recomputed correctly (300), a real linked
+     income transaction (created via the actual `createTransaction()`) synced to `amount = 300`.
+   - Stock safety: reference product's `stock` and `inventory_movements` row count confirmed
+     EXACTLY unchanged before vs. after the price edit and again at the very end of the run.
+   - Invalid inputs all rejected with the exact expected error: negative price, `NaN` price,
+     `Infinity` price, nonexistent `orderItemId`, and an item id belonging to a *different* TEST
+     order addressed via the wrong order id (cross-order ownership check) — all `ORDER_ITEM_NOT_FOUND`
+     or `INVALID_PRICE` as appropriate; the legitimately-edited item's price was re-verified
+     unaffected by these rejected attempts.
+   - Terminal-status: a second TEST order walked through the real `pending → paid → shipped →
+     completed` status workflow via `updateOrderStatus()`; a subsequent price-edit attempt threw
+     `ORDER_TERMINAL_STATUS`, and its `order_items`/`subtotal`/`total` were confirmed unchanged
+     after the rejected attempt.
+   - Total transaction row count before vs. after: exactly `+1` (only the one TEST transaction),
+     confirming no other transaction was touched.
+   - Cleanup by exact ids (transaction, both orders' `order_items`, both orders), independently
+     re-verified afterward: zero `TEST-STEP53-%` orders, zero `TEST STEP53` transactions remain.
+3. **Protected records verified untouched throughout**: Order ID 1, Order ID 38, and Customer ID 5
+   were each read before and after the full test run and compared via exact JSON equality — all
+   three byte-for-byte unchanged. (A broad sanity `LIKE 'TEST%'` query separately flagged Order ID 1
+   — a false positive: Order 1's own pre-existing `order_number`,
+   `TEST-36-12F-5B-1788074006313`, happens to start with "TEST" and predates this session entirely;
+   it was never referenced by this test's own order ids and its unchanged state was already
+   confirmed by the exact-equality check.)
+
+**Defects found**: none.
+
+**STEP 53 STATUS: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

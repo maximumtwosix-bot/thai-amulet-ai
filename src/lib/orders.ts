@@ -1,7 +1,12 @@
 ﻿import db from "./db";
 import { decreaseStockForSale } from "./inventory";
-import { createTransaction, isValidSalesChannel } from "./transactions";
-import { isValidOrderStatus, isValidOrderStatusTransition, type OrderStatus } from "./orderStatus";
+import { createTransaction, isValidSalesChannel, updateTransaction } from "./transactions";
+import {
+  getAllowedNextStatuses,
+  isValidOrderStatus,
+  isValidOrderStatusTransition,
+  type OrderStatus,
+} from "./orderStatus";
 import { assertCustomerExists } from "./customers";
 
 // STEP 31 — orders.channel (e.g. the "manual" default every order from src/app/orders/new/page.tsx
@@ -297,4 +302,169 @@ export function updateOrderStatus(orderId: number, nextStatus: string): OrderSta
   db.prepare("UPDATE orders SET status = ? WHERE id = ?").run(nextStatus, orderId);
 
   return { id: existing.id, orderNumber: existing.order_number, status: nextStatus };
+}
+
+// STEP 53 — price-only correction for existing order_items. Approved scope (2026-09-02): edits
+// ONLY order_items.price for line items that already exist on this order. quantity and product_id
+// are never read from the input type below and never written by this function — there is no code
+// path here capable of changing either. No inventory_movements row is created and products.stock is
+// never touched (only decreaseStockForSale(), called exclusively from createOrder() above, does
+// that). Reuses updateTransaction() (STEP 40, src/lib/transactions.ts) as-is to reconcile the STEP
+// 31 auto-created income transaction, rather than duplicating its validation/update logic.
+export interface UpdateOrderItemPriceInput {
+  orderItemId: number;
+  price: number;
+}
+
+export interface UpdateOrderItemPricesResult {
+  orderId: number;
+  subtotal: number;
+  total: number;
+  items: Array<{
+    id: number;
+    productId: number;
+    quantity: number;
+    price: number;
+    cost: number;
+  }>;
+  linkedIncomeTransactionId: number | null;
+}
+
+export function updateOrderItemPrices(
+  orderId: number,
+  items: UpdateOrderItemPriceInput[]
+): UpdateOrderItemPricesResult {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    throw new Error("INVALID_ORDER_ID");
+  }
+
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error("ORDER_ITEMS_REQUIRED");
+  }
+
+  // Fail fast on malformed input before touching the DB, same style as createOrder() above.
+  for (const item of items) {
+    if (!Number.isInteger(item.orderItemId) || item.orderItemId <= 0) {
+      throw new Error("INVALID_ORDER_ITEM_ID");
+    }
+
+    if (!Number.isFinite(item.price) || item.price < 0) {
+      throw new Error("INVALID_PRICE");
+    }
+  }
+
+  const run = db.transaction(() => {
+    const order = db
+      .prepare("SELECT id, status, shipping_fee, discount FROM orders WHERE id = ?")
+      .get(orderId) as
+      | { id: number; status: string; shipping_fee: number; discount: number }
+      | undefined;
+
+    if (!order) {
+      throw new Error("ORDER_NOT_FOUND");
+    }
+
+    // Terminal-status guard — same convention already used to hide the status-change buttons on
+    // Order Detail (getAllowedNextStatuses(order.status).length === 0 means completed/cancelled;
+    // pending/paid/shipped all still have at least one allowed next status and remain editable).
+    // Enforced here server-side regardless of what the client UI shows/hides.
+    if (isValidOrderStatus(order.status) && getAllowedNextStatuses(order.status).length === 0) {
+      throw new Error("ORDER_TERMINAL_STATUS");
+    }
+
+    type OrderItemRow = {
+      id: number;
+      product_id: number;
+      quantity: number;
+      price: number;
+      cost: number;
+    };
+
+    const existingItems = db
+      .prepare("SELECT id, product_id, quantity, price, cost FROM order_items WHERE order_id = ?")
+      .all(orderId) as OrderItemRow[];
+
+    const existingIds = new Set(existingItems.map((row) => row.id));
+
+    // Ownership check — every submitted orderItemId must belong to THIS order. Checked for the
+    // whole batch before any UPDATE runs, so a request that references even one foreign/nonexistent
+    // item fails atomically instead of partially applying.
+    for (const item of items) {
+      if (!existingIds.has(item.orderItemId)) {
+        throw new Error("ORDER_ITEM_NOT_FOUND");
+      }
+    }
+
+    for (const item of items) {
+      // `AND order_id = ?` is redundant given the ownership check above (both read the same table
+      // in the same transaction), but kept as defense-in-depth so this statement can never affect a
+      // row outside this order even if the check above were ever changed.
+      db.prepare("UPDATE order_items SET price = ? WHERE id = ? AND order_id = ?").run(
+        item.price,
+        item.orderItemId,
+        orderId
+      );
+    }
+
+    // Recompute from the live order_items rows (not from the submitted `items` array alone), so any
+    // item NOT included in this request still contributes its unchanged price/quantity correctly.
+    const refreshedItems = db
+      .prepare("SELECT id, product_id, quantity, price, cost FROM order_items WHERE order_id = ?")
+      .all(orderId) as OrderItemRow[];
+
+    // Same formula as createOrder() above: subtotal = Σ(price × quantity), total = subtotal +
+    // shipping_fee − discount. shipping_fee/discount are read from the existing order row, never
+    // from the request — this endpoint has no way to change either.
+    const subtotal = refreshedItems.reduce((sum, row) => sum + row.price * row.quantity, 0);
+    const total = subtotal + order.shipping_fee - order.discount;
+
+    if (total < 0) {
+      throw new Error("INVALID_ORDER_TOTAL");
+    }
+
+    const linkedIncome = db
+      .prepare(
+        "SELECT id FROM transactions WHERE order_id = ? AND transaction_type = 'income' ORDER BY id ASC LIMIT 1"
+      )
+      .get(orderId) as { id: number } | undefined;
+
+    // updateTransaction() requires amount > 0 (same rule createTransaction() already enforces) — a
+    // price edit that would drop an order with an existing linked income transaction to a total of
+    // 0 (or, already excluded above, negative) is rejected outright rather than silently leaving
+    // that transaction's amount stale/out of sync with the order.
+    if (linkedIncome && total <= 0) {
+      throw new Error("LINKED_INCOME_REQUIRES_POSITIVE_TOTAL");
+    }
+
+    db.prepare("UPDATE orders SET subtotal = ?, total = ? WHERE id = ?").run(
+      subtotal,
+      total,
+      orderId
+    );
+
+    // STEP 53 — reconcile the STEP 31 auto-created income transaction so Finance reflects the
+    // corrected total. Nests safely inside this db.transaction() via better-sqlite3's SAVEPOINT
+    // support, the same nesting createTransaction() already relies on when called from inside
+    // createOrder()'s transaction above. If this throws, everything above (order_items, orders)
+    // rolls back too, since it's all one outer transaction.
+    if (linkedIncome) {
+      updateTransaction(linkedIncome.id, { amount: total });
+    }
+
+    return {
+      orderId,
+      subtotal,
+      total,
+      items: refreshedItems.map((row) => ({
+        id: row.id,
+        productId: row.product_id,
+        quantity: row.quantity,
+        price: row.price,
+        cost: row.cost,
+      })),
+      linkedIncomeTransactionId: linkedIncome?.id ?? null,
+    };
+  });
+
+  return run();
 }

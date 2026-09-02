@@ -253,6 +253,82 @@ export default function OrderDetailPage() {
     }
   }
 
+  // STEP 53 — price-only correction for existing order_items, approved 2026-09-02. Deliberately
+  // separate from every other edit flow on this page: never touches quantity/productId (no state
+  // here even represents them as editable), and PATCHes the dedicated
+  // /api/orders/[id]/items route (src/lib/orders.ts updateOrderItemPrices()), not the customer/
+  // delivery/status endpoints. `priceInputs` is keyed by order_item id so multiple rows can be
+  // edited in the same save. Server recomputes subtotal/total/linked-income-transaction
+  // authoritatively — the local preview below is display-only.
+  const [editingPrices, setEditingPrices] = useState(false);
+  const [priceInputs, setPriceInputs] = useState<Record<number, string>>({});
+  const [savingPrices, setSavingPrices] = useState(false);
+  const [priceError, setPriceError] = useState("");
+
+  function startEditPrices() {
+    if (!order) return;
+
+    const seeded: Record<number, string> = {};
+    order.items.forEach((item) => {
+      seeded[item.id] = String(item.price);
+    });
+
+    setPriceInputs(seeded);
+    setPriceError("");
+    setEditingPrices(true);
+  }
+
+  function cancelEditPrices() {
+    setEditingPrices(false);
+    setPriceInputs({});
+    setPriceError("");
+  }
+
+  function updatePriceInput(itemId: number, value: string) {
+    setPriceInputs((current) => ({ ...current, [itemId]: value }));
+  }
+
+  async function savePrices() {
+    if (savingPrices || !order) return;
+
+    setPriceError("");
+
+    const items = order.items.map((item) => ({
+      orderItemId: item.id,
+      price: Number(priceInputs[item.id]),
+    }));
+
+    for (const item of items) {
+      if (!Number.isFinite(item.price) || item.price < 0) {
+        setPriceError("ราคาต้องเป็นตัวเลขที่ไม่ติดลบ");
+        return;
+      }
+    }
+
+    setSavingPrices(true);
+
+    try {
+      const response = await fetch(`/api/orders/${order.id}/items`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกราคาสินค้าได้");
+      }
+
+      cancelEditPrices();
+      await loadOrder();
+    } catch (err) {
+      setPriceError(err instanceof Error ? err.message : "ไม่สามารถบันทึกราคาสินค้าได้");
+    } finally {
+      setSavingPrices(false);
+    }
+  }
+
   async function saveDelivery() {
     if (savingDelivery || !order) return;
 
@@ -845,10 +921,29 @@ export default function OrderDetailPage() {
             </div>
 
             <section className="rounded-2xl border bg-white shadow-sm">
-              <div className="border-b p-5">
+              <div className="flex items-center justify-between gap-2 border-b p-5">
                 <h2 className="text-lg font-semibold text-slate-900">
                   รายการสินค้า
                 </h2>
+
+                {/* STEP 53 — price-only edit. Hidden entirely once the order has reached a
+                    terminal status (completed/cancelled); the server enforces this same rule
+                    independently in updateOrderItemPrices(), so this is a UX convenience, not the
+                    only guard. */}
+                {!editingPrices &&
+                  (getAllowedNextStatuses(order.status).length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={startEditPrices}
+                      className="text-xs font-medium text-amber-700 hover:underline"
+                    >
+                      ✏️ แก้ไขราคา
+                    </button>
+                  ) : (
+                    <span className="text-xs text-slate-400">
+                      ออเดอร์นี้อยู่ในสถานะสิ้นสุดแล้ว ไม่สามารถแก้ไขราคาได้
+                    </span>
+                  ))}
               </div>
 
               <div className="overflow-x-auto">
@@ -863,46 +958,109 @@ export default function OrderDetailPage() {
                   </thead>
 
                   <tbody>
-                    {order.items.map((item) => (
-                      <tr key={item.id} className="border-t hover:bg-slate-50">
-                        <td className="p-4">
-                          <div className="font-semibold text-slate-900">
-                            {item.product_name || `สินค้ารหัส ${item.product_id}`}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-400">
-                            Product ID: {item.product_id}
-                          </div>
-                        </td>
-                        <td className="p-4 text-slate-700">{item.quantity}</td>
-                        <td className="p-4 text-slate-700">
-                          {formatCurrency(item.price)}
-                        </td>
-                        <td className="p-4 font-semibold text-slate-900">
-                          {formatCurrency(item.price * item.quantity)}
-                        </td>
-                      </tr>
-                    ))}
+                    {order.items.map((item) => {
+                      const editedPrice = Number(priceInputs[item.id]);
+                      const rowPrice =
+                        editingPrices && Number.isFinite(editedPrice) ? editedPrice : item.price;
+
+                      return (
+                        <tr key={item.id} className="border-t hover:bg-slate-50">
+                          <td className="p-4">
+                            <div className="font-semibold text-slate-900">
+                              {item.product_name || `สินค้ารหัส ${item.product_id}`}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-400">
+                              Product ID: {item.product_id}
+                            </div>
+                          </td>
+                          <td className="p-4 text-slate-700">{item.quantity}</td>
+                          <td className="p-4 text-slate-700">
+                            {editingPrices ? (
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={priceInputs[item.id] ?? ""}
+                                onChange={(e) => updatePriceInput(item.id, e.target.value)}
+                                className="w-28 rounded-lg border px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                              />
+                            ) : (
+                              formatCurrency(item.price)
+                            )}
+                          </td>
+                          <td className="p-4 font-semibold text-slate-900">
+                            {formatCurrency(rowPrice * item.quantity)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
 
+              {editingPrices && (
+                <div className="border-t p-5">
+                  {priceError && (
+                    <p className="mb-3 text-xs text-red-600">{priceError}</p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={savePrices}
+                      disabled={savingPrices}
+                      className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      {savingPrices ? "กำลังบันทึก..." : "บันทึกราคา"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelEditPrices}
+                      disabled={savingPrices}
+                      className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      ยกเลิก
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-2 border-t p-5 text-sm">
-                <div className="flex justify-between text-slate-600">
-                  <span>ยอดรวมสินค้า</span>
-                  <span>{formatCurrency(order.subtotal)}</span>
-                </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>ค่าจัดส่ง</span>
-                  <span>{formatCurrency(order.shipping_fee)}</span>
-                </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>ส่วนลด</span>
-                  <span>-{formatCurrency(order.discount)}</span>
-                </div>
-                <div className="flex justify-between border-t pt-2 text-base font-bold text-slate-900">
-                  <span>ยอดรวมสุทธิ</span>
-                  <span>{formatCurrency(order.total)}</span>
-                </div>
+                {/* STEP 53 — preview only, computed from local (unsaved) priceInputs while editing;
+                    the server recomputes subtotal/total authoritatively on save and loadOrder()
+                    replaces these with the real values afterward. */}
+                {(() => {
+                  const previewSubtotal = editingPrices
+                    ? order.items.reduce((sum, item) => {
+                        const edited = Number(priceInputs[item.id]);
+                        const price = Number.isFinite(edited) ? edited : item.price;
+                        return sum + price * item.quantity;
+                      }, 0)
+                    : order.subtotal;
+                  const previewTotal = editingPrices
+                    ? previewSubtotal + order.shipping_fee - order.discount
+                    : order.total;
+
+                  return (
+                    <>
+                      <div className="flex justify-between text-slate-600">
+                        <span>ยอดรวมสินค้า{editingPrices ? " (ตัวอย่าง)" : ""}</span>
+                        <span>{formatCurrency(previewSubtotal)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>ค่าจัดส่ง</span>
+                        <span>{formatCurrency(order.shipping_fee)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>ส่วนลด</span>
+                        <span>-{formatCurrency(order.discount)}</span>
+                      </div>
+                      <div className="flex justify-between border-t pt-2 text-base font-bold text-slate-900">
+                        <span>ยอดรวมสุทธิ{editingPrices ? " (ตัวอย่าง)" : ""}</span>
+                        <span>{formatCurrency(previewTotal)}</span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </section>
 

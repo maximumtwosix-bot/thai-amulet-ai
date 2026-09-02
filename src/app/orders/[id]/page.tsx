@@ -158,6 +158,53 @@ const PAYMENT_METHOD_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "cod", label: "COD / เก็บเงินปลายทาง" },
 ];
 
+// STEP 58 — carrier options for the delivery section's dropdown. audited first: no existing
+// carrier constant/enum/helper exists anywhere in this codebase — src/lib/orderDelivery.ts's
+// carrier column is intentionally free TEXT with "no fixed carrier list requested" (its own STEP
+// 49 comment) and stays that way; this list is a pure UI convenience layered on top, not a new
+// validation rule. The stored value is the plain display string itself (e.g. "Flash Express"),
+// exactly matching how `order.carrier` is already read/displayed everywhere else on this page and
+// in the print view (STEP 48/51) — no encode/decode mapping needed, zero backend change.
+const CARRIER_OPTIONS: string[] = [
+  "Flash Express",
+  "J&T Express",
+  "KEX",
+  "ไปรษณีย์ไทย",
+  "SPX Express",
+  "Best Express",
+  "Ninja Van",
+  "DHL",
+];
+
+// Sentinel select value meaning "custom / not in the list" — never sent to the API as-is; the
+// actual free-text value the operator types (or an unrecognized legacy value already in the DB,
+// e.g. the real "FLAHS" typo found in this database during the STEP 58 audit) is what's stored.
+const CARRIER_OTHER_VALUE = "__OTHER__";
+
+// STEP 58 — best-effort public tracking-page URL builders, populated ONLY for carriers with a
+// verified, stable public tracking URL pattern. Deliberately not exhaustive — per approved scope,
+// a carrier missing from this map falls back to the honest "ยังไม่สามารถตรวจสอบสถานะอัตโนมัติได้..."
+// message rather than guessing an unverified URL. No API key, no server-side fetch, no dependency:
+// this only ever builds a URL for a plain <a target="_blank"> link the browser navigates to — this
+// app never fetches, parses, or displays any tracking status data itself.
+const CARRIER_TRACKING_URL_BUILDERS: Record<string, (trackingNumber: string) => string> = {
+  "Flash Express": (t) => `https://www.flashexpress.co.th/tracking/?se=${encodeURIComponent(t)}`,
+  "ไปรษณีย์ไทย": (t) => `https://track.thailandpost.co.th/?trackNumber=${encodeURIComponent(t)}`,
+  DHL: (t) =>
+    `https://www.dhl.com/th-en/home/tracking/tracking-parcel.html?submit=1&tracking-id=${encodeURIComponent(t)}`,
+};
+
+function buildCarrierTrackingUrl(
+  carrier: string | null,
+  trackingNumber: string | null
+): string | null {
+  if (!carrier || !trackingNumber) return null;
+
+  const builder = CARRIER_TRACKING_URL_BUILDERS[carrier];
+
+  return builder ? builder(trackingNumber) : null;
+}
+
 export default function OrderDetailPage() {
   const params = useParams();
   const orderId = params?.id;
@@ -191,6 +238,21 @@ export default function OrderDetailPage() {
   const [deliveryStatusInput, setDeliveryStatusInput] = useState<DeliveryStatus>("pending");
   const [savingDelivery, setSavingDelivery] = useState(false);
   const [deliveryError, setDeliveryError] = useState("");
+
+  // STEP 58 — tracking-status check panel. Purely local UI state, no network call: this codebase
+  // has no real carrier tracking API/provider (confirmed by audit), so "checking" only ever opens a
+  // read-only panel that either shows a trusted-carrier tracking-page link (built from the SAVED
+  // order.carrier/order.tracking_number, never the unsaved carrierInput/trackingInput form fields —
+  // per approved scope, this must stay read-only against saved data unless the user explicitly
+  // saves first) or an honest "not supported yet" message. Never fabricates a status.
+  const [trackingCheckOpen, setTrackingCheckOpen] = useState(false);
+
+  // STEP 58 — true only while the operator has explicitly chosen "อื่นๆ / ระบุเอง" in the carrier
+  // dropdown; needed so selecting it while carrierInput is still empty ("") doesn't immediately
+  // snap the <select> back to the empty placeholder option (an empty string alone can't
+  // distinguish "no carrier chosen yet" from "chose other, about to type one in"). Reset to false
+  // whenever fresh/saved carrier data is loaded, so it never outlives the value it described.
+  const [carrierOtherMode, setCarrierOtherMode] = useState(false);
   const [deliveryProofs, setDeliveryProofs] = useState<DeliveryProof[]>([]);
   const [proofsLoading, setProofsLoading] = useState(true);
   const [uploadingProof, setUploadingProof] = useState(false);
@@ -690,6 +752,7 @@ export default function OrderDetailPage() {
           : current
       );
       setCarrierInput(data.data.carrier ?? "");
+      setCarrierOtherMode(false);
       setTrackingInput(data.data.trackingNumber ?? "");
       setDeliveryStatusInput(data.data.deliveryStatus);
     } catch (err) {
@@ -822,6 +885,7 @@ export default function OrderDetailPage() {
       setOrder(data.data);
       // STEP 49 — seed the edit form from the freshly-loaded order once, on initial load.
       setCarrierInput(data.data.carrier ?? "");
+      setCarrierOtherMode(false);
       setTrackingInput(data.data.tracking_number ?? "");
       setDeliveryStatusInput(data.data.delivery_status ?? "pending");
     } catch (err) {
@@ -1791,13 +1855,58 @@ export default function OrderDetailPage() {
               <div className="grid gap-4 p-5 sm:grid-cols-2">
                 <label className="text-sm text-slate-700">
                   ขนส่ง (บริษัทขนส่ง)
-                  <input
-                    type="text"
-                    value={carrierInput}
-                    onChange={(e) => setCarrierInput(e.target.value)}
-                    placeholder="เช่น Kerry, Flash, ไปรษณีย์ไทย, J&T"
-                    className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                  />
+                  {/* STEP 58 — dropdown of common Thai carriers, backed by the same free-text
+                      carrierInput/API contract as before (zero backend change). Any value not in
+                      CARRIER_OPTIONS — including an already-saved legacy value like the real
+                      "FLAHS" typo found in this database — is treated as "อื่นๆ" and stays fully
+                      visible/editable in the fallback text input below, never silently lost. */}
+                  {(() => {
+                    const isKnownCarrier =
+                      carrierInput !== "" && CARRIER_OPTIONS.includes(carrierInput);
+                    const isCustomCarrier =
+                      !isKnownCarrier && (carrierOtherMode || carrierInput !== "");
+                    const selectValue = isKnownCarrier
+                      ? carrierInput
+                      : isCustomCarrier
+                        ? CARRIER_OTHER_VALUE
+                        : "";
+
+                    return (
+                      <>
+                        <select
+                          value={selectValue}
+                          onChange={(e) => {
+                            const next = e.target.value;
+                            if (next === CARRIER_OTHER_VALUE) {
+                              setCarrierOtherMode(true);
+                              return;
+                            }
+                            setCarrierOtherMode(false);
+                            setCarrierInput(next);
+                          }}
+                          className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                        >
+                          <option value="">-- เลือกบริษัทขนส่ง --</option>
+                          {CARRIER_OPTIONS.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                          <option value={CARRIER_OTHER_VALUE}>อื่นๆ / ระบุเอง</option>
+                        </select>
+
+                        {isCustomCarrier && (
+                          <input
+                            type="text"
+                            value={carrierInput}
+                            onChange={(e) => setCarrierInput(e.target.value)}
+                            placeholder="ระบุชื่อบริษัทขนส่ง"
+                            className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
+                          />
+                        )}
+                      </>
+                    );
+                  })()}
                 </label>
 
                 <label className="text-sm text-slate-700">
@@ -1839,6 +1948,19 @@ export default function OrderDetailPage() {
                   {savingDelivery ? "กำลังบันทึก..." : "บันทึกข้อมูลการจัดส่ง"}
                 </button>
 
+                {/* STEP 58 — read-only tracking check, no network call (no real carrier API
+                    exists — confirmed by audit). Always checks the SAVED order.tracking_number/
+                    order.carrier, never the unsaved carrierInput/trackingInput form fields — per
+                    approved scope this must stay read-only against saved data unless the operator
+                    explicitly saves first. */}
+                <button
+                  type="button"
+                  onClick={() => setTrackingCheckOpen((current) => !current)}
+                  className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  🔍 ตรวจสอบสถานะพัสดุ
+                </button>
+
                 <span className="w-fit rounded-full bg-amber-50 px-4 py-1.5 text-sm font-medium text-amber-700">
                   {DELIVERY_STATUS_LABELS[order.delivery_status] || order.delivery_status}
                 </span>
@@ -1847,6 +1969,55 @@ export default function OrderDetailPage() {
                   <p className="w-full text-xs text-red-600">{deliveryError}</p>
                 )}
               </div>
+
+              {trackingCheckOpen && (
+                <div className="border-t bg-slate-50 p-5">
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    ผลการตรวจสอบสถานะพัสดุ
+                  </h3>
+
+                  {!order.tracking_number ? (
+                    <p className="mt-2 text-sm text-slate-500">
+                      ยังไม่มีเลขพัสดุที่บันทึกไว้สำหรับออเดอร์นี้ กรุณากรอกและกด
+                      &quot;บันทึกข้อมูลการจัดส่ง&quot; ก่อน
+                    </p>
+                  ) : (
+                    (() => {
+                      const trackingUrl = buildCarrierTrackingUrl(
+                        order.carrier,
+                        order.tracking_number
+                      );
+
+                      return (
+                        <>
+                          <p className="mt-2 text-sm text-slate-500">
+                            ยังไม่สามารถตรวจสอบสถานะอัตโนมัติได้สำหรับบริษัทขนส่งนี้
+                          </p>
+                          <p className="mt-1 text-xs text-slate-400">
+                            เลขพัสดุที่บันทึกไว้: {order.tracking_number}
+                            {order.carrier ? ` (${order.carrier})` : ""}
+                          </p>
+
+                          {trackingUrl ? (
+                            <a
+                              href={trackingUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-3 inline-block rounded-xl border bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                            >
+                              🔗 เปิดหน้าติดตามพัสดุ
+                            </a>
+                          ) : (
+                            <p className="mt-3 text-xs text-slate-400">
+                              ยังไม่มีลิงก์ติดตามพัสดุที่เชื่อถือได้สำหรับบริษัทขนส่งนี้ในระบบ
+                            </p>
+                          )}
+                        </>
+                      );
+                    })()
+                  )}
+                </div>
+              )}
 
               <div className="border-t p-5">
                 <h3 className="text-sm font-semibold text-slate-900">รูปหลักฐานการจัดส่ง</h3>

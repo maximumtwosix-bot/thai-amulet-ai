@@ -577,3 +577,68 @@ export function updateOrderShippingAndDiscount(
 
   return run();
 }
+
+// STEP 55 — order channel (sales channel) correction. Approved scope (2026-09-02): edits ONLY
+// orders.channel, restricted to the 7 valid SALES_CHANNELS values (isValidSalesChannel()) — no
+// arbitrary free text, unlike orders.channel's original permissive TEXT column. Never touches
+// order_items, quantity, unit price, subtotal, shipping_fee, discount, total, stock, or
+// inventory_movements. Reuses the exact terminal-status guard and updateTransaction()-based Finance
+// sync STEP 53/54 already established. Per approval, the linked income transaction's sales_channel
+// is always resynced to the new channel whenever a linked transaction exists.
+export interface UpdateOrderChannelResult {
+  orderId: number;
+  channel: string;
+  linkedIncomeTransactionId: number | null;
+}
+
+export function updateOrderChannel(orderId: number, channel: string): UpdateOrderChannelResult {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    throw new Error("INVALID_ORDER_ID");
+  }
+
+  if (typeof channel !== "string" || !isValidSalesChannel(channel)) {
+    throw new Error("INVALID_CHANNEL");
+  }
+
+  const run = db.transaction(() => {
+    const order = db
+      .prepare("SELECT id, status FROM orders WHERE id = ?")
+      .get(orderId) as { id: number; status: string } | undefined;
+
+    if (!order) {
+      throw new Error("ORDER_NOT_FOUND");
+    }
+
+    // Same terminal-status guard as updateOrderItemPrices()/updateOrderShippingAndDiscount()
+    // (STEP 53/54) — completed/cancelled orders cannot have their channel edited, enforced here
+    // regardless of what the client shows.
+    if (isValidOrderStatus(order.status) && getAllowedNextStatuses(order.status).length === 0) {
+      throw new Error("ORDER_TERMINAL_STATUS");
+    }
+
+    db.prepare("UPDATE orders SET channel = ? WHERE id = ?").run(channel, orderId);
+
+    const linkedIncome = db
+      .prepare(
+        "SELECT id FROM transactions WHERE order_id = ? AND transaction_type = 'income' ORDER BY id ASC LIMIT 1"
+      )
+      .get(orderId) as { id: number } | undefined;
+
+    // Per approval — always resync the linked income transaction's sales_channel when one exists,
+    // so Order and Finance never disagree on which channel this sale came from. `channel` here is
+    // already guaranteed valid (checked above), so it is passed straight through — no need to
+    // re-derive via mapOrderChannelToSalesChannel(), which exists only to *tolerate* an invalid/
+    // legacy value at order-creation time; this function rejects those outright instead.
+    if (linkedIncome) {
+      updateTransaction(linkedIncome.id, { salesChannel: channel });
+    }
+
+    return {
+      orderId,
+      channel,
+      linkedIncomeTransactionId: linkedIncome?.id ?? null,
+    };
+  });
+
+  return run();
+}

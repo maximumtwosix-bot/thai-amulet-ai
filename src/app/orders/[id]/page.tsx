@@ -123,6 +123,21 @@ function formatCurrency(value: number) {
   return `฿${value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// STEP 55 — sales channel options, values match src/lib/transactions.ts's SALES_CHANNELS exactly
+// (isValidSalesChannel()), duplicated locally the same way src/app/orders/new/page.tsx's
+// CHANNEL_OPTIONS already is — importing transactions.ts here would pull in ./db (better-sqlite3)
+// via its STEP 20 CRUD layer, which fails in a Client Component (same constraint documented
+// elsewhere in this file for orderStatus.ts/deliveryStatus.ts).
+const CHANNEL_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "facebook", label: "Facebook" },
+  { value: "tiktok_shop", label: "TikTok Shop" },
+  { value: "shopee", label: "Shopee" },
+  { value: "lazada", label: "Lazada" },
+  { value: "line", label: "LINE" },
+  { value: "walk_in", label: "หน้าร้าน" },
+  { value: "other", label: "อื่นๆ" },
+];
+
 export default function OrderDetailPage() {
   const params = useParams();
   const orderId = params?.id;
@@ -397,6 +412,64 @@ export default function OrderDetailPage() {
       );
     } finally {
       setSavingSummary(false);
+    }
+  }
+
+  // STEP 55 — order channel (sales channel) correction, approved 2026-09-02. Independent of the
+  // STEP 53/54 state above: PATCHes the dedicated /api/orders/[id]/channel route
+  // (src/lib/orders.ts updateOrderChannel()). Restricted to CHANNEL_OPTIONS (the 7 valid
+  // SALES_CHANNELS) via a <select> — never a free-text input, matching the approved validation.
+  // payment_method is explicitly out of scope and has no edit control here.
+  const [editingChannel, setEditingChannel] = useState(false);
+  const [channelInput, setChannelInput] = useState("");
+  const [savingChannel, setSavingChannel] = useState(false);
+  const [channelError, setChannelError] = useState("");
+
+  function startEditChannel() {
+    if (!order) return;
+
+    const seedChannel = CHANNEL_OPTIONS.some((o) => o.value === order.channel)
+      ? (order.channel as string)
+      : CHANNEL_OPTIONS[0].value;
+
+    setChannelInput(seedChannel);
+    setChannelError("");
+    setEditingChannel(true);
+  }
+
+  function cancelEditChannel() {
+    setEditingChannel(false);
+    setChannelInput("");
+    setChannelError("");
+  }
+
+  async function saveChannel() {
+    if (savingChannel || !order) return;
+
+    setChannelError("");
+    setSavingChannel(true);
+
+    try {
+      const response = await fetch(`/api/orders/${order.id}/channel`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: channelInput }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกช่องทางการขายได้");
+      }
+
+      cancelEditChannel();
+      await loadOrder();
+    } catch (err) {
+      setChannelError(
+        err instanceof Error ? err.message : "ไม่สามารถบันทึกช่องทางการขายได้"
+      );
+    } finally {
+      setSavingChannel(false);
     }
   }
 
@@ -869,12 +942,70 @@ export default function OrderDetailPage() {
                 </div>
 
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    ช่องทาง / การชำระเงิน
-                  </p>
-                  <p className="mt-1 text-sm text-slate-700">
-                    {order.channel || "-"}
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      ช่องทาง / การชำระเงิน
+                    </p>
+                    {/* STEP 55 — channel-only edit; payment_method has no edit control here
+                        (explicitly out of scope). Hidden once the order is terminal; the server
+                        enforces the same rule independently in updateOrderChannel(). */}
+                    {!editingChannel &&
+                      (getAllowedNextStatuses(order.status).length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={startEditChannel}
+                          className="text-xs font-medium text-amber-700 hover:underline"
+                        >
+                          ✏️ แก้ไขช่องทางการขาย
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400">สิ้นสุดแล้ว</span>
+                      ))}
+                  </div>
+
+                  {editingChannel ? (
+                    <div className="mt-1">
+                      <select
+                        value={channelInput}
+                        onChange={(e) => setChannelInput(e.target.value)}
+                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                      >
+                        {CHANNEL_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {channelError && (
+                        <p className="mt-2 text-xs text-red-600">{channelError}</p>
+                      )}
+
+                      <div className="mt-2 flex gap-3">
+                        <button
+                          type="button"
+                          onClick={saveChannel}
+                          disabled={savingChannel}
+                          className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                        >
+                          {savingChannel ? "กำลังบันทึก..." : "บันทึก"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEditChannel}
+                          disabled={savingChannel}
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          ยกเลิก
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-sm text-slate-700">
+                      {order.channel || "-"}
+                    </p>
+                  )}
+
                   <p className="text-sm text-slate-500">
                     {order.payment_method || "-"}
                   </p>

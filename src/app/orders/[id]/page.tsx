@@ -1148,6 +1148,20 @@ export default function OrderDetailPage() {
                 </div>
               </div>
 
+              {/* STEP 61 — returned-but-not-cancelled warning. Pure UI notice, per the STEP 60 audit
+                  finding that delivery_status='returned' has zero automatic effect anywhere in this
+                  codebase (Finance, stock, order.status all untouched by delivery updates) — this
+                  never changes that; it only surfaces the situation so the operator can decide
+                  whether to cancel the order themselves via the existing status buttons above.
+                  Deliberately NO auto-cancel, no new mutation, no API call — "ตีกลับ" and "ยกเลิก"
+                  remain two separate business events, exactly as instructed. Hidden once the order
+                  is already cancelled, since there's nothing left to warn about at that point. */}
+              {order.delivery_status === "returned" && order.status !== "cancelled" && (
+                <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                  ⚠️ พัสดุตีกลับ — ออเดอร์ยังไม่ถูกยกเลิก กรุณาตรวจสอบ
+                </div>
+              )}
+
               <div className="mt-6 grid gap-4 sm:grid-cols-2">
                 <div>
                   <div className="flex items-center justify-between gap-2">

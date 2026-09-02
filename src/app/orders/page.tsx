@@ -184,10 +184,20 @@ export default function OrdersPage() {
   });
 
   // STEP 59 — summary always reflects the FULL selected-date set (all statuses), independent of
-  // the status tab currently shown below — "ยอดขายรวม" answers "how much did today sell in total,"
-  // not "how much did the currently-filtered tab sell."
+  // the status tab currently shown below. totalOrders/activeCount/completedCount/cancelledCount are
+  // all UNCHANGED from STEP 59 — every order in the date range is still counted in exactly one of
+  // those buckets, cancelled included.
   const totalOrders = orders.length;
-  const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0);
+
+  // STEP 61 — per the STEP 60 audit finding, "ยอดขายรวม" summing every order.total regardless of
+  // status silently counted cancelled orders as sales, unlike the Profit report (which already
+  // excludes cancelled-order income by the same convention) and unlike Finance/Tax (which include
+  // it but visibly flag it in red — this page had neither exclusion nor a flag). Fixed by excluding
+  // status='cancelled' from the sum, matching the Profit report's existing rule — reuses the same
+  // `orders` state already fetched, no new query, no new field.
+  const totalRevenue = orders
+    .filter((order) => order.status !== "cancelled")
+    .reduce((sum, order) => sum + order.total, 0);
 
   return (
     <main className="min-h-screen bg-slate-50 p-6">

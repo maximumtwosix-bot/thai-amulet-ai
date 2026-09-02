@@ -29,11 +29,22 @@ import { resolveTaxPeriod, type TaxPeriodType, type TaxSummaryParams } from "@/l
 // only ever excludes order-linked income for a specifically cancelled order, per the business rule's
 // own framing ("ออเดอร์ CANCELLED ... ห้ามนับเป็น Revenue").
 //
+// STEP 67 (approved 2026-09-02) — ALSO excludes an order whose delivery_status = 'returned' while
+// status is still not 'cancelled' (i.e. a parcel that bounced back but the operator hasn't yet
+// formally cancelled the order) — same underlying reasoning as the cancelled carve-out above: this
+// was never actually revenue the shop kept. An already-cancelled order is unaffected by this
+// addition (it's already excluded by the status check regardless of delivery_status). This rule is
+// scoped to the Profit report ONLY, per approval — Finance/Tax's totalIncome, /orders' totalRevenue,
+// and everything else deliberately still include it, exactly as before this STEP.
+//
 // ===== COGS =====
 // SUM(order_items.cost * order_items.quantity) for orders whose own linked income transaction falls
-// in the period AND whose status != 'cancelled'. Relies on STEP 34's duplicate-income guard (at most
-// one income transaction can ever exist per order) to avoid double-counting an order's items if it
-// somehow had two income rows — verified still enforced, not re-implemented here.
+// in the period AND whose status != 'cancelled' AND delivery_status != 'returned' (STEP 67, same
+// carve-out as Revenue above — an order excluded from Revenue must also not contribute its item
+// cost to COGS, or grossProfit would be distorted by counting cost without the matching revenue).
+// Relies on STEP 34's duplicate-income guard (at most one income transaction can ever exist per
+// order) to avoid double-counting an order's items if it somehow had two income rows — verified
+// still enforced, not re-implemented here.
 //
 // ===== SHIPPING EXPENSE / COD-RETURN LOSS =====
 // SUM of expense transactions by category in the period: `SHIPPING` → shippingExpense,
@@ -91,7 +102,7 @@ export function getProfitSummary(params: TaxSummaryParams): ProfitSummaryResult 
       LEFT JOIN orders o ON o.id = t.order_id
       WHERE t.transaction_type = 'income'
         AND t.transaction_date BETWEEN ? AND ?
-        AND (t.order_id IS NULL OR o.status != 'cancelled')
+        AND (t.order_id IS NULL OR (o.status != 'cancelled' AND o.delivery_status != 'returned'))
       `
     )
     .get(dateFrom, dateTo) as { total: number; count: number };
@@ -104,6 +115,7 @@ export function getProfitSummary(params: TaxSummaryParams): ProfitSummaryResult 
       JOIN orders o ON o.id = oi.order_id
       JOIN transactions t ON t.order_id = o.id AND t.transaction_type = 'income'
       WHERE o.status != 'cancelled'
+        AND o.delivery_status != 'returned'
         AND t.transaction_date BETWEEN ? AND ?
       `
     )

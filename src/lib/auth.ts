@@ -26,7 +26,11 @@ function getSessionSecret(): string {
   return secret;
 }
 
-function signPayload(payload: string): string {
+// Exported (STEP 78) so src/lib/assistantTools.ts can sign/verify the Local AI Assistant's
+// order-status confirmation token with the SAME secret and algorithm as the session cookie above,
+// rather than a second, independently-implemented HMAC — one signing primitive for the whole app.
+// Signature/behavior of this function is otherwise completely unchanged from STEP 28.
+export function signPayload(payload: string): string {
   return crypto.createHmac("sha256", getSessionSecret()).update(payload).digest("base64url");
 }
 
@@ -34,7 +38,10 @@ function signPayload(payload: string): string {
 // อาจใช้เดา credential ทีละตัวอักษรจากเวลาตอบสนองที่ต่างกัน ความยาวไม่เท่ากันถือว่าไม่ตรงทันที แต่ยังคง
 // รัน timingSafeEqual กับตัวมันเองก่อน เพื่อไม่ให้ทางลัด (early return) เผยให้เห็นความแตกต่างของเวลาที่
 // ชัดเจนเกินไประหว่างกรณี "ความยาวผิด" กับ "ความยาวถูกแต่ค่าไม่ตรง"
-function timingSafeStringEqual(a: string, b: string): boolean {
+//
+// Exported (STEP 78) for the same reason as signPayload above — reused as-is, unchanged, by the
+// Assistant confirmation token verifier.
+export function timingSafeStringEqual(a: string, b: string): boolean {
   const bufferA = Buffer.from(a);
   const bufferB = Buffer.from(b);
 

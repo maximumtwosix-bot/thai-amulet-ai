@@ -18,6 +18,16 @@ import { ASSISTANT_TOOLS, executeAssistantTool } from "@/lib/assistantTools";
 // existing, already-validated order-status state machine instead of running its own mutation (see
 // assistantTools.ts's own header for the full boundary this route relies on).
 //
+// STEP 78 — this route itself became part of the confirmation boundary, not just assistantTools.ts.
+// A preview from update_order_status (a `requiresConfirmation` tool result) now HARD-STOPS the tool
+// loop below and is returned to the client immediately, in code — see the `isPendingConfirmationResult`
+// check inside the loop. Before this, the loop would keep calling Ollama automatically after a
+// preview, and nothing stopped the model from generating both the preview call and a confirming call
+// within that same automatic loop, inside this one HTTP request, with no human ever involved. Actual
+// confirmation now only ever happens through a genuinely separate request to the dedicated
+// src/app/api/assistant/order-status-confirm/route.ts endpoint, which this route does not call and
+// has no code path to reach.
+//
 // STREAMING TRADE-OFF (read before changing): STEP 70 streamed its single Ollama call token-by-
 // token. Reliably combining tool-call *detection* with token-by-token streaming in one pass is a
 // materially harder, easy-to-get-subtly-wrong problem (Ollama's tool_calls can arrive split across
@@ -174,6 +184,63 @@ function singleChunkResponse(content: string): Response {
   });
 }
 
+// STEP 78 — the shape update_order_status's PREVIEW result takes (src/lib/assistantTools.ts). Typed
+// narrowly here, independent of that file's own type, since this route only needs to recognize the
+// shape at the JSON boundary, never construct or trust it beyond that.
+type PendingOrderStatusConfirmation = {
+  requiresConfirmation: true;
+  orderNumber: string;
+  currentStatus: string;
+  requestedStatus: string;
+  confirmToken: string;
+  message: string;
+};
+
+function isPendingConfirmationResult(value: unknown): value is PendingOrderStatusConfirmation {
+  if (!value || typeof value !== "object") return false;
+
+  const v = value as Record<string, unknown>;
+
+  return (
+    v.requiresConfirmation === true &&
+    typeof v.orderNumber === "string" &&
+    typeof v.currentStatus === "string" &&
+    typeof v.requestedStatus === "string" &&
+    typeof v.confirmToken === "string" &&
+    typeof v.message === "string"
+  );
+}
+
+// STEP 78 — terminal response for the tool-loop HARD STOP below. Carries the pending confirmation as
+// its own structured `pendingConfirmation` field (not just folded into `message.content` as free
+// text) so the client can render a distinct confirmation card without parsing prose. `message` is
+// still populated (with the tool's own human-readable summary, not anything model-generated) so the
+// NDJSON contract — read `message.content`, check `done` — stays valid for any caller that doesn't
+// yet know about `pendingConfirmation`.
+function pendingConfirmationResponse(pending: PendingOrderStatusConfirmation): Response {
+  const line =
+    JSON.stringify({
+      model: OLLAMA_MODEL,
+      message: { role: "assistant", content: pending.message },
+      done: true,
+      pendingConfirmation: {
+        orderNumber: pending.orderNumber,
+        currentStatus: pending.currentStatus,
+        requestedStatus: pending.requestedStatus,
+        confirmToken: pending.confirmToken,
+        message: pending.message,
+      },
+    }) + "\n";
+
+  return new Response(line, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 export async function POST(request: NextRequest) {
   let body: any;
 
@@ -260,6 +327,20 @@ export async function POST(request: NextRequest) {
               : "The tool failed to run.",
         };
         console.error("Assistant chat: tool execution error:", error);
+      }
+
+      // STEP 78 — HARD STOP, enforced here in code, not as a prompt convention. The instant any
+      // tool call in this round comes back requiring human confirmation, this function returns
+      // immediately: no further tool calls in this round are executed, nothing is pushed back into
+      // `conversation`, and — critically — callOllamaOnce() is never invoked again for this
+      // request. This is what makes same-request preview→confirm chaining structurally
+      // impossible: the model cannot generate a confirming tool call in a round that never
+      // happens. The pending confirmation reaches the client as this request's terminal response;
+      // any actual confirmation must come through a genuinely separate request (the dedicated
+      // src/app/api/assistant/order-status-confirm/route.ts endpoint, which this route never calls
+      // and has no path to reach).
+      if (isPendingConfirmationResult(toolResult)) {
+        return pendingConfirmationResponse(toolResult);
       }
 
       conversation.push({

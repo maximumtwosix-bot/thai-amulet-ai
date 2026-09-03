@@ -8,6 +8,7 @@ import {
 import { getTaxSummary } from "./taxSummary";
 import { getProfitSummary, type ProfitSummaryResult } from "./profitSummary";
 import { updateOrderStatus } from "./orders";
+import { signPayload, timingSafeStringEqual } from "./auth";
 
 // STEP 71 — first Local AI Assistant tool: read-only order lookups. This is the security boundary
 // the STEP 68 audit recommended: "the AI never receives a raw DB connection... it can only invoke
@@ -24,6 +25,27 @@ import { updateOrderStatus } from "./orders";
 // (pending→paid→shipped→completed, cancellation from pending/paid/shipped only, completed/cancelled
 // both terminal) lives ONLY in src/lib/orderStatus.ts and is neither re-implemented nor loosened
 // here. Every other tool in this file remains read-only.
+//
+// STEP 77 — update_order_status only mutates when the caller's `confirm` argument is the exact
+// boolean `true`; every other value (omitted, null, false, a string, a number, ...) returns a
+// preview instead, and the preview path never calls updateOrderStatus().
+//
+// STEP 78 — closes the gap STEP 77 alone did not: a `confirm: true` argument used to be enough on
+// its own, with nothing requiring an actual human to have seen and approved the specific change
+// first, and nothing stopping the model from generating both the preview call and a confirm:true
+// call inside the SAME assistant turn (the tool loop in src/app/api/assistant/chat/route.ts used to
+// keep going automatically after a preview). Two changes close this, both enforced here in code:
+// (1) the preview path now mints a short-lived HMAC-signed token binding
+// {orderNumber, currentStatus, requestedStatus, exp}, via signPayload()/timingSafeStringEqual()
+// (src/lib/auth.ts, STEP 28's session-cookie primitive, reused as-is) — see mintConfirmToken()/
+// verifyConfirmToken() below; (2) the chat route now hard-stops its tool loop the instant a preview
+// is produced and returns it to the client immediately, so a same-request confirm is no longer
+// reachable at all (see that file's STEP 78 comment). A `confirm: true` call is now honored ONLY
+// when paired with a `confirmToken` that verifies — signature intact, not expired, and bound to the
+// EXACT orderNumber/currentStatus/requestedStatus being requested. The mutation itself is still the
+// single, unchanged updateOrderStatus() call — see applyConfirmedOrderStatusChange() below, the one
+// function both the tool's confirm path AND the new dedicated
+// src/app/api/assistant/order-status-confirm/route.ts endpoint call.
 
 export interface AssistantToolDefinition {
   type: "function";
@@ -294,7 +316,7 @@ export const ASSISTANT_TOOLS: AssistantToolDefinition[] = [
     function: {
       name: "update_order_status",
       description:
-        "WRITE ACTION — can change an order's status in the database, unlike every other tool here, but ONLY after explicit confirmation. Call it WITHOUT confirm (or with confirm=false) first — this is a PREVIEW that returns the current status, the requested status, and a note that confirmation is required, and does NOT write anything. Describe that preview to the user and get their explicit go-ahead. Only call it again with confirm=true, after that go-ahead, to actually apply the change — any other value (omitted, false, null, a string, anything not exactly true) is treated as NOT confirmed and will only preview, never write. Allowed transitions: pending→paid, pending→cancelled, paid→shipped, paid→cancelled, shipped→completed, shipped→cancelled. 'completed' and 'cancelled' are final and cannot be changed again. Use get_orders first to confirm the order number and its current status before calling this.",
+        "WRITE ACTION — can change an order's status in the database, unlike every other tool here, but ONLY with a valid signed confirmToken proving a human already approved this exact change. Call it WITHOUT confirm (or confirm=false) first — this is a PREVIEW that returns the current status, requested status, and a confirmToken, and does NOT write anything; your turn ends there. The app itself then shows the human an Approve/Cancel choice OUTSIDE this chat — you will not be told the token and will not be asked to call this tool again. Do NOT call this tool a second time yourself, do NOT invent or guess a confirmToken, and do NOT treat the human typing 'yes'/'ตกลง'/'อนุมัติ' (or anything else in chat) as approval — none of that is a valid confirmToken and the call will simply be rejected. Allowed transitions: pending→paid, pending→cancelled, paid→shipped, paid→cancelled, shipped→completed, shipped→cancelled. 'completed' and 'cancelled' are final and cannot be changed again. Use get_orders first to confirm the order number and its current status before calling this.",
       parameters: {
         type: "object",
         properties: {
@@ -309,7 +331,11 @@ export const ASSISTANT_TOOLS: AssistantToolDefinition[] = [
           },
           confirm: {
             type: "boolean",
-            description: "Set to exactly true only after the user has explicitly confirmed the change shown in a prior preview call. Omit or set false to preview only — no database write occurs.",
+            description: "Leave unset/false to preview only. Do not set this to true yourself — you are never given the confirmToken needed to make a true value do anything.",
+          },
+          confirmToken: {
+            type: "string",
+            description: "Opaque signed token from a prior preview of this exact change. You will not normally have one — leave unset.",
           },
         },
         required: ["orderNumber", "status"],
@@ -822,19 +848,144 @@ export function getInventoryMovementsForAssistant(
   return rows;
 }
 
-// ===== STEP 76/77 — Order status write tool =====
+// ===== STEP 76/77/78 — Order status write tool =====
 //
 // STEP 77 — added an explicit confirm contract, enforced HERE at the tool layer, not through prompt
 // instructions a model could ignore or a client the model could talk past. A call is treated as
-// confirmed if and ONLY IF params.confirm is the exact boolean `true` (see the strict `=== true`
-// check below) — omitted, null, false, a string, a number, or anything else all fall through to the
-// SAME preview branch. That preview branch returns before ever calling updateOrderStatus(), so there
-// is exactly one place in this function capable of writing, and exactly one gate in front of it.
+// confirmed if and ONLY IF params.confirm is the exact boolean `true` — omitted, null, false, a
+// string, a number, or anything else all fall through to the preview branch, which never calls
+// updateOrderStatus().
+//
+// STEP 78 — a bare `confirm: true` is no longer sufficient by itself. The preview branch below now
+// mints a short-lived, HMAC-signed token (mintConfirmToken()) binding
+// {orderNumber, currentStatus, requestedStatus, exp}, and a confirming call must supply a
+// confirmToken that verifyConfirmToken() accepts as intact, unexpired, AND bound to the EXACT same
+// three fields being requested. The actual mutation now lives in ONE shared function,
+// applyConfirmedOrderStatusChange() (below), used by BOTH this tool's confirm path and the new
+// dedicated src/app/api/assistant/order-status-confirm/route.ts endpoint — there is still only one
+// call to updateOrderStatus() in this whole file.
+
+// TTL chosen as a balance: long enough for a human to actually read the chat reply and click
+// Approve (real measured Ollama round-trips run 30s-190s, and the human still has to read after
+// that), short enough to keep a stale/replayed token's window small. Not configurable — a fixed,
+// reviewed constant, same convention as OLLAMA_TIMEOUT_MS in the chat route.
+const CONFIRM_TOKEN_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+interface OrderStatusConfirmPayload {
+  orderNumber: string;
+  currentStatus: string;
+  requestedStatus: string;
+  exp: number;
+}
+
+// Mints an opaque `${base64url(JSON)}.${base64url(HMAC-SHA256)}` token — the exact same shape as
+// src/lib/auth.ts's own session token (STEP 28), reusing signPayload() so both are verified against
+// the one SESSION_SECRET with the one algorithm. Throws if SESSION_SECRET is unset (signPayload's
+// existing fail-closed behavior) — callers must catch, matching this app's "fail closed, not with a
+// guessable default" convention.
+function mintConfirmToken(orderNumber: string, currentStatus: string, requestedStatus: string): string {
+  const payload: OrderStatusConfirmPayload = {
+    orderNumber,
+    currentStatus,
+    requestedStatus,
+    exp: Date.now() + CONFIRM_TOKEN_TTL_MS,
+  };
+
+  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = signPayload(payloadB64);
+
+  return `${payloadB64}.${signature}`;
+}
+
+type ConfirmTokenFailureReason = "MALFORMED" | "TAMPERED" | "EXPIRED" | "MISMATCH";
+
+type ConfirmTokenVerification =
+  | { ok: true; payload: OrderStatusConfirmPayload }
+  | { ok: false; reason: ConfirmTokenFailureReason };
+
+// Verifies signature BEFORE ever parsing the payload as JSON — an attacker-controlled string is
+// never trusted enough to even JSON.parse until its signature (over the raw, unparsed payload
+// segment) has already been checked with a timing-safe comparison.
+function verifyConfirmToken(
+  token: unknown,
+  expected: { orderNumber: string; currentStatus: string; requestedStatus: string }
+): ConfirmTokenVerification {
+  if (typeof token !== "string" || token.length === 0) {
+    return { ok: false, reason: "MALFORMED" };
+  }
+
+  const parts = token.split(".");
+
+  if (parts.length !== 2) {
+    return { ok: false, reason: "MALFORMED" };
+  }
+
+  const [payloadB64, signature] = parts;
+
+  let expectedSignature: string;
+
+  try {
+    expectedSignature = signPayload(payloadB64);
+  } catch {
+    // SESSION_SECRET not configured — fail closed, same as signPayload's own behavior elsewhere.
+    return { ok: false, reason: "MALFORMED" };
+  }
+
+  if (!timingSafeStringEqual(signature, expectedSignature)) {
+    return { ok: false, reason: "TAMPERED" };
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+  } catch {
+    return { ok: false, reason: "MALFORMED" };
+  }
+
+  const p = parsed as Partial<OrderStatusConfirmPayload> | null;
+
+  if (
+    !p ||
+    typeof p.orderNumber !== "string" ||
+    typeof p.currentStatus !== "string" ||
+    typeof p.requestedStatus !== "string" ||
+    typeof p.exp !== "number"
+  ) {
+    return { ok: false, reason: "MALFORMED" };
+  }
+
+  if (Date.now() > p.exp) {
+    return { ok: false, reason: "EXPIRED" };
+  }
+
+  if (
+    p.orderNumber !== expected.orderNumber ||
+    p.currentStatus !== expected.currentStatus ||
+    p.requestedStatus !== expected.requestedStatus
+  ) {
+    return { ok: false, reason: "MISMATCH" };
+  }
+
+  return { ok: true, payload: p as OrderStatusConfirmPayload };
+}
+
+function describeTokenFailure(reason: ConfirmTokenFailureReason): string {
+  switch (reason) {
+    case "EXPIRED":
+      return "This confirmation has expired. Please ask again and approve the new preview.";
+    case "MISMATCH":
+      return "This confirmation token does not match the order or status being requested. Please ask again and approve the new preview.";
+    default:
+      return "This confirmation token is invalid. Please ask again and approve the new preview.";
+  }
+}
 
 export interface UpdateOrderStatusToolParams {
   orderNumber?: string;
   status?: string;
   confirm?: unknown;
+  confirmToken?: unknown;
 }
 
 export type UpdateOrderStatusToolResult =
@@ -844,6 +995,7 @@ export type UpdateOrderStatusToolResult =
       orderNumber: string;
       currentStatus: string;
       requestedStatus: string;
+      confirmToken: string;
       message: string;
     }
   | { error: string };
@@ -863,8 +1015,23 @@ export function updateOrderStatusForAssistant(
     return { error: `status must be one of: ${ORDER_STATUSES.join(", ")}.` };
   }
 
-  // Plain SELECT, same as every other tool's lookup — nothing below this point writes unless the
-  // confirm gate further down is passed.
+  // STEP 77 confirmation gate — unchanged. Strict identity check against the literal boolean
+  // `true`; every other value falls through to the preview branch below.
+  const confirmed = params.confirm === true;
+
+  if (confirmed) {
+    // STEP 78 — the confirm path no longer trusts `confirm: true` alone; it delegates entirely to
+    // applyConfirmedOrderStatusChange(), the ONE function (shared with the dedicated confirm
+    // endpoint) that verifies the token and performs the mutation. No mutation logic here.
+    return applyConfirmedOrderStatusChange({
+      orderNumber,
+      requestedStatus: status,
+      confirmToken: params.confirmToken,
+    });
+  }
+
+  // ===== Preview path — MUST NOT mutate. =====
+
   const existing = db
     .prepare("SELECT id, status FROM orders WHERE order_number = ?")
     .get(orderNumber) as { id: number; status: string } | undefined;
@@ -880,8 +1047,8 @@ export function updateOrderStatusForAssistant(
   }
 
   // Same transition rule updateOrderStatus() itself enforces (src/lib/orderStatus.ts, STEP 32),
-  // checked here too and BEFORE the confirm gate — an invalid or terminal-status request is rejected
-  // at preview time already, rather than being "confirmable" and only failing on a second call.
+  // checked here too — an invalid or terminal-status request is rejected at preview time already,
+  // never reaching a state where a token could even be minted for it.
   if (!isValidOrderStatusTransition(existing.status, status)) {
     const allowed = getAllowedNextStatuses(existing.status);
 
@@ -893,23 +1060,102 @@ export function updateOrderStatusForAssistant(
     };
   }
 
-  // STEP 77 confirmation gate. Strict identity check against the literal boolean `true` — every
-  // other value falls through to the preview branch, which performs no write, no matter how many
-  // times the model calls this tool for the same order.
-  const confirmed = params.confirm === true;
+  let confirmToken: string;
 
-  if (!confirmed) {
+  try {
+    confirmToken = mintConfirmToken(orderNumber, existing.status, status);
+  } catch (error) {
+    console.error("Assistant tool update_order_status: failed to mint confirm token:", error);
+    return { error: "Unable to prepare this change for confirmation right now." };
+  }
+
+  return {
+    requiresConfirmation: true,
+    orderNumber,
+    currentStatus: existing.status,
+    requestedStatus: status,
+    confirmToken,
+    message: `This will change order "${orderNumber}" from "${existing.status}" to "${status}". No change has been made yet — the app will ask the human to approve or cancel this outside the chat.`,
+  };
+}
+
+// STEP 78 — the ONE function capable of actually mutating an order's status through the Assistant
+// feature, called from exactly two places: this tool's confirm path above, and the dedicated
+// src/app/api/assistant/order-status-confirm/route.ts endpoint (the human's Approve-button leg).
+// Fully self-validating — does not trust that a caller already checked its inputs, since the
+// dedicated endpoint calls this directly with raw request-body values.
+export interface ApplyConfirmedOrderStatusChangeParams {
+  orderNumber?: string;
+  requestedStatus?: string;
+  confirmToken?: unknown;
+}
+
+export type ApplyConfirmedOrderStatusChangeResult =
+  | { success: true; orderNumber: string; previousStatus: string; newStatus: string }
+  | { error: string };
+
+export function applyConfirmedOrderStatusChange(
+  params: ApplyConfirmedOrderStatusChangeParams
+): ApplyConfirmedOrderStatusChangeResult {
+  const orderNumber = typeof params.orderNumber === "string" ? params.orderNumber.trim() : "";
+
+  if (!orderNumber) {
+    return { error: "orderNumber is required." };
+  }
+
+  const requestedStatus = typeof params.requestedStatus === "string" ? params.requestedStatus : "";
+
+  if (!requestedStatus || !isValidOrderStatus(requestedStatus)) {
+    return { error: `requestedStatus must be one of: ${ORDER_STATUSES.join(", ")}.` };
+  }
+
+  if (typeof params.confirmToken !== "string" || params.confirmToken.length === 0) {
+    return { error: "A valid confirmToken is required." };
+  }
+
+  const existing = db
+    .prepare("SELECT id, status FROM orders WHERE order_number = ?")
+    .get(orderNumber) as { id: number; status: string } | undefined;
+
+  if (!existing) {
+    return { error: `No order found with order number "${orderNumber}".` };
+  }
+
+  if (!isValidOrderStatus(existing.status)) {
     return {
-      requiresConfirmation: true,
-      orderNumber,
-      currentStatus: existing.status,
-      requestedStatus: status,
-      message: `This will change order "${orderNumber}" from "${existing.status}" to "${status}". No change has been made yet. Confirm with the user, then call update_order_status again with confirm=true to apply it.`,
+      error: `Order "${orderNumber}" has an unrecognized stored status and cannot be changed through this tool.`,
+    };
+  }
+
+  // Binds the token to the order's CURRENT (freshly re-read) status, not a value the caller merely
+  // claims — this is what rejects a stale/replayed token whose currentStatus no longer matches
+  // reality (e.g. the order already moved on), on top of rejecting a tampered/expired/mismatched one.
+  const verification = verifyConfirmToken(params.confirmToken, {
+    orderNumber,
+    currentStatus: existing.status,
+    requestedStatus,
+  });
+
+  if (!verification.ok) {
+    return { error: describeTokenFailure(verification.reason) };
+  }
+
+  // Defense-in-depth re-check — should already be guaranteed by a token that only ever gets minted
+  // for a legal transition and still matches the order's live current status, but re-checked
+  // explicitly rather than assumed, same convention as every other check in this file.
+  if (!isValidOrderStatusTransition(existing.status, requestedStatus)) {
+    const allowed = getAllowedNextStatuses(existing.status);
+
+    return {
+      error:
+        allowed.length > 0
+          ? `Cannot change order "${orderNumber}" from "${existing.status}" to "${requestedStatus}". Allowed next status(es): ${allowed.join(", ")}.`
+          : `Order "${orderNumber}" is already in a final status ("${existing.status}") and cannot be changed.`,
     };
   }
 
   try {
-    const result = updateOrderStatus(existing.id, status);
+    const result = updateOrderStatus(existing.id, requestedStatus);
     return {
       success: true,
       orderNumber: result.orderNumber,
@@ -917,9 +1163,7 @@ export function updateOrderStatusForAssistant(
       newStatus: result.status,
     };
   } catch (error) {
-    // Defensive only — order existence, status validity, and transition legality are all already
-    // validated above, so updateOrderStatus() should not throw here in normal operation.
-    console.error("Assistant tool update_order_status error:", error);
+    console.error("Assistant confirm: updateOrderStatus error:", error);
     return { error: "Failed to update the order status." };
   }
 }

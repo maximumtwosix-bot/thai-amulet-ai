@@ -1,5 +1,7 @@
 import db from "./db";
 import { isValidOrderStatus } from "./orderStatus";
+import { getTaxSummary } from "./taxSummary";
+import { getProfitSummary, type ProfitSummaryResult } from "./profitSummary";
 
 // STEP 71 — first Local AI Assistant tool: read-only order lookups. This is the security boundary
 // the STEP 68 audit recommended: "the AI never receives a raw DB connection... it can only invoke
@@ -112,6 +114,155 @@ export const ASSISTANT_TOOLS: AssistantToolDefinition[] = [
           limit: {
             type: "integer",
             description: "Maximum number of customers to return. Default 10, capped at 20.",
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  // STEP 73 — Sales tool. Deliberately a SEPARATE metric from get_finance_summary/get_profit_summary
+  // below — see this codebase's own STEP 60/61 finding that "ยอดขายรวม" (order revenue, sum of
+  // order.total excluding cancelled orders) is NOT the same number as Finance's totalIncome (includes
+  // cancelled income) or Profit's revenue (excludes cancelled AND returned-not-cancelled income). The
+  // description below and the `metricDefinition` field on every response exist specifically so the
+  // model has the disambiguating language available verbatim, rather than guessing which of three
+  // legitimately-different "sales" numbers a question like "ยอดขายวันนี้เท่าไร" wants.
+  {
+    type: "function",
+    function: {
+      name: "get_sales_summary",
+      description:
+        "Get order-based sales revenue summary (sum of order totals), matching the /orders page's 'ยอดขายรวม' figure. Excludes cancelled orders by default. This is a DIFFERENT number from Finance income (get_finance_summary) and Profit revenue (get_profit_summary) — those apply different rules for cancelled/returned orders. Read-only — never modifies anything.",
+      parameters: {
+        type: "object",
+        properties: {
+          date: {
+            type: "string",
+            description:
+              "Filter to orders created on this date (Bangkok time), format YYYY-MM-DD. Omit to include all dates.",
+          },
+          status: {
+            type: "string",
+            description:
+              "Filter to orders with exactly this status. When set, overrides the default cancelled-order exclusion.",
+            enum: ["pending", "paid", "shipped", "completed", "cancelled"],
+          },
+          includeCancelled: {
+            type: "boolean",
+            description: "Include cancelled orders in the total. Default false (cancelled orders excluded, matching the /orders page).",
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  // STEP 73 — Finance + Tax shared tool (approved: ONE tool, not two — the Finance and Tax pages
+  // already compute identical totals via the same getTaxSummary()). Summary/breakdown fields only —
+  // deliberately never returns the raw per-transaction list or its free-text description/notes
+  // fields, per approval ("Do NOT expose raw transaction rows" / "Do NOT expose free-text
+  // descriptions/notes"). Date-range validation (max 366 days inclusive) happens in
+  // getFinanceSummaryForAssistant() below, BEFORE getTaxSummary() is ever called — malformed or
+  // oversized ranges never reach the real calculation function.
+  {
+    type: "function",
+    function: {
+      name: "get_finance_summary",
+      description:
+        "Get income/expense totals for a period — the same figures shown on both the Finance and Tax pages (they are identical). Returns totalIncome, totalExpense, netIncome, income-by-channel, expense-by-category, and a monthly breakdown. totalIncome includes cancelled-order income (never reversed) — this differs from get_sales_summary and get_profit_summary. Does NOT calculate tax liability/VAT — only reports existing recorded income/expense. Read-only — never modifies anything.",
+      parameters: {
+        type: "object",
+        properties: {
+          year: {
+            type: "integer",
+            description: "Year to report on (e.g. 2026). Omit together with month/dateFrom/dateTo to default to the current year.",
+          },
+          month: {
+            type: "integer",
+            description: "Month (1-12) within `year` to narrow the report to. Omit to report the whole year.",
+          },
+          dateFrom: {
+            type: "string",
+            description: "Start date (YYYY-MM-DD) for a custom range. Must be provided together with dateTo. Maximum range is 366 days.",
+          },
+          dateTo: {
+            type: "string",
+            description: "End date (YYYY-MM-DD) for a custom range. Must be provided together with dateFrom. Maximum range is 366 days.",
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  // STEP 73 — Profit tool. Thin pass-through of the existing getProfitSummary() (src/lib/
+  // profitSummary.ts) — the STEP 67 business rule (excludes cancelled orders AND
+  // returned-but-not-cancelled orders from revenue/COGS) is NOT altered here, only reported. Same
+  // 366-day range validation as get_finance_summary, enforced before getProfitSummary() is called.
+  {
+    type: "function",
+    function: {
+      name: "get_profit_summary",
+      description:
+        "Get profit figures for a period: revenue, COGS, gross profit, gross margin %, operating expenses, shipping expense, COD-return loss, and net profit. This revenue figure EXCLUDES cancelled orders AND returned-but-not-cancelled orders — a stricter rule than get_sales_summary or get_finance_summary, so it is normal for this number to be smaller than those. Read-only — never modifies anything.",
+      parameters: {
+        type: "object",
+        properties: {
+          year: {
+            type: "integer",
+            description: "Year to report on (e.g. 2026). Omit together with month/dateFrom/dateTo to default to the current year.",
+          },
+          month: {
+            type: "integer",
+            description: "Month (1-12) within `year` to narrow the report to. Omit to report the whole year.",
+          },
+          dateFrom: {
+            type: "string",
+            description: "Start date (YYYY-MM-DD) for a custom range. Must be provided together with dateTo. Maximum range is 366 days.",
+          },
+          dateTo: {
+            type: "string",
+            description: "End date (YYYY-MM-DD) for a custom range. Must be provided together with dateFrom. Maximum range is 366 days.",
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  // STEP 73 — Inventory summary. Whole-catalog snapshot, no filters needed. Reuses the exact
+  // "out"/"low"/"ok" stock-level thresholds already established in src/app/inventory/page.tsx's
+  // getStockLevel() (stock<=0 → out; stock<=low_stock_threshold → low; else ok) — no new business
+  // rule invented.
+  {
+    type: "function",
+    function: {
+      name: "get_inventory_summary",
+      description:
+        "Get a whole-catalog stock snapshot: total product count, how many are active, how many are out of stock, how many are low stock (at or below their configured threshold), and total stock units across all products. Read-only — never modifies anything.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  // STEP 73 — Inventory movements. Same audit-trail data as GET /api/inventory/movements, but with a
+  // much smaller cap (default 10, hard max 20) than that route's own 500-row cap — deliberately NOT
+  // inherited, per approval, since a large movement dump would waste this CPU-bound model's context.
+  {
+    type: "function",
+    function: {
+      name: "get_inventory_movements",
+      description:
+        "Get recent inventory stock movements (stock in/out history), optionally filtered to one product. Returns product name, movement type, quantity change, stock before/after, and when it happened. Read-only — never modifies anything and never creates or restores stock.",
+      parameters: {
+        type: "object",
+        properties: {
+          productId: {
+            type: "integer",
+            description: "Restrict to movements for this product ID only. Omit to see movements across all products.",
+          },
+          limit: {
+            type: "integer",
+            description: "Maximum number of movements to return. Default 10, capped at 20.",
           },
         },
         required: [],
@@ -303,6 +454,327 @@ export function getCustomersForAssistant(params: GetCustomersToolParams): Assist
   return rows;
 }
 
+// ===== STEP 73 — Sales / Finance / Profit / Inventory tools =====
+
+// Shared by get_finance_summary and get_profit_summary — enforced HERE, in the wrapper, before
+// getTaxSummary()/getProfitSummary() (src/lib/taxSummary.ts, src/lib/profitSummary.ts) are ever
+// called, per approval ("Do not modify shared Finance/Tax/Profit calculation functions solely to add
+// this limit" / "Prefer enforcing the limit inside the assistant tool wrapper"). A malformed date or
+// an out-of-range dateFrom/dateTo never reaches those real calculation functions — this either
+// returns a validated params object or a clear { error } to report back to the model, never throws.
+const MAX_DATE_RANGE_DAYS = 366;
+
+type ValidatedPeriodParams =
+  | { ok: true; year?: number; month?: number; dateFrom?: string; dateTo?: string }
+  | { ok: false; error: string };
+
+function validateFinanceOrProfitPeriodParams(params: {
+  year?: number;
+  month?: number;
+  dateFrom?: string;
+  dateTo?: string;
+}): ValidatedPeriodParams {
+  const hasRange = params.dateFrom !== undefined || params.dateTo !== undefined;
+
+  if (hasRange) {
+    if (
+      typeof params.dateFrom !== "string" ||
+      typeof params.dateTo !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(params.dateFrom) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(params.dateTo)
+    ) {
+      return {
+        ok: false,
+        error: "dateFrom and dateTo must both be provided together, in YYYY-MM-DD format.",
+      };
+    }
+
+    const fromTime = Date.parse(params.dateFrom);
+    const toTime = Date.parse(params.dateTo);
+
+    if (Number.isNaN(fromTime) || Number.isNaN(toTime)) {
+      return { ok: false, error: "dateFrom or dateTo is not a valid calendar date." };
+    }
+
+    if (params.dateFrom > params.dateTo) {
+      return { ok: false, error: "dateFrom must not be after dateTo." };
+    }
+
+    const rangeDays = Math.round((toTime - fromTime) / 86_400_000) + 1;
+
+    if (rangeDays > MAX_DATE_RANGE_DAYS) {
+      return {
+        ok: false,
+        error: `Date range too large (${rangeDays} days). Maximum allowed range is ${MAX_DATE_RANGE_DAYS} days — please narrow the range.`,
+      };
+    }
+
+    return { ok: true, dateFrom: params.dateFrom, dateTo: params.dateTo };
+  }
+
+  // No explicit range — year(+month) path. A full year is at most 366 days and a month is at most
+  // 31, so neither needs the range check above. Defaults to the current year when the model supplies
+  // nothing at all, rather than letting getTaxSummary()/getProfitSummary() throw a raw YEAR_REQUIRED.
+  const year =
+    typeof params.year === "number" && Number.isInteger(params.year)
+      ? params.year
+      : new Date().getFullYear();
+
+  if (year < 2000 || year > 2100) {
+    return { ok: false, error: "year must be an integer between 2000 and 2100." };
+  }
+
+  if (params.month !== undefined) {
+    const month = Number(params.month);
+
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      return { ok: false, error: "month must be an integer between 1 and 12." };
+    }
+
+    return { ok: true, year, month };
+  }
+
+  return { ok: true, year };
+}
+
+export interface GetSalesSummaryToolParams {
+  date?: string;
+  status?: string;
+  includeCancelled?: boolean;
+}
+
+export interface AssistantSalesSummaryResult {
+  orderCount: number;
+  totalRevenue: number;
+  averageOrderValue: number | null;
+  filters: { date: string | null; status: string | null; includeCancelled: boolean };
+  metricDefinition: string;
+}
+
+// Mirrors src/app/orders/page.tsx's "ยอดขายรวม" calculation exactly (STEP 61: SUM(order.total)
+// excluding status='cancelled' by default) — no new business rule invented, just the same rule
+// computed server-side via SQL instead of client-side over an already-fetched order list.
+export function getSalesSummaryForAssistant(
+  params: GetSalesSummaryToolParams
+): AssistantSalesSummaryResult {
+  const conditions: string[] = [];
+  const args: Array<string> = [];
+
+  let dateFilter: string | null = null;
+
+  if (params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date)) {
+    dateFilter = params.date;
+    conditions.push("date(o.created_at, '+7 hours') = ?");
+    args.push(dateFilter);
+  }
+
+  let statusFilter: string | null = null;
+  const includeCancelled = params.includeCancelled === true;
+
+  if (params.status && isValidOrderStatus(params.status)) {
+    // An explicit status filter always takes precedence over the default cancelled-order exclusion
+    // below — if the caller specifically asks for cancelled orders, they get exactly that.
+    statusFilter = params.status;
+    conditions.push("o.status = ?");
+    args.push(statusFilter);
+  } else if (!includeCancelled) {
+    conditions.push("o.status != 'cancelled'");
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const row = db
+    .prepare(
+      `
+      SELECT COUNT(*) AS orderCount, COALESCE(SUM(o.total), 0) AS totalRevenue
+      FROM orders o
+      ${whereClause}
+      `
+    )
+    .get(...args) as { orderCount: number; totalRevenue: number };
+
+  return {
+    orderCount: row.orderCount,
+    totalRevenue: row.totalRevenue,
+    averageOrderValue: row.orderCount > 0 ? row.totalRevenue / row.orderCount : null,
+    filters: { date: dateFilter, status: statusFilter, includeCancelled },
+    metricDefinition:
+      "Order revenue (sum of order.total), matching the /orders page's 'ยอดขายรวม' figure. Excludes cancelled orders by default. This is NOT Finance income, NOT Tax income, and NOT the Profit report's revenue — those are separate figures with different cancelled/returned-order rules.",
+  };
+}
+
+export interface GetFinanceSummaryToolParams {
+  year?: number;
+  month?: number;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+export interface AssistantFinanceSummaryResult {
+  period: { type: string; year: number | null; month: number | null; dateFrom: string; dateTo: string };
+  totalIncome: number;
+  totalExpense: number;
+  netIncome: number;
+  transactionCount: number;
+  incomeBySalesChannel: Array<{ salesChannel: string; total: number; count: number }>;
+  expenseByCategory: Array<{ category: string; total: number; count: number }>;
+  monthlyBreakdown: Array<{ month: string; income: number; expense: number; net: number }>;
+  metricDefinition: string;
+}
+
+// Finance + Tax shared tool (approved: ONE tool, not two — both pages already read identical numbers
+// from getTaxSummary()). Deliberately builds a NEW result object rather than returning
+// getTaxSummary()'s result as-is, so the raw `transactions` array (with free-text description/notes)
+// can never leak through this tool, per approval.
+export function getFinanceSummaryForAssistant(
+  params: GetFinanceSummaryToolParams
+): AssistantFinanceSummaryResult | { error: string } {
+  const validated = validateFinanceOrProfitPeriodParams(params);
+
+  if (!validated.ok) {
+    return { error: validated.error };
+  }
+
+  const summary = getTaxSummary(validated);
+
+  return {
+    period: summary.period,
+    totalIncome: summary.totalIncome,
+    totalExpense: summary.totalExpense,
+    netIncome: summary.netIncome,
+    transactionCount: summary.transactionCount,
+    incomeBySalesChannel: summary.incomeBySalesChannel,
+    expenseByCategory: summary.expenseByCategory,
+    monthlyBreakdown: summary.monthlyBreakdown,
+    metricDefinition:
+      "Finance/Tax income and expense totals (identical figures shown on both the Finance and Tax pages). totalIncome includes cancelled-order income (never reversed) — this differs from get_sales_summary (excludes cancelled) and get_profit_summary (excludes cancelled and returned-not-cancelled). Does not calculate tax liability, VAT, or any legal figure — only reports recorded income/expense.",
+  };
+}
+
+// Profit tool — thin pass-through of the existing getProfitSummary() (src/lib/profitSummary.ts). The
+// STEP 67 business rule (excludes cancelled orders AND returned-but-not-cancelled orders from
+// revenue/COGS) lives entirely in that function and is not altered here, only reported.
+export function getProfitSummaryForAssistant(
+  params: GetFinanceSummaryToolParams
+): (ProfitSummaryResult & { metricDefinition: string }) | { error: string } {
+  const validated = validateFinanceOrProfitPeriodParams(params);
+
+  if (!validated.ok) {
+    return { error: validated.error };
+  }
+
+  const summary = getProfitSummary(validated);
+
+  return {
+    ...summary,
+    metricDefinition:
+      "Profit report figures — revenue here EXCLUDES cancelled orders AND returned-but-not-cancelled orders, a stricter rule than get_sales_summary or get_finance_summary. It is normal and expected for this revenue to be smaller than those two.",
+  };
+}
+
+export interface AssistantInventorySummaryResult {
+  totalProducts: number;
+  activeCount: number;
+  outOfStockCount: number;
+  lowStockCount: number;
+  totalStockUnits: number;
+}
+
+// Reuses the exact "out"/"low"/"ok" stock-level thresholds already established in
+// src/app/inventory/page.tsx's getStockLevel() (stock<=0 -> out; stock<=low_stock_threshold -> low;
+// else ok) — no new business rule invented.
+export function getInventorySummaryForAssistant(): AssistantInventorySummaryResult {
+  const row = db
+    .prepare(
+      `
+      SELECT
+        COUNT(*) AS totalProducts,
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS activeCount,
+        SUM(CASE WHEN stock <= 0 THEN 1 ELSE 0 END) AS outOfStockCount,
+        SUM(CASE WHEN stock > 0 AND stock <= low_stock_threshold THEN 1 ELSE 0 END) AS lowStockCount,
+        COALESCE(SUM(stock), 0) AS totalStockUnits
+      FROM products
+      `
+    )
+    .get() as AssistantInventorySummaryResult;
+
+  return {
+    totalProducts: row.totalProducts,
+    activeCount: row.activeCount ?? 0,
+    outOfStockCount: row.outOfStockCount ?? 0,
+    lowStockCount: row.lowStockCount ?? 0,
+    totalStockUnits: row.totalStockUnits,
+  };
+}
+
+export interface GetInventoryMovementsToolParams {
+  productId?: number;
+  limit?: number;
+}
+
+export interface AssistantInventoryMovementRow {
+  productId: number;
+  productName: string;
+  movementType: string;
+  quantityChange: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  referenceType: string | null;
+  createdAt: string;
+}
+
+// Same audit-trail query as GET /api/inventory/movements, but with a much smaller cap (default 10,
+// hard max 20 via the existing DEFAULT_LIMIT/MAX_LIMIT constants) than that route's own 500-row cap —
+// deliberately NOT inherited, per approval. `note` (free text) is deliberately excluded from the
+// output, same conservative privacy stance as get_finance_summary's exclusion of transaction notes.
+export function getInventoryMovementsForAssistant(
+  params: GetInventoryMovementsToolParams
+): AssistantInventoryMovementRow[] {
+  let limit = DEFAULT_LIMIT;
+
+  if (params.limit !== undefined) {
+    const parsed = Number(params.limit);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      limit = Math.min(parsed, MAX_LIMIT);
+    }
+  }
+
+  let productId: number | null = null;
+
+  if (params.productId !== undefined) {
+    const parsed = Number(params.productId);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      productId = parsed;
+    }
+  }
+
+  const whereClause = productId !== null ? "WHERE im.product_id = ?" : "";
+  const args: Array<number> = productId !== null ? [productId, limit] : [limit];
+
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        im.product_id AS productId,
+        p.name AS productName,
+        im.movement_type AS movementType,
+        im.quantity_change AS quantityChange,
+        im.quantity_before AS quantityBefore,
+        im.quantity_after AS quantityAfter,
+        im.reference_type AS referenceType,
+        im.created_at AS createdAt
+      FROM inventory_movements im
+      INNER JOIN products p ON p.id = im.product_id
+      ${whereClause}
+      ORDER BY im.id DESC
+      LIMIT ?
+      `
+    )
+    .all(...args) as AssistantInventoryMovementRow[];
+
+  return rows;
+}
+
 // STEP 71/72 — the ONLY entry point the chat route may use to run a tool. An unrecognized tool
 // name is rejected here, not silently ignored or passed through — this is the whitelist
 // enforcement point itself, not just documentation of intent. Adding a new tool means adding a new
@@ -322,6 +794,31 @@ export function executeAssistantTool(name: string, args: unknown): unknown {
   if (name === "get_customers") {
     const params = (args && typeof args === "object" ? args : {}) as GetCustomersToolParams;
     return getCustomersForAssistant(params);
+  }
+
+  // STEP 73
+  if (name === "get_sales_summary") {
+    const params = (args && typeof args === "object" ? args : {}) as GetSalesSummaryToolParams;
+    return getSalesSummaryForAssistant(params);
+  }
+
+  if (name === "get_finance_summary") {
+    const params = (args && typeof args === "object" ? args : {}) as GetFinanceSummaryToolParams;
+    return getFinanceSummaryForAssistant(params);
+  }
+
+  if (name === "get_profit_summary") {
+    const params = (args && typeof args === "object" ? args : {}) as GetFinanceSummaryToolParams;
+    return getProfitSummaryForAssistant(params);
+  }
+
+  if (name === "get_inventory_summary") {
+    return getInventorySummaryForAssistant();
+  }
+
+  if (name === "get_inventory_movements") {
+    const params = (args && typeof args === "object" ? args : {}) as GetInventoryMovementsToolParams;
+    return getInventoryMovementsForAssistant(params);
   }
 
   throw new Error(`UNKNOWN_TOOL: ${name}`);

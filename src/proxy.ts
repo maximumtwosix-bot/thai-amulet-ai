@@ -34,6 +34,9 @@ function isProtectedPage(pathname: string): boolean {
   // already-protected prefix like /orders/* or /api/transactions/*, this one needs its own rule)
   if (pathname === "/customers") return true;
 
+  // STEP 74 — Local AI Assistant chat UI. New page, new prefix, same reasoning as /customers above.
+  if (pathname === "/assistant") return true;
+
   return false;
 }
 
@@ -104,6 +107,7 @@ export const config = {
     "/finance",
     "/tax",
     "/customers",
+    "/assistant",
     "/api/products",
     "/api/products/:path*",
     "/api/orders",

@@ -80,6 +80,10 @@ type TransactionRow = {
   // (GET /api/transactions). Drives only the warning badge below — never read anywhere else on
   // this page, never affects any total.
   linkedDeliveryStatus: string | null;
+  // STEP 85 — evidence attachment count, from GET /api/transactions' server-side correlated
+  // subquery (src/lib/transactions.ts listTransactions()). Drives only the collapsed-row 📎 badge
+  // below — never affects any total.
+  attachmentCount: number;
 };
 
 type ProductOption = { id: number; name: string };
@@ -313,7 +317,14 @@ export default function FinancePage() {
     }
   }
 
+  // STEP 85 — confirm before deleting, same window.confirm() style as removeTransaction() below
+  // (the real authorization/deletion gate remains 100% server-side, unchanged — this is UX
+  // protection only, exactly like removeTransaction()'s existing confirm).
   async function deleteAttachment(transactionId: number, attachmentId: number) {
+    const confirmed = window.confirm("ยืนยันการลบไฟล์แนบนี้หรือไม่?");
+
+    if (!confirmed) return;
+
     setAttachmentDeletingId(attachmentId);
 
     try {
@@ -551,6 +562,15 @@ export default function FinancePage() {
       }
 
       await loadTransactions();
+
+      // STEP 85 — auto-expand the newly-created transaction's evidence panel once, so the just-
+      // attached slip is immediately visible without an extra click. One-shot direct state
+      // assignment (not an effect) — never re-fires on later, unrelated rerenders. Reuses
+      // loadAttachments() exactly as toggleAttachments() does, since this transaction's attachments
+      // haven't been fetched into attachmentsByTransaction yet.
+      setExpandedAttachmentsId(newId);
+      loadAttachments(newId);
+
       resetAiSession();
     } catch (err) {
       setAiConfirmError(err instanceof Error ? err.message : "ไม่สามารถบันทึกรายการได้");
@@ -1416,9 +1436,14 @@ export default function FinancePage() {
                                 : "text-slate-700"
                             }`}
                           >
+                            {/* STEP 85 — count comes from the server-side attachmentCount (GET
+                                /api/transactions) so it's correct on every row without expanding;
+                                once a row has actually been expanded/loaded, prefer the live loaded
+                                list length instead so it stays in sync with an upload/delete done in
+                                this panel without needing a full transaction-list reload. */}
                             📎{" "}
-                            {(attachmentsByTransaction[t.id]?.length ?? 0) > 0
-                              ? `ไฟล์แนบ (${attachmentsByTransaction[t.id]!.length})`
+                            {(attachmentsByTransaction[t.id]?.length ?? t.attachmentCount) > 0
+                              ? `ไฟล์แนบ (${attachmentsByTransaction[t.id]?.length ?? t.attachmentCount})`
                               : "ไฟล์แนบ"}
                           </button>
                           <button

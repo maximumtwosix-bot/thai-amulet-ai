@@ -139,6 +139,13 @@ export type TransactionRow = {
   // no new query, no calculation anywhere reads this field (see finance/page.tsx and tax/page.tsx's
   // STEP 63 warning, which is purely visual).
   linkedDeliveryStatus: string | null;
+  // STEP 85 — evidence attachment count for the Finance list badge, from the same correlated
+  // subquery pattern already used by getTaxSummary()'s hasAttachment (src/lib/taxSummary.ts). Only
+  // populated by listTransactions() (see below); getById()/createTransaction()/updateTransaction()
+  // never select it, so it defaults to 0 there via the same ?? fallback toRow() already uses for
+  // linkedOrderStatus/linkedOrderNumber/linkedDeliveryStatus above — display-only, never read by any
+  // total/calculation.
+  attachmentCount: number;
 };
 
 type DbRow = {
@@ -158,6 +165,7 @@ type DbRow = {
   linked_order_status?: string | null;
   linked_order_number?: string | null;
   linked_delivery_status?: string | null;
+  attachment_count?: number;
 };
 
 function toRow(row: DbRow): TransactionRow {
@@ -178,6 +186,7 @@ function toRow(row: DbRow): TransactionRow {
     linkedOrderStatus: (row.linked_order_status ?? null) as OrderStatus | null,
     linkedOrderNumber: row.linked_order_number ?? null,
     linkedDeliveryStatus: row.linked_delivery_status ?? null,
+    attachmentCount: row.attachment_count ?? 0,
   };
 }
 
@@ -412,10 +421,16 @@ export function listTransactions(filters: ListTransactionsFilters = {}): Transac
   // query) so Finance can also flag a returned-but-not-cancelled order's income, per the STEP 61/62
   // audit finding that delivery_status has no automatic accounting effect anywhere — this is
   // display-only, identical reasoning to the STEP 34 addition immediately above.
+  //
+  // STEP 85 — added attachment_count via the same correlated-subquery pattern already proven safe by
+  // getTaxSummary()'s hasAttachment (src/lib/taxSummary.ts) — one COUNT(*) per row, no N+1 from the
+  // browser, no change to WHERE/ORDER BY/LIMIT, display-only (feeds only the Finance evidence badge,
+  // never a total/calculation).
   const rows = db
     .prepare(
       `
-      SELECT t.*, o.status AS linked_order_status, o.order_number AS linked_order_number, o.delivery_status AS linked_delivery_status
+      SELECT t.*, o.status AS linked_order_status, o.order_number AS linked_order_number, o.delivery_status AS linked_delivery_status,
+        (SELECT COUNT(*) FROM transaction_attachments ta WHERE ta.transaction_id = t.id) AS attachment_count
       FROM transactions t
       LEFT JOIN orders o ON o.id = t.order_id
       ${whereClause}

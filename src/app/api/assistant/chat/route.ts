@@ -299,7 +299,10 @@ function buildAssistantSystemPrompt(): string {
 }
 
 export async function POST(request: NextRequest) {
-  let body: any;
+  // STEP 81 — type-only cleanup: `unknown` + an explicit narrowing cast, same pattern
+  // src/app/api/assistant/order-status-confirm/route.ts already uses, instead of `any`. No
+  // behavior change — the same checks run in the same order below.
+  let body: unknown;
 
   try {
     body = await request.json();
@@ -307,11 +310,13 @@ export async function POST(request: NextRequest) {
     return jsonError("Invalid request body (must be JSON)", 400);
   }
 
-  if (!body || typeof body !== "object" || !Array.isArray(body.messages)) {
+  const b = body as Record<string, unknown> | null | undefined;
+
+  if (!b || typeof b !== "object" || !Array.isArray(b.messages)) {
     return jsonError("messages is required and must be a non-empty array", 400);
   }
 
-  const incoming: unknown[] = body.messages;
+  const incoming: unknown[] = b.messages;
 
   if (incoming.length === 0) {
     return jsonError("messages must contain at least one message", 400);

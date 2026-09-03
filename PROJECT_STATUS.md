@@ -5476,6 +5476,196 @@ Studio/Social.
 
 ---
 
+## STEP 69-75 — LOCAL AI ASSISTANT (READ-ONLY FOUNDATION)
+
+Date: 2026-09-03
+
+Built via Claude Code (this file was not updated as each of these steps landed — recorded here at
+STEP 81 from git history and in-code STEP comments, not from a live session log kept at the time).
+
+- STEP 69 — Ollama installed locally, `qwen2.5:3b` pulled and smoke-tested (Thai + English + basic
+  arithmetic verified working; 10-60+ second CPU-only inference latency observed).
+- STEP 70 (`198cdb0`) — Local AI Assistant chat backend foundation: `POST /api/assistant/chat`
+  (`src/app/api/assistant/chat/route.ts`), session-gated via the existing `src/proxy.ts` allowlist,
+  calls only `http://127.0.0.1:11434` — never OpenAI/Anthropic.
+- STEP 71 (`3e3a499`) — first tool, read-only `get_orders` (`src/lib/assistantTools.ts`).
+- STEP 72 (`2e1cb9d`) — read-only `get_products`, `get_customers` (customers tool deliberately
+  exposes only name/phone, no address — privacy narrowing).
+- STEP 73 (`0659907`) — read-only `get_sales_summary`, `get_finance_summary`, `get_profit_summary`,
+  `get_inventory_summary`, `get_inventory_movements`.
+- STEP 74 (`07f446a`) — chat UI at `/assistant` (`src/app/assistant/page.tsx`).
+- STEP 75 (`a86ed6b`) — input hardening: strips unexpected client-submitted message fields, enforces
+  an 8000-character content limit per message.
+
+Through STEP 75, every Assistant tool was a plain `SELECT` — no write capability existed yet.
+
+**STEP 69-75 STATUS: PASS** (per commit history and in-code documentation; this file has no separate
+per-step test log for this range — see the STEP comments in `src/lib/assistantTools.ts` and
+`src/app/api/assistant/chat/route.ts` for the authoritative detail from when each step landed).
+
+---
+
+## STEP 76 — FIRST ASSISTANT WRITE TOOL: update_order_status
+
+Date: 2026-09-03 · Commit: `c54db1c`
+
+**Purpose**: give the Assistant its first, deliberately narrow write capability — changing an
+order's status — reusing the existing `updateOrderStatus()` state machine (`src/lib/orders.ts`,
+STEP 32) rather than introducing new mutation logic.
+
+**Files changed**: `src/lib/assistantTools.ts`, `src/app/api/assistant/chat/route.ts` (comment only).
+
+**Tested**: 17-assertion data-layer scratch test (valid transition, invalid transition, terminal
+status, unknown order, invalid status). Order 1 / Order 38 / Customer 5 confirmed unchanged.
+
+**STEP 76 STATUS: PASS**
+
+---
+
+## STEP 77 — EXPLICIT confirm=true GATE
+
+Date: 2026-09-03 · Commit: `2e01dbc`
+
+**Purpose**: require `confirm` to be the exact boolean `true` before `update_order_status` writes —
+omitted/null/false/string/number values all return a preview instead of mutating.
+
+**Tested**: 32-assertion scratch test, including all 10 malformed-confirm values from this step's
+own spec. Order 1 / Order 38 / Customer 5 unchanged.
+
+**STEP 77 STATUS: PASS**
+
+---
+
+## STEP 78 — SIGNED CONFIRMATION TOKEN + ROUTE-LEVEL HARD STOP
+
+Date: 2026-09-03 · Commit: `36a9dd1`
+
+**Purpose**: close the gap STEP 77 alone left open — nothing previously stopped the model from
+generating both a preview call and a `confirm:true` call within the same assistant turn, since the
+chat route's tool loop kept calling Ollama automatically after a preview, with no human involved.
+
+**Approved implementation**: preview now mints a short-lived (5 minute TTL) HMAC-signed token
+binding `{orderNumber, currentStatus, requestedStatus, exp}`, reusing `src/lib/auth.ts`'s
+session-cookie signing primitive (`signPayload`/`timingSafeStringEqual`, exported for this reuse).
+`src/app/api/assistant/chat/route.ts` hard-stops its tool loop the instant a `requiresConfirmation`
+result is produced — returned to the client immediately, never fed back into another Ollama round.
+A new dedicated endpoint, `POST /api/assistant/order-status-confirm`
+(`src/app/api/assistant/order-status-confirm/route.ts`), completes an already-previewed change
+without ever calling Ollama — the human Approve-button's target. Both the tool's confirm path and
+the dedicated endpoint call one shared function, `applyConfirmedOrderStatusChange()`.
+
+**Files changed**: `src/lib/auth.ts`, `src/lib/assistantTools.ts`,
+`src/app/api/assistant/chat/route.ts`, `src/app/api/assistant/order-status-confirm/route.ts` (new),
+`src/app/assistant/page.tsx`.
+
+**Tested**: 65 assertions across 3 scratch scripts — token issuance/verification, cross-order and
+cross-status token-binding rejection, missing/malformed/tampered/expired token rejection, a
+route-level mock proving the Ollama call count stays at exactly 1 per request when a preview is
+returned, and `proxy.ts`-level 401 rejection of unauthenticated requests to both Assistant
+endpoints. Order 1 / Order 38 / Customer 5 unchanged.
+
+**Known residual limitation (accepted, documented, still open as of STEP 81)**: the confirmation
+token is stateless — nothing marks it "used." Replay is rejected for the realistic case (the order's
+live status no longer matches the token's bound `currentStatus` once a transition applies), but if
+an order were manually reverted to its exact prior status by another means within the 5-minute TTL, a
+still-unexpired replayed token would be honored again. Closing this fully would require a persisted
+single-use state store — explicitly out of scope through STEP 81, pending a separate decision to
+revisit the "no state store" constraint.
+
+**STEP 78 STATUS: PASS**
+
+---
+
+## STEP 79 — SERVER-AUTHORED GROUNDING SYSTEM PROMPT
+
+Date: 2026-09-03 · Commit: `32a396a`
+
+**Purpose**: improve factual-answer/tool-use reliability. No system message reached Ollama before
+this step — the model had no grounding for the current date and no explicit instruction to prefer a
+`get_*` tool over its own training-data guesses for factual business questions.
+
+**Approved implementation**: `src/app/api/assistant/chat/route.ts` now prepends exactly one
+server-authored system message per request (today's Bangkok date, via the same `Intl`/
+`Asia/Bangkok` technique as `src/app/orders/page.tsx`'s STEP 59 `todayBangkok()`; an instruction to
+use the matching `get_*` tool for factual questions; a reminder that chat text like "yes"/"ตกลง" is
+never sufficient to approve an order-status change). `isValidIncomingMessage` was narrowed to reject
+a client-submitted `role:"system"` message outright, so the server's own system message can never be
+replaced or duplicated by client input. Explicitly documented as a grounding aid only, not a
+security mechanism — the STEP 78 token flow remains the sole write-authorization path.
+
+**Tested**: 43-assertion scratch test (system-message construction/singularity/date/content, client
+injection resistance, STEP 76-78 safety regression). Qualitative check against the real running
+Ollama instance: 4/4 sample Thai prompts about inventory/orders/sales correctly triggered the
+matching tool call rather than a memory-based guess (small, anecdotal sample — not a statistical
+guarantee of reliability).
+
+**STEP 79 STATUS: PASS**
+
+---
+
+## STEP 80 — APPROVE DOUBLE-CLICK GUARD + OLLAMA SETUP DOCS
+
+Date: 2026-09-03 · Commit: `8e74380`
+
+**Purpose**: two smaller, independent hardening items identified as residual STEP 78/79 limitations.
+
+**F2 — Approve double-click guard**: `src/app/assistant/page.tsx`'s `approvePending()` previously
+guarded re-entrancy only with React `confirming` state, which a rapid double-click could bypass
+before a re-render (server-side token binding already prevented any actual double-mutation, but the
+second request would surface a confusing error). Fixed with a `useRef`-based lock, checked/set
+synchronously before any `await` — `confirming` state still drives the visible disabled/label
+rendering.
+
+**F3 — Ollama documentation**: new `docs/ASSISTANT.md`, following this project's existing
+`docs/*.md` convention — documents that `OLLAMA_BASE_URL`/`OLLAMA_MODEL` are hardcoded (not
+env-configurable), how to verify Ollama is running, that the browser never calls Ollama directly
+(only this app's own `/api/assistant/chat` does), and a warning against exposing port 11434
+externally.
+
+**Tested**: a plain-function reproduction of the exact double-click guard pattern (5 assertions —
+old pattern: 2 rapid calls both fire; new pattern: exactly 1 fires) — explicitly NOT a live
+rendered-DOM/React click test, since this project has no testing-library dependency and adding one
+was out of scope. Backend regression re-confirmed unaffected; Order 1 / Order 38 / Customer 5
+unchanged.
+
+**STEP 80 STATUS: PASS**
+
+---
+
+## STEP 81 — TYPE-SAFETY CLEANUP (chat/route.ts) + THIS DOCUMENTATION UPDATE
+
+Date: 2026-09-03
+
+**Purpose**: close two small items repeatedly flagged and deferred across the STEP 77-80 audits — a
+lingering `any` type in `src/app/api/assistant/chat/route.ts` (four consecutive audits noted it as
+pre-existing without ever assigning it its own step), and this file's own staleness (last updated at
+STEP 54, with no record of the entire STEP 69-80 Assistant feature and a stale "next target" pointing
+at Voice/Video Studio).
+
+**Approved implementation**: `let body: any;` replaced with `let body: unknown;` plus an explicit
+`Record<string, unknown> | null | undefined` narrowing cast — the same pattern already used in
+`src/app/api/assistant/order-status-confirm/route.ts`. Type-only change; the same validation checks
+run in the same order with the same error responses.
+
+**Tested**: `npm run build` — pass. `npx tsc --noEmit` — pass. `eslint
+src/app/api/assistant/chat/route.ts` — the previously-flagged error is gone, no new issues.
+28-assertion scratch test re-running the STEP 76-80 safety battery through the real `POST()` handler
+(preview via the actual route, invalid JSON body, missing `messages`, a non-object JSON body — the
+exact edge case the type narrowing needed to keep handling identically — plus the direct
+`assistantTools.ts` battery: malformed confirm values, missing/tampered token, cross-order token
+rejection, valid confirmation). Order 1 / Order 38 / Customer 5 unchanged.
+
+**Explicitly out of scope for STEP 81 (unchanged, deferred)**: the stateless confirmation-token
+replay edge case (STEP 78); further Ollama/tool-use reliability work beyond STEP 79; live
+browser/React verification of the STEP 80 double-click guard; any change to `orders.ts`,
+`orderStatus.ts`, `assistantTools.ts`, `auth.ts` session logic, `proxy.ts`, the confirmation-token
+mechanism itself, DB schema, or Finance/Tax/Inventory/Customers/Video/Voice/Content/Social.
+
+**STEP 81 STATUS: PASS** (implementation and tests complete as of this update — not yet committed at
+the time this file was written; see `git log` for the actual commit once created).
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:
@@ -5490,7 +5680,17 @@ Then provide the current PROJECT_STATUS.md if needed.
 
 The next development target is:
 
-VOICE STUDIO → VIDEO STUDIO
+No target has been decided beyond STEP 81 as of this update. Known open items, none yet scheduled as
+their own STEP (see STEP 78/79/80 sections above for full detail):
+
+- Stateless Assistant confirmation-token replay edge case (STEP 78) — closing it fully would require
+  a persisted single-use state store, deliberately not added through STEP 81.
+- Further Ollama/tool-use reliability work beyond the STEP 79 grounding system prompt.
+- A live browser/React click test of the STEP 80 Approve double-click guard (only a plain-function
+  pattern reproduction exists as of STEP 81 — no testing-library dependency in this project).
+
+The previous "VOICE STUDIO → VIDEO STUDIO" target recorded here (as of STEP 54) was stale — no
+Assistant-feature work through STEP 81 touched Voice Studio, Video Studio, Content Studio, or Social.
 
 ---
 

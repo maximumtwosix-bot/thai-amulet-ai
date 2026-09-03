@@ -96,6 +96,18 @@ export default function AssistantPage() {
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState("");
 
+  // STEP 80 — re-entrancy lock for approvePending(), separate from the `confirming` STATE above.
+  // `confirming` still drives the button's visual disabled/label rendering, but a React state
+  // closure only reflects a new value after a re-render — two click events dispatched before that
+  // re-render (a fast double-click, or any programmatic double-fire) can both read the OLD
+  // `confirming === false` from their own stale closures and both fire a confirm request. A ref is
+  // mutated synchronously and is visible to every call immediately, regardless of render timing, so
+  // it closes that gap at the client. Server-side, this was never a data-integrity risk either way —
+  // the STEP 78 token's live-status re-check already rejects a second request as a mismatch once the
+  // first applies — this purely fixes the confusing "error" a double-click could show for a change
+  // that actually already succeeded.
+  const confirmingRef = useRef(false);
+
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -181,7 +193,11 @@ export default function AssistantPage() {
   // it sends the opaque confirmToken straight to the dedicated confirmation endpoint. This is the
   // actual human-approval action; nothing the model says or does can substitute for this click.
   async function approvePending() {
-    if (!pending || confirming) return;
+    // STEP 80 — the ref check/set happens synchronously, before any await, so a second call
+    // triggered before React re-renders (see the confirmingRef comment above) sees the lock
+    // immediately and returns here instead of firing a second request.
+    if (!pending || confirmingRef.current) return;
+    confirmingRef.current = true;
 
     setConfirming(true);
     setConfirmError("");
@@ -214,6 +230,7 @@ export default function AssistantPage() {
     } catch (err) {
       setConfirmError(err instanceof Error ? err.message : "ไม่สามารถยืนยันการเปลี่ยนสถานะได้");
     } finally {
+      confirmingRef.current = false;
       setConfirming(false);
     }
   }

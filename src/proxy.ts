@@ -40,6 +40,40 @@ function isProtectedPage(pathname: string): boolean {
   return false;
 }
 
+// STEP A.5 — sensitive Finance evidence files served as static assets under public/generated/.
+// Next.js Proxy runs BEFORE filesystem routes (public/, _next/static/, etc. — see execution order in
+// node_modules/next/dist/docs/.../proxy.md), and explicitly documents that a matched path in
+// `public/` is subject to Proxy exactly like a page/API route ("Proxy runs on every request,
+// including... assets in the public/ folder"). That means these two prefixes can be gated with the
+// SAME session-cookie check already used everywhere else in this file, with ZERO change to how the
+// files are written, read, or referenced (finance/page.tsx's plain <img src="/generated/...">/
+// <a href> keeps working as-is once the browser has a valid session cookie — no new API route, no
+// file move).
+//
+// Deliberately narrow — ONLY these two prefixes, not all of /generated/:
+//   /generated/transaction-attachments/  (STEP 21/82 — receipt/slip evidence; the :path* below covers
+//     BOTH the legacy flat layout `transaction-{id}-{uuid}.ext` AND the STEP 82 nested
+//     {income|expense}/{YYYY}/{MM}/... layout equally, since it matches any number of trailing
+//     segments)
+//   /generated/ai-slip-previews/  (STEP 29/82 — pre-confirmation AI slip preview copies; same
+//     sensitivity class as the evidence above)
+// Every other /generated/ subfolder (product-media, ai-images, ai-video, video, voice,
+// order-delivery-proofs) is INTENTIONALLY left untouched — those must stay publicly fetchable
+// without login for Social/Content posting (Facebook/TikTok/etc. fetch them directly) and for
+// order-fulfillment proofs, which are out of scope for this STEP.
+//
+// Path traversal: request.nextUrl.pathname is already URL-normalized by Next.js before Proxy ever
+// runs (standard `.`/`..` segment collapsing), so a crafted path either resolves to a real path
+// inside one of these two prefixes (and is correctly gated) or outside them (and was never sensitive
+// to begin with) — no extra sanitization is added here, matching this file's existing convention of
+// trusting Next's own request normalization rather than re-implementing it.
+function isProtectedGeneratedFile(pathname: string): boolean {
+  if (pathname.startsWith("/generated/transaction-attachments/")) return true;
+  if (pathname.startsWith("/generated/ai-slip-previews/")) return true;
+
+  return false;
+}
+
 function isProtectedApi(pathname: string): boolean {
   // GET (list) / POST (create) / PATCH (edit, ?id=) / DELETE (?id=) all share this exact pathname
   if (pathname === "/api/products") return true;
@@ -76,7 +110,8 @@ function isProtectedApi(pathname: string): boolean {
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  const needsAuth = isProtectedPage(pathname) || isProtectedApi(pathname);
+  const needsAuth =
+    isProtectedPage(pathname) || isProtectedApi(pathname) || isProtectedGeneratedFile(pathname);
 
   if (!needsAuth) {
     return NextResponse.next();
@@ -90,6 +125,15 @@ export function proxy(request: NextRequest) {
 
   if (pathname.startsWith("/api/")) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  // STEP A.5 — a static file request (evidence image/preview), not a page navigation or a JSON API
+  // call. Neither of those two existing branches is appropriate here: a redirect would hand back the
+  // /login page's HTML as if it were the requested image, and a JSON body makes no sense for an
+  // <img src>/<a href>. A plain 401 correctly fails the resource load (broken-image icon on screen,
+  // no content ever served) without leaking anything or requiring a matching UI change.
+  if (isProtectedGeneratedFile(pathname)) {
+    return new NextResponse("Unauthorized", { status: 401 });
   }
 
   const loginUrl = new URL("/login", request.url);
@@ -120,5 +164,9 @@ export const config = {
     "/api/customers/:path*",
     "/api/profit/:path*",
     "/api/assistant/:path*",
+    // STEP A.5 — see isProtectedGeneratedFile() above for exactly which two prefixes and why only
+    // these two (not all of /generated/).
+    "/generated/transaction-attachments/:path*",
+    "/generated/ai-slip-previews/:path*",
   ],
 };

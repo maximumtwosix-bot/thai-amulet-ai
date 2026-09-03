@@ -1,5 +1,10 @@
 import db from "./db";
-import { isValidOrderStatus, ORDER_STATUSES, getAllowedNextStatuses } from "./orderStatus";
+import {
+  isValidOrderStatus,
+  isValidOrderStatusTransition,
+  ORDER_STATUSES,
+  getAllowedNextStatuses,
+} from "./orderStatus";
 import { getTaxSummary } from "./taxSummary";
 import { getProfitSummary, type ProfitSummaryResult } from "./profitSummary";
 import { updateOrderStatus } from "./orders";
@@ -289,7 +294,7 @@ export const ASSISTANT_TOOLS: AssistantToolDefinition[] = [
     function: {
       name: "update_order_status",
       description:
-        "WRITE ACTION — actually changes an order's status in the database, unlike every other tool here. Allowed transitions: pending→paid, pending→cancelled, paid→shipped, paid→cancelled, shipped→completed, shipped→cancelled. 'completed' and 'cancelled' are final and cannot be changed again. Use get_orders first to confirm the order number and its current status before calling this.",
+        "WRITE ACTION — can change an order's status in the database, unlike every other tool here, but ONLY after explicit confirmation. Call it WITHOUT confirm (or with confirm=false) first — this is a PREVIEW that returns the current status, the requested status, and a note that confirmation is required, and does NOT write anything. Describe that preview to the user and get their explicit go-ahead. Only call it again with confirm=true, after that go-ahead, to actually apply the change — any other value (omitted, false, null, a string, anything not exactly true) is treated as NOT confirmed and will only preview, never write. Allowed transitions: pending→paid, pending→cancelled, paid→shipped, paid→cancelled, shipped→completed, shipped→cancelled. 'completed' and 'cancelled' are final and cannot be changed again. Use get_orders first to confirm the order number and its current status before calling this.",
       parameters: {
         type: "object",
         properties: {
@@ -301,6 +306,10 @@ export const ASSISTANT_TOOLS: AssistantToolDefinition[] = [
             type: "string",
             description: "The new status to set.",
             enum: ["pending", "paid", "shipped", "completed", "cancelled"],
+          },
+          confirm: {
+            type: "boolean",
+            description: "Set to exactly true only after the user has explicitly confirmed the change shown in a prior preview call. Omit or set false to preview only — no database write occurs.",
           },
         },
         required: ["orderNumber", "status"],
@@ -813,15 +822,30 @@ export function getInventoryMovementsForAssistant(
   return rows;
 }
 
-// ===== STEP 76 — Order status write tool =====
+// ===== STEP 76/77 — Order status write tool =====
+//
+// STEP 77 — added an explicit confirm contract, enforced HERE at the tool layer, not through prompt
+// instructions a model could ignore or a client the model could talk past. A call is treated as
+// confirmed if and ONLY IF params.confirm is the exact boolean `true` (see the strict `=== true`
+// check below) — omitted, null, false, a string, a number, or anything else all fall through to the
+// SAME preview branch. That preview branch returns before ever calling updateOrderStatus(), so there
+// is exactly one place in this function capable of writing, and exactly one gate in front of it.
 
 export interface UpdateOrderStatusToolParams {
   orderNumber?: string;
   status?: string;
+  confirm?: unknown;
 }
 
 export type UpdateOrderStatusToolResult =
   | { success: true; orderNumber: string; previousStatus: string; newStatus: string }
+  | {
+      requiresConfirmation: true;
+      orderNumber: string;
+      currentStatus: string;
+      requestedStatus: string;
+      message: string;
+    }
   | { error: string };
 
 export function updateOrderStatusForAssistant(
@@ -839,14 +863,49 @@ export function updateOrderStatusForAssistant(
     return { error: `status must be one of: ${ORDER_STATUSES.join(", ")}.` };
   }
 
-  // Plain SELECT, same as every other tool's lookup — the only new thing below is the call into
-  // the existing updateOrderStatus() (src/lib/orders.ts), not a query built here.
+  // Plain SELECT, same as every other tool's lookup — nothing below this point writes unless the
+  // confirm gate further down is passed.
   const existing = db
     .prepare("SELECT id, status FROM orders WHERE order_number = ?")
     .get(orderNumber) as { id: number; status: string } | undefined;
 
   if (!existing) {
     return { error: `No order found with order number "${orderNumber}".` };
+  }
+
+  if (!isValidOrderStatus(existing.status)) {
+    return {
+      error: `Order "${orderNumber}" has an unrecognized stored status and cannot be changed through this tool.`,
+    };
+  }
+
+  // Same transition rule updateOrderStatus() itself enforces (src/lib/orderStatus.ts, STEP 32),
+  // checked here too and BEFORE the confirm gate — an invalid or terminal-status request is rejected
+  // at preview time already, rather than being "confirmable" and only failing on a second call.
+  if (!isValidOrderStatusTransition(existing.status, status)) {
+    const allowed = getAllowedNextStatuses(existing.status);
+
+    return {
+      error:
+        allowed.length > 0
+          ? `Cannot change order "${orderNumber}" from "${existing.status}" to "${status}". Allowed next status(es): ${allowed.join(", ")}.`
+          : `Order "${orderNumber}" is already in a final status ("${existing.status}") and cannot be changed.`,
+    };
+  }
+
+  // STEP 77 confirmation gate. Strict identity check against the literal boolean `true` — every
+  // other value falls through to the preview branch, which performs no write, no matter how many
+  // times the model calls this tool for the same order.
+  const confirmed = params.confirm === true;
+
+  if (!confirmed) {
+    return {
+      requiresConfirmation: true,
+      orderNumber,
+      currentStatus: existing.status,
+      requestedStatus: status,
+      message: `This will change order "${orderNumber}" from "${existing.status}" to "${status}". No change has been made yet. Confirm with the user, then call update_order_status again with confirm=true to apply it.`,
+    };
   }
 
   try {
@@ -858,21 +917,8 @@ export function updateOrderStatusForAssistant(
       newStatus: result.status,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-
-    if (message === "INVALID_STATUS_TRANSITION") {
-      const allowed = isValidOrderStatus(existing.status)
-        ? getAllowedNextStatuses(existing.status)
-        : [];
-
-      return {
-        error:
-          allowed.length > 0
-            ? `Cannot change order "${orderNumber}" from "${existing.status}" to "${status}". Allowed next status(es): ${allowed.join(", ")}.`
-            : `Order "${orderNumber}" is already in a final status ("${existing.status}") and cannot be changed.`,
-      };
-    }
-
+    // Defensive only — order existence, status validity, and transition legality are all already
+    // validated above, so updateOrderStatus() should not throw here in normal operation.
     console.error("Assistant tool update_order_status error:", error);
     return { error: "Failed to update the order status." };
   }

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { getTransactionById } from "@/lib/transactions";
+import { getTransactionById, isValidTransactionType } from "@/lib/transactions";
 import {
   insertTransactionAttachment,
   listTransactionAttachments,
@@ -15,6 +15,47 @@ export const runtime = "nodejs";
 // magic-byte content verification, fail-closed) is copied exactly from the existing hardened
 // pattern in src/app/api/products/[id]/media/route.ts (STEP 26.10 / STEP 27 security fixes) rather
 // than re-derived, since this is the same "user-uploaded image, written to disk" attack surface.
+//
+// STEP 82 — newly uploaded evidence is now filed under income/expense + year/month subfolders,
+// derived ONLY from the linked transaction's own authoritative transaction_type/transaction_date
+// (never from anything client-supplied) — see resolveEvidenceTypeFolder()/resolveEvidenceDateFolder()
+// below. The top-level root (public/generated/transaction-attachments/) is unchanged. Existing
+// attachments keep whatever flat file_url they already have — this only changes where NEW uploads
+// land; nothing here reads, moves, or rewrites any existing row/file, and every other route
+// (list/delete, both here and in [attachmentId]/route.ts) already works purely off the stored
+// file_url string, so old and new paths are handled identically by them with no changes needed.
+
+// Derives the folder purely from the transaction's own stored transaction_type (already validated
+// at write time by createTransaction()/updateTransaction() in src/lib/transactions.ts) — re-checked
+// here defensively rather than trusted blindly, matching this codebase's established convention.
+// Fails closed (caller returns 500) rather than silently filing evidence under a guessed bucket if
+// this ever somehow doesn't hold.
+function resolveEvidenceTypeFolder(transactionType: string): "income" | "expense" | null {
+  if (!isValidTransactionType(transactionType)) {
+    return null;
+  }
+
+  return transactionType;
+}
+
+// Derives {year, month} from the transaction's own transaction_date. isValidDateString() (STEP 20)
+// only guarantees Date.parse() succeeds on it, not a specific string shape, so this parses via Date
+// rather than string-slicing — UTC getters are used so the result never depends on this server
+// process's own local timezone. Cannot fail in practice (the same Date.parse() guarantee applies),
+// but falls back to a fixed, non-injectable "unknown" bucket rather than failing the upload, since a
+// folder-taxonomy edge case should never block saving real evidence.
+function resolveEvidenceDateFolder(transactionDate: string): { year: string; month: string } {
+  const parsed = new Date(transactionDate);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return { year: "unknown", month: "unknown" };
+  }
+
+  return {
+    year: String(parsed.getUTCFullYear()),
+    month: String(parsed.getUTCMonth() + 1).padStart(2, "0"),
+  };
+}
 
 const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 
@@ -149,12 +190,30 @@ export async function POST(request: NextRequest, context: RouteContext) {
       );
     }
 
-    if (!getTransactionById(transactionId)) {
+    // STEP 82 — kept (not re-queried later): reused below to derive the income/expense + year/month
+    // storage folders from this same fetch, per the "no unnecessary additional query" requirement.
+    const transaction = getTransactionById(transactionId);
+
+    if (!transaction) {
       return NextResponse.json(
         { success: false, error: "Transaction not found" },
         { status: 404 }
       );
     }
+
+    const typeFolder = resolveEvidenceTypeFolder(transaction.transactionType);
+
+    if (!typeFolder) {
+      console.error(
+        `POST /api/transactions/${transactionId}/attachments: transaction has an invalid stored transaction_type`
+      );
+      return NextResponse.json(
+        { success: false, error: "Internal server error" },
+        { status: 500 }
+      );
+    }
+
+    const { year, month } = resolveEvidenceDateFolder(transaction.transactionDate);
 
     let formData: FormData;
 
@@ -239,11 +298,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     const safeExtension = rawExtension || signatureTypeToExtension(detectedSignatureType);
 
+    // STEP 82 — root unchanged (public/generated/transaction-attachments/); newly uploaded evidence
+    // now lands under {typeFolder}/{year}/{month}/ within it, both derived above from the linked
+    // transaction's own authoritative type/date, never from client input. Existing flat-path
+    // attachments are untouched — this only affects where a NEW file is written.
     const attachmentsDirectory = path.join(
       process.cwd(),
       "public",
       "generated",
-      "transaction-attachments"
+      "transaction-attachments",
+      typeFolder,
+      year,
+      month
     );
 
     await mkdir(attachmentsDirectory, { recursive: true });
@@ -253,7 +319,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     await writeFile(filePath, buffer);
 
-    const fileUrl = `/generated/transaction-attachments/${fileName}`;
+    const fileUrl = `/generated/transaction-attachments/${typeFolder}/${year}/${month}/${fileName}`;
 
     const attachment = insertTransactionAttachment({
       transactionId,

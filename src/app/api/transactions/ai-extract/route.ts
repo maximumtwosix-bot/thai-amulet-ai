@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { calculateEstimatedCost } from "@/lib/costConfig";
@@ -495,6 +495,67 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error(
       "POST /api/transactions/ai-extract error:",
+      error instanceof Error ? error.message : "unknown error"
+    );
+
+    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
+  }
+}
+
+// ตรรกะเดียวกับ isSafeGeneratedPath ใน transaction-attachments/[attachmentId]/route.ts แต่เข้มงวด
+// กว่า — ต้องขึ้นต้นด้วย "/generated/ai-slip-previews/" เท่านั้น (ไม่ใช่ "/generated/" เฉยๆ) เพื่อไม่
+// ให้ endpoint นี้ถูกใช้ลบไฟล์หลักฐานจริงใน transaction-attachments/ หรือไฟล์อื่นใดใน public/generated/
+// ได้เลยไม่ว่ากรณีใด — โครงสร้าง path เองเป็นตัวบังคับ ไม่ใช่แค่ intent
+function isSafeAiSlipPreviewPath(url: string): boolean {
+  if (!url || !url.startsWith("/")) {
+    return false;
+  }
+
+  const cleanUrl = decodeURIComponent(url.split("?")[0]);
+
+  return !cleanUrl.includes("..") && cleanUrl.startsWith("/generated/ai-slip-previews/");
+}
+
+// STEP 82 — best-effort cleanup for the preview copy written by POST above (public/generated/
+// ai-slip-previews/), called by the client (src/app/finance/page.tsx's resetAiSession()) at the two
+// points a preview is known to no longer be needed: the user abandons it (explicit cancel, or picks
+// a different file before ever confirming) or a transaction was confirmed and the real evidence copy
+// was successfully re-uploaded to transaction-attachments/ (making this preview a redundant
+// duplicate). Deliberately narrow: accepts only a fileUrl scoped to ai-slip-previews/ (see
+// isSafeAiSlipPreviewPath above) — cannot be used to delete anything in transaction-attachments/ or
+// any other file under public/. Failure here is swallowed (unlink().catch()) — this must never be
+// able to affect a transaction that was already successfully created and attached.
+export async function DELETE(request: NextRequest) {
+  try {
+    let body: unknown;
+
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { success: false, error: "Invalid request body (must be JSON)" },
+        { status: 400 }
+      );
+    }
+
+    const b = body as Record<string, unknown> | null | undefined;
+    const fileUrl = typeof b?.fileUrl === "string" ? b.fileUrl : "";
+
+    if (!fileUrl || !isSafeAiSlipPreviewPath(fileUrl)) {
+      return NextResponse.json(
+        { success: false, error: "Invalid or unsafe fileUrl" },
+        { status: 400 }
+      );
+    }
+
+    const filePath = path.join(process.cwd(), "public", fileUrl.replace(/^\/+/, ""));
+
+    await unlink(filePath).catch(() => {});
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error(
+      "DELETE /api/transactions/ai-extract error:",
       error instanceof Error ? error.message : "unknown error"
     );
 

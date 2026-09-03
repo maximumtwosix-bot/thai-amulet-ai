@@ -354,7 +354,22 @@ export default function FinancePage() {
   const [aiConfirmError, setAiConfirmError] = useState("");
   const [aiConfirmedId, setAiConfirmedId] = useState<number | null>(null);
 
+  // STEP 82 — best-effort cleanup of an ABANDONED AI-slip preview file. Every path that gives up on
+  // the current preview without ever confirming a transaction from it calls resetAiSession() (this
+  // function): the explicit "ยกเลิก" button, and picking a new file (handleAiFileSelected() calls
+  // this first). Deliberately gated on aiConfirmedId === null — if a transaction WAS confirmed from
+  // this preview, cleanup (if safe) is handled explicitly in confirmAiTransaction() instead, never
+  // here, so this function can never delete the only surviving evidence copy of an already-confirmed
+  // transaction whose real attachment re-upload happened to fail.
   function resetAiSession() {
+    if (aiPreview && aiConfirmedId === null) {
+      fetch("/api/transactions/ai-extract", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileUrl: aiPreview.fileUrl }),
+      }).catch(() => {});
+    }
+
     setAiFile(null);
     setAiUploading(false);
     setAiError("");
@@ -514,6 +529,19 @@ export default function FinancePage() {
             setAiConfirmError(
               "บันทึกรายการสำเร็จ แต่แนบไฟล์หลักฐานไม่สำเร็จ — สามารถอัปโหลดไฟล์แนบเพิ่มได้จากรายการในตารางด้านล่าง"
             );
+            // STEP 82 — deliberately do NOT clean up the AI-slip preview here: the real evidence
+            // copy failed to save, so this preview file is the only surviving copy for this
+            // transaction. resetAiSession() below also skips cleanup whenever aiConfirmedId is set,
+            // for the same reason.
+          } else if (aiPreview) {
+            // STEP 82 — the real evidence copy now exists in transaction-attachments/; the preview
+            // copy is a redundant duplicate. Best-effort — a failure here must never affect the
+            // transaction that was already successfully created and attached.
+            fetch("/api/transactions/ai-extract", {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ fileUrl: aiPreview.fileUrl }),
+            }).catch(() => {});
           }
         } catch {
           setAiConfirmError(

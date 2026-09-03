@@ -1,15 +1,24 @@
 import db from "./db";
-import { isValidOrderStatus } from "./orderStatus";
+import { isValidOrderStatus, ORDER_STATUSES, getAllowedNextStatuses } from "./orderStatus";
 import { getTaxSummary } from "./taxSummary";
 import { getProfitSummary, type ProfitSummaryResult } from "./profitSummary";
+import { updateOrderStatus } from "./orders";
 
 // STEP 71 — first Local AI Assistant tool: read-only order lookups. This is the security boundary
 // the STEP 68 audit recommended: "the AI never receives a raw DB connection... it can only invoke
-// a small, explicitly-coded set of wrapper functions." Every exported function here is a plain
-// SELECT — no INSERT/UPDATE/DELETE statement exists anywhere in this file, and none ever will
-// (that's the whole point of this file existing separately from src/lib/orders.ts). The chat route
-// (src/app/api/assistant/chat/route.ts) may call ONLY executeAssistantTool() below, never build or
-// run a query of its own — the model itself never sees SQL, only this fixed, named tool.
+// a small, explicitly-coded set of wrapper functions." Every exported function here THROUGH STEP 75
+// was a plain SELECT — no INSERT/UPDATE/DELETE statement existed anywhere in this file. The chat
+// route (src/app/api/assistant/chat/route.ts) may call ONLY executeAssistantTool() below, never
+// build or run a query of its own — the model itself never sees SQL, only fixed, named tools.
+//
+// STEP 76 — the read-only invariant above is deliberately narrowed, not dropped: this file now
+// contains exactly ONE write path (updateOrderStatusForAssistant, below). It does not run its own
+// UPDATE — it resolves an order_number to an id via a plain SELECT, then calls the EXISTING
+// updateOrderStatus() (src/lib/orders.ts, STEP 32), the same function PATCH /api/orders/[id]/status
+// (the Order Detail page's status buttons) already calls. The status state machine
+// (pending→paid→shipped→completed, cancellation from pending/paid/shipped only, completed/cancelled
+// both terminal) lives ONLY in src/lib/orderStatus.ts and is neither re-implemented nor loosened
+// here. Every other tool in this file remains read-only.
 
 export interface AssistantToolDefinition {
   type: "function";
@@ -266,6 +275,35 @@ export const ASSISTANT_TOOLS: AssistantToolDefinition[] = [
           },
         },
         required: [],
+      },
+    },
+  },
+  // STEP 76 — the ONE write tool in this file. Deliberately targets an order by its human-facing
+  // order_number (the identifier every other tool and the UI itself shows) rather than the numeric
+  // database id, which the model is never given — this avoids the model ever having to guess or
+  // fabricate an id. Only the status field is writable; items, prices, shipping, discount, and
+  // customer stay immutable through this tool (matching the API surface — those each have their own
+  // separate PATCH endpoints, none exposed to the assistant).
+  {
+    type: "function",
+    function: {
+      name: "update_order_status",
+      description:
+        "WRITE ACTION — actually changes an order's status in the database, unlike every other tool here. Allowed transitions: pending→paid, pending→cancelled, paid→shipped, paid→cancelled, shipped→completed, shipped→cancelled. 'completed' and 'cancelled' are final and cannot be changed again. Use get_orders first to confirm the order number and its current status before calling this.",
+      parameters: {
+        type: "object",
+        properties: {
+          orderNumber: {
+            type: "string",
+            description: "The order's order number, exactly as returned by get_orders (e.g. its order_number field). Not the numeric id.",
+          },
+          status: {
+            type: "string",
+            description: "The new status to set.",
+            enum: ["pending", "paid", "shipped", "completed", "cancelled"],
+          },
+        },
+        required: ["orderNumber", "status"],
       },
     },
   },
@@ -775,6 +813,71 @@ export function getInventoryMovementsForAssistant(
   return rows;
 }
 
+// ===== STEP 76 — Order status write tool =====
+
+export interface UpdateOrderStatusToolParams {
+  orderNumber?: string;
+  status?: string;
+}
+
+export type UpdateOrderStatusToolResult =
+  | { success: true; orderNumber: string; previousStatus: string; newStatus: string }
+  | { error: string };
+
+export function updateOrderStatusForAssistant(
+  params: UpdateOrderStatusToolParams
+): UpdateOrderStatusToolResult {
+  const orderNumber = typeof params.orderNumber === "string" ? params.orderNumber.trim() : "";
+
+  if (!orderNumber) {
+    return { error: "orderNumber is required." };
+  }
+
+  const status = typeof params.status === "string" ? params.status : "";
+
+  if (!status || !isValidOrderStatus(status)) {
+    return { error: `status must be one of: ${ORDER_STATUSES.join(", ")}.` };
+  }
+
+  // Plain SELECT, same as every other tool's lookup — the only new thing below is the call into
+  // the existing updateOrderStatus() (src/lib/orders.ts), not a query built here.
+  const existing = db
+    .prepare("SELECT id, status FROM orders WHERE order_number = ?")
+    .get(orderNumber) as { id: number; status: string } | undefined;
+
+  if (!existing) {
+    return { error: `No order found with order number "${orderNumber}".` };
+  }
+
+  try {
+    const result = updateOrderStatus(existing.id, status);
+    return {
+      success: true,
+      orderNumber: result.orderNumber,
+      previousStatus: existing.status,
+      newStatus: result.status,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+
+    if (message === "INVALID_STATUS_TRANSITION") {
+      const allowed = isValidOrderStatus(existing.status)
+        ? getAllowedNextStatuses(existing.status)
+        : [];
+
+      return {
+        error:
+          allowed.length > 0
+            ? `Cannot change order "${orderNumber}" from "${existing.status}" to "${status}". Allowed next status(es): ${allowed.join(", ")}.`
+            : `Order "${orderNumber}" is already in a final status ("${existing.status}") and cannot be changed.`,
+      };
+    }
+
+    console.error("Assistant tool update_order_status error:", error);
+    return { error: "Failed to update the order status." };
+  }
+}
+
 // STEP 71/72 — the ONLY entry point the chat route may use to run a tool. An unrecognized tool
 // name is rejected here, not silently ignored or passed through — this is the whitelist
 // enforcement point itself, not just documentation of intent. Adding a new tool means adding a new
@@ -819,6 +922,12 @@ export function executeAssistantTool(name: string, args: unknown): unknown {
   if (name === "get_inventory_movements") {
     const params = (args && typeof args === "object" ? args : {}) as GetInventoryMovementsToolParams;
     return getInventoryMovementsForAssistant(params);
+  }
+
+  // STEP 76
+  if (name === "update_order_status") {
+    const params = (args && typeof args === "object" ? args : {}) as UpdateOrderStatusToolParams;
+    return updateOrderStatusForAssistant(params);
   }
 
   throw new Error(`UNKNOWN_TOOL: ${name}`);

@@ -13,8 +13,10 @@ import { ASSISTANT_TOOLS, executeAssistantTool } from "@/lib/assistantTools";
 //
 // STEP 71 — added the FIRST tool (read-only Orders lookup, src/lib/assistantTools.ts). The model
 // is never given database access, raw SQL, or an API-mutation path of any kind — it can only
-// request one of the named tools in ASSISTANT_TOOLS, and every one of those is a plain SELECT
-// (see assistantTools.ts's own header for why that's structurally guaranteed, not just convention).
+// request one of the named tools in ASSISTANT_TOOLS. Through STEP 75 every one of those was a plain
+// SELECT; STEP 76 added exactly one narrow write tool (update_order_status) that reuses the
+// existing, already-validated order-status state machine instead of running its own mutation (see
+// assistantTools.ts's own header for the full boundary this route relies on).
 //
 // STREAMING TRADE-OFF (read before changing): STEP 70 streamed its single Ollama call token-by-
 // token. Reliably combining tool-call *detection* with token-by-token streaming in one pass is a

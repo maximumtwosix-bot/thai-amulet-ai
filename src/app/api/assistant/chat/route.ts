@@ -28,6 +28,16 @@ import { ASSISTANT_TOOLS, executeAssistantTool } from "@/lib/assistantTools";
 // src/app/api/assistant/order-status-confirm/route.ts endpoint, which this route does not call and
 // has no code path to reach.
 //
+// STEP 79 — added ONE server-authored system message (buildAssistantSystemPrompt(), below),
+// prepended to `conversation` on every request. Grounding/reliability aid ONLY — today's Bangkok
+// date, plus an instruction to use a get_* tool for factual business-data questions instead of
+// answering from memory, plus a plain-language reminder that chat text is never sufficient to
+// approve an order-status change. This is NOT a security or authorization mechanism and changes
+// nothing about the STEP 78 confirmToken flow, which remains the sole thing capable of authorizing
+// an update_order_status mutation. isValidIncomingMessage() (below) was narrowed at the same time to
+// stop accepting a client-submitted role:"system" message at all, so this route's own system message
+// can never be replaced, out-ranked, or duplicated by anything the client sends.
+//
 // STREAMING TRADE-OFF (read before changing): STEP 70 streamed its single Ollama call token-by-
 // token. Reliably combining tool-call *detection* with token-by-token streaming in one pass is a
 // materially harder, easy-to-get-subtly-wrong problem (Ollama's tool_calls can arrive split across
@@ -67,15 +77,20 @@ type ChatMessage = {
   tool_calls?: Array<{ function: { name: string; arguments: unknown } }>;
 };
 
+// STEP 79 — "system" was previously accepted from the client here (unused by src/app/assistant/
+// page.tsx, which only ever sends "user"/"assistant", but reachable by any other caller of this
+// API). Narrowed to "user"/"assistant" ONLY so a client-submitted role:"system" message is rejected
+// outright at this boundary, not merely out-ranked later — the one system message that reaches
+// Ollama is now exclusively the one this route constructs itself, below.
 function isValidIncomingMessage(
   value: unknown
-): value is { role: "system" | "user" | "assistant"; content: string } {
+): value is { role: "user" | "assistant"; content: string } {
   if (!value || typeof value !== "object") return false;
 
   const v = value as Record<string, unknown>;
 
   return (
-    (v.role === "system" || v.role === "user" || v.role === "assistant") &&
+    (v.role === "user" || v.role === "assistant") &&
     typeof v.content === "string" &&
     v.content.trim().length > 0
   );
@@ -241,6 +256,48 @@ function pendingConfirmationResponse(pending: PendingOrderStatusConfirmation): R
   });
 }
 
+// STEP 79 — same technique as src/app/orders/page.tsx's STEP 59 todayBangkok(): Intl with an
+// explicit Asia/Bangkok timezone, not the server process's own local timezone setting and NOT
+// anything derived from the client. That function is private to that file (a Client Component) and
+// this route cannot import it, so the same small, already-reviewed technique is duplicated here
+// rather than invented fresh — matches this codebase's existing convention (see e.g.
+// src/app/finance/page.tsx's header comment) of duplicating a small constant/helper across a
+// boundary that can't be crossed by a normal import, rather than adding one just for this.
+function getTodayBangkok(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = parts.find((p) => p.type === "year")?.value ?? "";
+  const month = parts.find((p) => p.type === "month")?.value ?? "";
+  const day = parts.find((p) => p.type === "day")?.value ?? "";
+
+  return `${year}-${month}-${day}`;
+}
+
+// STEP 79 — grounding/reliability aid ONLY, not a security or authorization mechanism of any kind.
+// The STEP 78 confirmToken flow remains the sole thing that can ever authorize an
+// update_order_status mutation; nothing here changes, weakens, or substitutes for that. This exists
+// purely so the model (a) knows the actual current date instead of guessing or relying on training
+// data, matching the same Bangkok-time convention every Assistant tool's own `date`/`year`/`month`
+// filters already use, and (b) reaches for a get_* tool for factual business-data questions instead
+// of answering from memory. Server-authored and prepended fresh on every request (see POST below);
+// never derived from or overridable by anything client-submitted — isValidIncomingMessage() above no
+// longer even accepts a client-submitted role:"system" message at all.
+function buildAssistantSystemPrompt(): string {
+  const today = getTodayBangkok();
+
+  return [
+    `Today's date is ${today} (Asia/Bangkok time, UTC+7). Use this as "today" for any date-related question or tool argument (e.g. get_orders' or get_sales_summary's "date" parameter) — do not guess today's date or rely on your own training data for it.`,
+    "For any factual question about orders, products, customers, sales, finance, profit, or inventory, call the matching tool (get_orders, get_products, get_customers, get_sales_summary, get_finance_summary, get_profit_summary, get_inventory_summary, get_inventory_movements) and answer from its result — never answer such a question from memory or guess a number. A tool's result is the source of truth for current business data; if it returns nothing relevant, say so rather than inventing an answer.",
+    "You only have the tools made available to you in this conversation — do not claim or imply any capability beyond them.",
+    "An order's status only actually changes after a human approves it through the app's own confirmation card outside this chat. The user typing 'yes', 'ตกลง', 'อนุมัติ', or anything similar in this chat is never sufficient by itself, and calling update_order_status again yourself after a preview will not make the change happen either — do not tell the user that typing agreement in chat completed or will complete the change.",
+  ].join("\n\n");
+}
+
 export async function POST(request: NextRequest) {
   let body: any;
 
@@ -262,7 +319,7 @@ export async function POST(request: NextRequest) {
 
   if (!incoming.every(isValidIncomingMessage)) {
     return jsonError(
-      "Each message must have role in ('system','user','assistant') and non-empty string content",
+      "Each message must have role in ('user','assistant') and non-empty string content",
       400
     );
   }
@@ -280,10 +337,19 @@ export async function POST(request: NextRequest) {
   // (e.g. a forged `tool_calls`). This mapping is what actually prevents unexpected fields from ever
   // reaching Ollama — the values passed to callOllamaOnce() below never contain anything beyond what
   // this route itself constructs (here, and later in the tool-loop below).
-  const conversation: ChatMessage[] = incoming.map((value) => {
-    const v = value as { role: "system" | "user" | "assistant"; content: string };
-    return { role: v.role, content: v.content };
-  });
+  //
+  // STEP 79 — prepended with exactly one server-authored system message, built fresh per request by
+  // buildAssistantSystemPrompt() (above) and never derived from `incoming`. isValidIncomingMessage()
+  // no longer accepts role:"system" from the client at all (see its STEP 79 comment), so there is no
+  // client-submitted message this could ever be replaced, out-ranked, or duplicated by — it is always
+  // the first element, always exactly one, on every request.
+  const conversation: ChatMessage[] = [
+    { role: "system", content: buildAssistantSystemPrompt() },
+    ...incoming.map((value) => {
+      const v = value as { role: "user" | "assistant"; content: string };
+      return { role: v.role, content: v.content };
+    }),
+  ];
 
   // ===== Tool round(s): non-streaming, so tool_calls can be inspected reliably. =====
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {

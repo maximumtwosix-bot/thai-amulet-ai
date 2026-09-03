@@ -69,6 +69,16 @@ function isValidIncomingMessage(
   );
 }
 
+// STEP 75 hardening — a client-submitted message's `content` must not exceed this length. Checked
+// as its own explicit step (never silently truncated) so an over-limit request gets a specific,
+// honest 400 rather than being quietly cut down to a different message than the client sent.
+const MAX_MESSAGE_CONTENT_LENGTH = 8000;
+
+function exceedsMaxMessageLength(value: unknown): boolean {
+  const v = value as { content: string };
+  return v.content.length > MAX_MESSAGE_CONTENT_LENGTH;
+}
+
 function jsonError(error: string, status: number) {
   return NextResponse.json({ success: false, error }, { status });
 }
@@ -188,7 +198,23 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const conversation: ChatMessage[] = incoming as ChatMessage[];
+  if (incoming.some(exceedsMaxMessageLength)) {
+    return jsonError(
+      `Each message's content must be at most ${MAX_MESSAGE_CONTENT_LENGTH} characters`,
+      400
+    );
+  }
+
+  // STEP 75 hardening — build a FRESH array of exactly { role, content } rather than casting the
+  // raw client-submitted objects. incoming.every(isValidIncomingMessage) above only checks that
+  // role/content are well-formed; it does not strip any other properties a client may have included
+  // (e.g. a forged `tool_calls`). This mapping is what actually prevents unexpected fields from ever
+  // reaching Ollama — the values passed to callOllamaOnce() below never contain anything beyond what
+  // this route itself constructs (here, and later in the tool-loop below).
+  const conversation: ChatMessage[] = incoming.map((value) => {
+    const v = value as { role: "system" | "user" | "assistant"; content: string };
+    return { role: v.role, content: v.content };
+  });
 
   // ===== Tool round(s): non-streaming, so tool_calls can be inspected reliably. =====
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {

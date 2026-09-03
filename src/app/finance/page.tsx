@@ -716,15 +716,32 @@ export default function FinancePage() {
   // order. This is UX protection only — the real gate is server-side in deleteTransaction()
   // (src/lib/transactions.ts), which rejects the request outright without ?confirm=order-linked
   // regardless of what the UI does or doesn't ask.
+  //
+  // STEP 86 — a SECOND, unconditional confirm() now always follows (previously confirmation only
+  // ever happened for the order-linked case above — a plain transaction deleted immediately with no
+  // confirmation at all). Its message is derived purely from t.attachmentCount (display-only field
+  // from GET /api/transactions, STEP 85) to warn how many evidence files will be deleted along with
+  // the record; attachmentCount is read only to pick this string — it never affects the delete
+  // request itself. Cancelling either dialog returns before setDeletingId()/fetch, so no DELETE is
+  // ever sent and no mutation occurs.
   async function removeTransaction(t: TransactionRow) {
     if (t.orderId) {
       const orderLabel = t.linkedOrderNumber ? `${t.linkedOrderNumber} (#${t.orderId})` : `#${t.orderId}`;
-      const confirmed = window.confirm(
+      const confirmedOrderLinked = window.confirm(
         `รายการนี้ผูกกับออเดอร์ ${orderLabel} — ลบแล้วออเดอร์จะไม่มีรายรับที่บันทึกไว้อีกต่อไป (ตัวออเดอร์เองจะไม่ถูกแก้ไข) ยืนยันการลบหรือไม่?`
       );
 
-      if (!confirmed) return;
+      if (!confirmedOrderLinked) return;
     }
+
+    const confirmMessage =
+      t.attachmentCount === 0
+        ? "ยืนยันการลบรายการนี้หรือไม่?\nข้อมูลรายการทางการเงินจะถูกลบและไม่สามารถกู้คืนได้"
+        : t.attachmentCount === 1
+          ? "ยืนยันการลบรายการนี้หรือไม่?\nข้อมูลรายการทางการเงินและไฟล์หลักฐาน 1 ไฟล์จะถูกลบ และไม่สามารถกู้คืนได้"
+          : `ยืนยันการลบรายการนี้หรือไม่?\nข้อมูลรายการทางการเงินและไฟล์หลักฐาน ${t.attachmentCount} ไฟล์จะถูกลบ และไม่สามารถกู้คืนได้`;
+
+    if (!window.confirm(confirmMessage)) return;
 
     setDeletingId(t.id);
 

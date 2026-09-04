@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTaxSummary, parseTaxSummaryParams } from "@/lib/taxSummary";
+import { getTaxSummary, parseTaxSummaryParams, type TaxSummaryTransaction } from "@/lib/taxSummary";
+import { ORDER_STATUS_LABELS } from "@/lib/orderStatus";
 
 export const runtime = "nodejs";
 
@@ -46,6 +47,25 @@ function csvRow(fields: Array<string | number | boolean | null>): string {
   return fields.map(csvField).join(",") + "\r\n";
 }
 
+// STEP TAX-2 — per the TAX-1 audit finding: the export previously included cancelled-order income
+// in "รายรับรวม" with no flag anywhere in the file, risking an overstated taxable-income figure if
+// used directly for filing. Reuses ORDER_STATUS_LABELS (src/lib/orderStatus.ts, STEP 32's single
+// shared source of truth — already used by src/app/tax/page.tsx for the same purpose) rather than a
+// fourth local duplicate. Falls back to the raw status string for any unrecognized value — must
+// never crash the export over an unexpected value, matching this codebase's established convention.
+function orderStatusLabel(status: string | null): string {
+  if (!status) return "";
+  return (ORDER_STATUS_LABELS as Record<string, string>)[status] ?? status;
+}
+
+// Scoped narrowly to the exact TAX-1 finding — cancelled orders only (not STEP 67's separate
+// "returned-but-not-cancelled" carve-out, which is a Profit-report-only rule per profitSummary.ts
+// and was not the audited gap here). Only ever true for income rows — an expense row is never
+// mis-read as revenue regardless of any order link.
+function isCancelledOrderIncomeRow(t: Pick<TaxSummaryTransaction, "transactionType" | "linkedOrderStatus">): boolean {
+  return t.transactionType === "income" && t.linkedOrderStatus === "cancelled";
+}
+
 // GET /api/tax/export — CSV of every transaction in the period (enough detail to continue
 // bookkeeping outside the app) plus a summary block at the end. Same params as /api/tax/summary.
 export async function GET(request: NextRequest) {
@@ -69,6 +89,10 @@ export async function GET(request: NextRequest) {
       "รหัสออเดอร์",
       "มีไฟล์แนบ",
       "หมายเหตุ",
+      // STEP TAX-2 — appended at the end (never inserted mid-row) so any existing consumer relying
+      // on the original 11 column positions is unaffected; these two are purely additive.
+      "สถานะออเดอร์ที่เกี่ยวข้อง",
+      "คำเตือนภาษี",
     ]);
 
     for (const t of summary.transactions) {
@@ -84,8 +108,23 @@ export async function GET(request: NextRequest) {
         t.orderId ?? "",
         t.hasAttachment ? "มี" : "ไม่มี",
         t.notes || "",
+        orderStatusLabel(t.linkedOrderStatus),
+        isCancelledOrderIncomeRow(t)
+          ? "⚠️ ออเดอร์นี้ถูกยกเลิก — ไม่ควรนับเป็นรายได้ที่ต้องเสียภาษี"
+          : "",
       ]);
     }
+
+    // STEP TAX-2 — computed purely by filtering the SAME summary.transactions array already
+    // returned by getTaxSummary() (src/lib/taxSummary.ts) — zero new query, zero change to that
+    // file's own totals/logic (explicitly out of scope, per the TAX-1 audit's approved fix and this
+    // STEP's own instructions). orderId is deduplicated via a Set because STEP 34's duplicate-
+    // income-per-order guard means this is normally 1:1 with row count, but counting distinct orders
+    // rather than rows is the more defensively correct definition of "how many cancelled orders".
+    const cancelledIncomeRows = summary.transactions.filter(isCancelledOrderIncomeRow);
+    const cancelledIncomeTotal = cancelledIncomeRows.reduce((sum, t) => sum + t.amount, 0);
+    const cancelledOrderCount = new Set(cancelledIncomeRows.map((t) => t.orderId)).size;
+    const taxSafeIncomeTotal = summary.totalIncome - cancelledIncomeTotal;
 
     csv += "\r\n";
     csv += csvRow(["สรุป", `${summary.period.dateFrom} ถึง ${summary.period.dateTo}`]);
@@ -93,6 +132,20 @@ export async function GET(request: NextRequest) {
     csv += csvRow(["รายจ่ายรวม", summary.totalExpense]);
     csv += csvRow(["สุทธิ", summary.netIncome]);
     csv += csvRow(["จำนวนรายการ", summary.transactionCount]);
+
+    // STEP TAX-2 — the TAX-1 audit's approved fix: "รายรับรวม" above is left completely unchanged
+    // (still the raw, cancellation-inclusive figure — same number GET /api/tax/summary and the Tax
+    // UI show, per STEP 32's rule that cancellation never changes Finance/Tax totals). This block is
+    // purely additive, giving the file itself an explicit, impossible-to-miss adjusted figure so a
+    // reader is never left to discover the cancelled-order overstatement risk on their own.
+    csv += "\r\n";
+    csv += csvRow(["คำเตือนสำหรับการยื่นภาษี — ออเดอร์ที่ยกเลิก"]);
+    csv += csvRow([
+      "รายรับรวมด้านบนยังคงรวมรายรับจากออเดอร์ที่ถูกยกเลิก (ตามกฎเดิมของระบบ — ไม่มีการแก้ไขในจุดนี้) กรุณาใช้ตัวเลขด้านล่างเพื่อประเมินรายได้ที่ต้องเสียภาษีจริง",
+    ]);
+    csv += csvRow(["รายรับจากออเดอร์ที่ยกเลิก (ไม่ควรนับเป็นรายได้)", cancelledIncomeTotal]);
+    csv += csvRow(["จำนวนออเดอร์ที่ยกเลิกซึ่งรวมอยู่ในรายรับรวมด้านบน", cancelledOrderCount]);
+    csv += csvRow(["รายรับรวม ไม่รวมออเดอร์ที่ยกเลิก (แนะนำสำหรับคำนวณภาษี)", taxSafeIncomeTotal]);
 
     csv += "\r\n";
     csv += csvRow(["รายรับตามช่องทางการขาย"]);

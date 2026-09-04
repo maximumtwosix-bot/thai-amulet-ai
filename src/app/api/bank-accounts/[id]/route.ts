@@ -167,7 +167,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       );
     }
 
-    let body: any;
+    let body: unknown;
 
     try {
       body = await request.json();
@@ -185,22 +185,24 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       );
     }
 
+    const b = body as Record<string, unknown>;
+
     const patch: Record<string, unknown> = {};
 
-    if (body.bankName !== undefined) patch.bankName = String(body.bankName);
-    if (body.accountName !== undefined) patch.accountName = String(body.accountName);
-    if (body.accountNumber !== undefined) patch.accountNumber = String(body.accountNumber);
-    if (body.accountType !== undefined) {
-      patch.accountType = body.accountType === null ? null : String(body.accountType);
+    if (b.bankName !== undefined) patch.bankName = String(b.bankName);
+    if (b.accountName !== undefined) patch.accountName = String(b.accountName);
+    if (b.accountNumber !== undefined) patch.accountNumber = String(b.accountNumber);
+    if (b.accountType !== undefined) {
+      patch.accountType = b.accountType === null ? null : String(b.accountType);
     }
-    if (body.currency !== undefined) patch.currency = String(body.currency);
-    if (body.classification !== undefined) {
+    if (b.currency !== undefined) patch.currency = String(b.currency);
+    if (b.classification !== undefined) {
       patch.classification =
-        typeof body.classification === "string" ? body.classification : "";
+        typeof b.classification === "string" ? b.classification : "";
     }
-    if (body.purpose !== undefined) patch.purpose = body.purpose;
-    if (body.note !== undefined) patch.note = body.note;
-    if (body.isActive !== undefined) patch.isActive = Boolean(body.isActive);
+    if (b.purpose !== undefined) patch.purpose = b.purpose;
+    if (b.note !== undefined) patch.note = b.note;
+    if (b.isActive !== undefined) patch.isActive = Boolean(b.isActive);
 
     const bankAccount = updateBankAccount(id, patch);
 

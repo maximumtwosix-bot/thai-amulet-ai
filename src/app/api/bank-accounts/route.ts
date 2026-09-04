@@ -151,7 +151,7 @@ export async function GET(request: NextRequest) {
 // benefit. The client already has the value it just typed, so nothing is lost by masking the reply.
 export async function POST(request: NextRequest) {
   try {
-    let body: any;
+    let body: unknown;
 
     try {
       body = await request.json();
@@ -169,19 +169,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const b = body as Record<string, unknown>;
+
     const bankAccount = createBankAccount({
-      bankName: String(body.bankName || ""),
-      accountName: String(body.accountName || ""),
-      accountNumber: String(body.accountNumber || ""),
+      bankName: String(b.bankName || ""),
+      accountName: String(b.accountName || ""),
+      accountNumber: String(b.accountNumber || ""),
       accountType:
-        body.accountType === undefined || body.accountType === null
+        b.accountType === undefined || b.accountType === null
           ? null
-          : String(body.accountType),
+          : String(b.accountType),
       currency:
-        body.currency === undefined || body.currency === null ? null : String(body.currency),
-      classification: typeof body.classification === "string" ? body.classification : "",
-      purpose: body.purpose ?? null,
-      note: body.note ?? null,
+        b.currency === undefined || b.currency === null ? null : String(b.currency),
+      classification: typeof b.classification === "string" ? b.classification : "",
+      purpose: (b.purpose as string | null | undefined) ?? null,
+      note: (b.note as string | null | undefined) ?? null,
     });
 
     return NextResponse.json({ success: true, data: toListItem(bankAccount) }, { status: 201 });

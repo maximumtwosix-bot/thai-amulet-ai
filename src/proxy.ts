@@ -37,6 +37,22 @@ function isProtectedPage(pathname: string): boolean {
   // STEP 74 — Local AI Assistant chat UI. New page, new prefix, same reasoning as /customers above.
   if (pathname === "/assistant") return true;
 
+  // STEP B.4 — Bank Account UI page. Exact match only, same as /customers, /assistant, /tax above —
+  // no /bank/[id] sub-route exists yet (no UI at all exists yet, per STEP B.4's scope), so there is
+  // no sub-route requirement to design for; a prefix rule (pathname.startsWith("/bank/")) would be
+  // speculative. When a future STEP adds a /bank/[id] page this rule extends the same way /orders
+  // did (STEP 29/31/32/34) — not before.
+  if (pathname === "/bank") return true;
+
+  // STEP C.5 — Bank Statement Import UI. This is the STEP the comment above anticipated: /bank now
+  // has a real sub-route (/bank/statements, /bank/statements/[id]), so this extends the same way
+  // /orders did — prefix match, matching src/app/bank/statements/[id]/page.tsx's real route shape.
+  if (pathname === "/bank/statements" || pathname.startsWith("/bank/statements/")) return true;
+
+  // STEP D.7 — Reconciliation UI. Same extension pattern again — /bank/reconciliation,
+  // /bank/reconciliation/[id].
+  if (pathname === "/bank/reconciliation" || pathname.startsWith("/bank/reconciliation/")) return true;
+
   return false;
 }
 
@@ -67,9 +83,16 @@ function isProtectedPage(pathname: string): boolean {
 // inside one of these two prefixes (and is correctly gated) or outside them (and was never sensitive
 // to begin with) — no extra sanitization is added here, matching this file's existing convention of
 // trusting Next's own request normalization rather than re-implementing it.
+// STEP C.2 — bank statement source files (CSV/etc. uploads) are AT LEAST as sensitive as the
+// transaction-attachments evidence above (a full slice of real transaction history, often including
+// counterparty names/references embedded in bank description text) — gated the exact same way, same
+// reasoning, same convention. No file-upload code exists yet in STEP C.2 (that starts at STEP C.3),
+// but the path is protected now so nothing can ever land here unauthenticated once it does — same
+// "protect the path before the feature exists" approach STEP B.4 used for /bank before the page did.
 function isProtectedGeneratedFile(pathname: string): boolean {
   if (pathname.startsWith("/generated/transaction-attachments/")) return true;
   if (pathname.startsWith("/generated/ai-slip-previews/")) return true;
+  if (pathname.startsWith("/generated/bank-statements/")) return true;
 
   return false;
 }
@@ -103,6 +126,21 @@ function isProtectedApi(pathname: string): boolean {
   // new auth mechanism, this route relies entirely on this existing gate (same convention already
   // documented on /api/orders/[id]/status/route.ts etc.: the route itself does not re-check auth).
   if (pathname.startsWith("/api/assistant/")) return true;
+
+  // STEP B.3 — Bank Account API. New prefix, needs its own rule same as /api/customers/
+  // /api/profit above — this is the minimal, necessary change identified by the STEP B.3 audit
+  // (without it, /api/bank-accounts/* would be a public, unauthenticated API, which the account-
+  // number security requirement for this feature cannot allow). No other proxy logic changed.
+  if (pathname === "/api/bank-accounts" || pathname.startsWith("/api/bank-accounts/")) return true;
+
+  // STEP C.2 — Bank Statement API. No route file exists yet (STEP C.3 builds the actual upload/
+  // preview/confirm endpoints) — protected now, same reasoning as isProtectedGeneratedFile() above:
+  // the path is gated before the feature exists, not after.
+  if (pathname === "/api/bank-statements" || pathname.startsWith("/api/bank-statements/")) return true;
+
+  // STEP D.6 — Reconciliation API. New prefix, needs its own rule same as /api/bank-accounts/
+  // /api/bank-statements above — per the approved STEP D.5 audit contract.
+  if (pathname === "/api/reconciliation" || pathname.startsWith("/api/reconciliation/")) return true;
 
   return false;
 }
@@ -152,6 +190,14 @@ export const config = {
     "/tax",
     "/customers",
     "/assistant",
+    // STEP B.4 — see isProtectedPage() above.
+    "/bank",
+    // STEP C.5 — see isProtectedPage() above.
+    "/bank/statements",
+    "/bank/statements/:path*",
+    // STEP D.7 — see isProtectedPage() above.
+    "/bank/reconciliation",
+    "/bank/reconciliation/:path*",
     "/api/products",
     "/api/products/:path*",
     "/api/orders",
@@ -164,9 +210,20 @@ export const config = {
     "/api/customers/:path*",
     "/api/profit/:path*",
     "/api/assistant/:path*",
+    // STEP B.3 — see isProtectedApi() above.
+    "/api/bank-accounts",
+    "/api/bank-accounts/:path*",
+    // STEP C.2 — see isProtectedApi() above.
+    "/api/bank-statements",
+    "/api/bank-statements/:path*",
+    // STEP D.6 — see isProtectedApi() above.
+    "/api/reconciliation",
+    "/api/reconciliation/:path*",
     // STEP A.5 — see isProtectedGeneratedFile() above for exactly which two prefixes and why only
     // these two (not all of /generated/).
     "/generated/transaction-attachments/:path*",
     "/generated/ai-slip-previews/:path*",
+    // STEP C.2 — see isProtectedGeneratedFile() above.
+    "/generated/bank-statements/:path*",
   ],
 };

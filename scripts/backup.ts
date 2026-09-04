@@ -38,6 +38,19 @@ const BACKUP_ROOT = process.env.BACKUP_DIR || "C:\\Users\\maxim\\thai-amulet-bac
 
 // Same table list as this STEP's audit baseline — kept as a fixed, hardcoded array (not user input,
 // same pattern as check-db.cjs) so template-literal table-name interpolation below is safe.
+//
+// STEP B.6 — added "bank_accounts" (STEP B.1). The actual backup mechanism (db.backup() below) has
+// always copied the entire database file regardless of this list — bank_accounts data was never
+// missing from any backup — but the STEP B.6 audit found this list itself (used only for the
+// manifest's before/after row-count verification) hadn't been updated, so a backup's manifest could
+// not confirm bank_accounts specifically came through intact.
+//
+// STEP C.2 — same reasoning, added "bank_statements" and "bank_statement_transactions" (src/lib/db.ts).
+// Same non-coverage-gap: db.backup() already copies these tables' data regardless of this list.
+//
+// STEP D.3 — same reasoning again, added "bank_reconciliation_matches" and
+// "bank_reconciliation_audit" (src/lib/db.ts, per docs/RECONCILIATION_DATA_MODEL.md). Cosmetic only —
+// db.backup() already copies these tables' data regardless of this list.
 const TABLES_TO_COUNT = [
   "products",
   "orders",
@@ -47,6 +60,11 @@ const TABLES_TO_COUNT = [
   "transaction_attachments",
   "customers",
   "ai_cost_ledger",
+  "bank_accounts",
+  "bank_statements",
+  "bank_statement_transactions",
+  "bank_reconciliation_matches",
+  "bank_reconciliation_audit",
 ] as const;
 
 function timestamp(): string {

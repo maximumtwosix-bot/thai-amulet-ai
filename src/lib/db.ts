@@ -360,6 +360,327 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_order_delivery_proofs_order_id
     ON order_delivery_proofs(order_id);
+
+  -- STEP B.1 — BankAccount data model (per STEP B audit, approved). Standalone entity: NO FK to
+  -- transactions/orders/customers in this round. The STEP B audit found transactions.payment_method
+  -- already doing double duty — validated 'transfer'/'cod' on order-linked rows, but in practice also
+  -- used (via the Finance AI-extract flow) as free-text bank/channel name, never validated. Rather
+  -- than repurpose that column, BankAccount is introduced as a wholly new, independent table;
+  -- transactions.payment_method is untouched by this migration and keeps its exact current meaning.
+  -- Wiring a real relationship between transactions and bank_accounts is explicitly deferred to a
+  -- future STEP (once STEP C/D's BankStatement/Reconciliation shape is known) — adding that FK now,
+  -- before the shape is known, is exactly the premature-relation risk the STEP B audit flagged. No
+  -- CRUD/API/UI reads or writes this table yet — that starts at STEP B.2.
+  --
+  -- classification (BUSINESS/PERSONAL/MIXED) is NOT NULL with NO DEFAULT — same convention as
+  -- transactions.transaction_date ("no DEFAULT, callers must always supply it explicitly"): the STEP
+  -- B audit requires this can never be silently assumed BUSINESS or PERSONAL, so every caller (STEP
+  -- B.2's create function) must pass it explicitly. Allowed values, enforced in the TS layer once
+  -- STEP B.2 exists (matching this codebase's existing convention for every other enum-like TEXT
+  -- column above — transaction_type/category/sales_channel all use TS-layer validation, never a SQL
+  -- CHECK constraint): 'BUSINESS' | 'PERSONAL' | 'MIXED'.
+  --
+  -- account_type is nullable free TEXT — not every account's type is known/relevant at entry time.
+  -- Allowed values, once STEP B.2 adds TS-layer validation: 'SAVINGS' | 'CURRENT' | 'OTHER' — no
+  -- richer taxonomy, since nothing in the B-K roadmap needs one.
+  --
+  -- account_number is stored as plain TEXT — the real value, never a masked "****1234" placeholder.
+  -- Masking is a display-only concern for a future API layer (STEP B.3): the DB must hold the real
+  -- number so duplicate-detection here and any future BankStatement reconciliation (STEP C/D, which
+  -- must match real statement numbers against real account numbers) work correctly. This table will
+  -- only become reachable once STEP B.4 adds it to src/proxy.ts's session-cookie gate (not part of
+  -- this STEP) — same access-control model as every other Finance table.
+  --
+  -- Uniqueness is (bank_name, account_number) as a COMPOSITE index, not account_number alone: account
+  -- numbers are assigned independently per bank, so the same digit string can legitimately belong to
+  -- two different banks — a bare UNIQUE on account_number would incorrectly reject that. The
+  -- composite index is NOT scoped to is_active — a deactivated account's number still reserves the
+  -- slot, so re-adding "the same account" as a second row is rejected; the correct action is
+  -- reactivating the existing (deactivated) row, which also keeps any future BankStatement/
+  -- Reconciliation relation (STEP C/D) pointed at one single, stable row per real-world account.
+  --
+  -- is_active (default 1) is the soft-deactivate flag the STEP B audit calls for. Hard DELETE is
+  -- intentionally NOT restricted by this table alone right now — there is no transaction/statement/
+  -- reconciliation relation yet for a DELETE to need to check against. STEP B.2's CRUD layer must
+  -- enforce "block hard delete once linked data exists" the moment such a relation is added (STEP
+  -- C/D) — deferred, not forgotten; documented here so it is not missed later.
+  --
+  -- id remains a plain internal INTEGER surrogate key, same as every other table — account_number is
+  -- never used as an identifier/slug/URL parameter anywhere.
+  CREATE TABLE IF NOT EXISTS bank_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bank_name TEXT NOT NULL,
+    account_name TEXT NOT NULL,
+    account_number TEXT NOT NULL,
+    account_type TEXT,
+    currency TEXT NOT NULL DEFAULT 'THB',
+    classification TEXT NOT NULL,
+    purpose TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_accounts_bank_account_number
+    ON bank_accounts(bank_name, account_number);
+
+  CREATE INDEX IF NOT EXISTS idx_bank_accounts_is_active
+    ON bank_accounts(is_active);
+
+  -- STEP C.2 — BankStatement + BankStatementTransaction (per STEP C.0/C.1/C.2 audits, approved).
+  -- BankStatement anchors one uploaded/imported statement file to exactly one bank_accounts row.
+  -- NO relation to transactions (Finance) is created here or anywhere in this migration — STEP C.1
+  -- explicitly deferred reconciliation/matching to STEP D; wiring that relation now would be exactly
+  -- the premature-relation risk STEP B's audit already flagged once for bank_accounts itself.
+  --
+  -- Everything describing "what was uploaded" (bank_account_id, source_file_name/hash/url) is meant
+  -- to be treated as immutable by every caller from the moment a row exists — this table has no
+  -- UPDATE path for those columns in src/lib/bankStatements.ts (STEP C.2), only for status/summary
+  -- fields, which is the one part of a statement genuinely expected to change over its lifecycle.
+  --
+  -- status (STEP C.0 §18 / C.2 §4): TEXT, NOT NULL, DEFAULT 'UPLOADED' — unlike bank_accounts.
+  -- classification, a default is safe and correct here because every new statement genuinely starts
+  -- life as 'UPLOADED' with no human judgment call being hidden (matches orders.status/
+  -- delivery_status's own DEFAULT 'pending' convention, not transactions.transaction_date's
+  -- no-default convention). Allowed values, enforced in the TS layer once STEP C.2's library exists
+  -- (same convention as every other enum-like TEXT column in this file — never a SQL CHECK):
+  -- 'UPLOADED' | 'VALIDATING' | 'PREVIEW_READY' | 'IMPORTING' | 'IMPORTED' | 'FAILED' | 'CANCELLED'.
+  --
+  -- statement_period_from/_to are nullable — the period is derived from the file's own content or
+  -- user-confirmed at preview time (STEP C.0 §9), never guessed at upload before the file is even
+  -- parsed.
+  --
+  -- source_file_hash is SHA-256 (hex) of the raw uploaded file — the file-level idempotency key per
+  -- STEP C.1 Decision 5. Uniqueness is (bank_account_id, source_file_hash), a COMPOSITE index, not a
+  -- bare unique on the hash alone — same reasoning as bank_accounts' own (bank_name, account_number)
+  -- composite from STEP B.1: the same byte-identical file is only meaningfully "the same statement"
+  -- for the same account.
+  --
+  -- source_file_url will point under a NEW protected prefix, /generated/bank-statements/... (STEP
+  -- C.2 adds this prefix to src/proxy.ts's isProtectedGeneratedFile()/matcher, mirroring STEP A.5's
+  -- exact pattern for transaction-attachments/ai-slip-previews) — never a publicly-fetchable path.
+  --
+  -- No ON DELETE clause on the bank_account_id FK — matches this file's 100% consistent existing
+  -- convention (no table anywhere in this schema uses ON DELETE CASCADE). Combined with this
+  -- connection's foreign_keys pragma being ON (confirmed live in the STEP B.7 audit), this means
+  -- SQLite will refuse to delete a bank_accounts row that still has a bank_statements row pointing
+  -- at it (SQLITE_CONSTRAINT_FOREIGNKEY) — the same structural mechanism that already protects
+  -- products today (see src/app/api/products/route.ts's existing catch for that exact error code).
+  -- STEP C.2's bankAccounts.ts also adds an app-layer pre-check ahead of this for a friendly error
+  -- message; the FK here is the backstop that can never be bypassed by a future code path that
+  -- forgets to call it.
+  CREATE TABLE IF NOT EXISTS bank_statements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bank_account_id INTEGER NOT NULL,
+    source_file_name TEXT NOT NULL,
+    source_file_hash TEXT NOT NULL,
+    source_file_url TEXT NOT NULL,
+    statement_period_from TEXT,
+    statement_period_to TEXT,
+    status TEXT NOT NULL DEFAULT 'UPLOADED',
+    row_count_total INTEGER,
+    row_count_valid INTEGER,
+    row_count_invalid INTEGER,
+    row_count_duplicate INTEGER,
+    error_summary TEXT,
+    imported_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (bank_account_id) REFERENCES bank_accounts(id)
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statements_account_file_hash
+    ON bank_statements(bank_account_id, source_file_hash);
+
+  CREATE INDEX IF NOT EXISTS idx_bank_statements_bank_account_id
+    ON bank_statements(bank_account_id);
+
+  CREATE INDEX IF NOT EXISTS idx_bank_statements_status
+    ON bank_statements(status);
+
+  -- STEP C.2 — BankStatementTransaction is immutable source evidence from the bank (STEP C.1
+  -- Decision 4) — src/lib/bankStatements.ts provides no UPDATE function for this table at all, only
+  -- INSERT (one row at a time; STEP C.3's atomic batch-import orchestration is explicitly out of
+  -- scope here) and SELECT. STEP D must never rewrite amount/date/description on an existing row —
+  -- any Finance-transaction mapping belongs in a future, separate reconciliation/mapping table that
+  -- references rows here by id, never mutates them.
+  --
+  -- bank_account_id is DELIBERATELY DENORMALIZED from the parent bank_statements row (copied once at
+  -- insert time, never updated) — SQLite cannot express a unique constraint across a join, so this
+  -- column exists purely so the two transaction-level dedup indexes below can be declared directly
+  -- against this table instead of requiring a subquery through bank_statement_id.
+  --
+  -- Money fields (debit/credit/amount/balance) are INTEGER, in satang (1 THB = 100 satang) — per
+  -- STEP C.1 Decision 1: this project has no Prisma/Postgres and SQLite has no true fixed-point
+  -- DECIMAL/NUMERIC storage (column affinity is not arbitrary-precision; better-sqlite3 marshals
+  -- every number through an IEEE-754 double regardless of declared affinity) — INTEGER minor-units is
+  -- the only way to make "never use JS floating point as the financial source of truth" true without
+  -- adding a dependency. This is a deliberate, evidence-based departure from every OTHER money column
+  -- in this schema (products.price/cost, orders.total, transactions.amount are all REAL) — safe here
+  -- specifically because this is a brand-new table with no legacy data to reconcile against that
+  -- convention. amount = credit − debit, computed via integer arithmetic in the TS layer at insert
+  -- time (src/lib/bankStatements.ts) — positive = inflow/credit, negative = outflow/debit. STEP D
+  -- will need to convert transactions.amount (REAL, baht) when comparing against this table's amount
+  -- (INTEGER, satang) — documented here so that unit mismatch is never a surprise later.
+  --
+  -- description is nullable — a real bank statement row can legitimately have sparse/empty
+  -- description text; forcing NOT NULL + non-empty would mean rejecting genuine source data, which
+  -- STEP C.1's source-of-truth principle forbids.
+  --
+  -- duplicate_fingerprint is NOT NULL — the composite identity STEP C.1 Decision 5/STEP C.0 §7
+  -- describe (bank_account_id + date + amount + direction + description + an occurrence-index
+  -- component distinguishing legitimately repeated same-day/same-amount transactions within one
+  -- import) — computed by src/lib/bankStatements.ts's caller (STEP C.3), never derived here.
+  --
+  -- Uniqueness: bank-provided bank_transaction_id is the PREFERRED identity when present (STEP C.1's
+  -- BANK_PROVIDED_IDENTIFIER, stronger than any guessed fingerprint) — enforced via a partial unique
+  -- index that only applies when the column is non-null, since most rows won't have one. The
+  -- fingerprint-based index is the fallback for rows with no bank-provided id. Neither index alone is
+  -- a full duplicate-prevention guarantee against a genuinely distinct transaction that happens to
+  -- collide across two separate statement uploads — STEP C.0/C.1 already require that case to surface
+  -- as a human-reviewable candidate, never a silent block or a silent import; the app-layer decision
+  -- of how a user re-confirms "this is genuinely different" (and how that changes the fingerprint
+  -- input so a second insert can succeed) is explicitly STEP C.3's job, not built here.
+  --
+  -- No ON DELETE clause on either FK — same reasoning as bank_statements.bank_account_id above: this
+  -- makes deleting a bank_statements row that still has transaction rows fail closed
+  -- (SQLITE_CONSTRAINT_FOREIGNKEY) rather than silently cascading away source evidence, matching STEP
+  -- C.2's explicit instruction that BankStatement must not cascade-delete its transactions.
+  CREATE TABLE IF NOT EXISTS bank_statement_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bank_statement_id INTEGER NOT NULL,
+    bank_account_id INTEGER NOT NULL,
+    bank_transaction_id TEXT,
+    transaction_date TEXT NOT NULL,
+    value_date TEXT,
+    description TEXT,
+    debit INTEGER,
+    credit INTEGER,
+    amount INTEGER NOT NULL,
+    balance INTEGER,
+    raw_row_index INTEGER,
+    raw_row_text TEXT,
+    duplicate_fingerprint TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (bank_statement_id) REFERENCES bank_statements(id),
+    FOREIGN KEY (bank_account_id) REFERENCES bank_accounts(id)
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_transactions_bank_txn_id
+    ON bank_statement_transactions(bank_account_id, bank_transaction_id)
+    WHERE bank_transaction_id IS NOT NULL;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_transactions_fingerprint
+    ON bank_statement_transactions(bank_account_id, duplicate_fingerprint);
+
+  CREATE INDEX IF NOT EXISTS idx_bank_statement_transactions_statement_id
+    ON bank_statement_transactions(bank_statement_id);
+
+  -- STEP D.3 — Reconciliation schema, per the approved design in
+  -- docs/RECONCILIATION_DATA_MODEL.md (STEP D.2). Two new, wholly separate tables — NO column/FK is
+  -- added to bank_statement_transactions, transactions, bank_statements, or bank_accounts by this
+  -- migration (Design Principle 4 of that document). Both tables are additive
+  -- (CREATE TABLE IF NOT EXISTS) and start empty; no backfill, no ALTER of any existing table.
+  --
+  -- bank_reconciliation_matches is a many-to-many mapping layer between bank_statement_transactions
+  -- (immutable bank source evidence, STEP C.2) and transactions (the business/accounting record,
+  -- STEP 20) — it references both by id only and never rewrites either side. Per
+  -- docs/RECONCILIATION_DATA_MODEL.md §2:
+  --
+  -- bank_statement_transaction_id / transaction_id — immutable once a row exists; a wrong link is
+  --   fixed by unmatching this row and creating a new one, never by repointing these columns. No
+  --   ON DELETE clause on either FK — matches this schema's 100% consistent convention (no table
+  --   anywhere here uses ON DELETE CASCADE).
+  -- allocated_amount — INTEGER satang (same minor-unit convention as
+  --   bank_statement_transactions.amount, STEP C.1 Decision 1 — no FLOAT, no Decimal dependency
+  --   available). Signed, same sign convention as the referenced bank row. Sum-bounded invariants
+  --   (never exceeding either source row's own amount) and the zero-allocation prohibition are
+  --   enforced at the TS layer when a future STEP adds write functions — never a SQL CHECK, matching
+  --   this file's 100% consistent convention of validating enum-like/business-rule columns in code,
+  --   not the database.
+  -- match_strategy — TEXT, NOT NULL, no default (must always be supplied explicitly, same convention
+  --   as bank_accounts.classification's "no silent default" reasoning). Allowed values, enforced in
+  --   the TS layer (src/lib/reconciliation.ts, this STEP): 'BANK_TRANSACTION_ID' |
+  --   'EXACT_DATE_AMOUNT_ACCOUNT' | 'CONSTRAINED_FINGERPRINT' | 'MANUAL'. Purely descriptive of how a
+  --   pairing was originally identified — never itself a confirmation signal (see status below).
+  -- status — TEXT, NOT NULL, DEFAULT 'SUGGESTED' (a brand-new row genuinely always starts as a
+  --   proposal, same reasoning as bank_statements.status's own safe default). Allowed values, TS-layer
+  --   enforced: 'SUGGESTED' | 'MATCHED' | 'CONFIRMED' | 'EXCLUDED' | 'UNMATCHED' | 'NEEDS_REVIEW'. The
+  --   CONFIRMED transition is never automatic — it requires an explicit human action in every future
+  --   caller, regardless of match_strategy.
+  -- note — nullable TEXT, required only at the TS layer (not here) when status becomes EXCLUDED or
+  --   NEEDS_REVIEW.
+  -- confirmed_at/confirmed_by, unmatched_at/unmatched_by — nullable, set-once fields populated only on
+  --   their respective transitions. No multi-user identity model exists in this app (single shared
+  --   admin session, src/lib/auth.ts) — *_by columns hold a fixed literal, not a real per-user
+  --   identity; documented limitation, not a fake user model (docs/RECONCILIATION_DATA_MODEL.md §6).
+  --
+  -- Uniqueness: idx_bank_reconciliation_matches_active_pair is a PARTIAL unique index — the same
+  -- (bank_statement_transaction_id, transaction_id) pair can have at most one row whose status is
+  -- currently "active" (SUGGESTED/MATCHED/CONFIRMED/NEEDS_REVIEW), but historical terminal rows
+  -- (UNMATCHED/EXCLUDED) for that same pair may coexist, since re-linking the same pair after an
+  -- unmatch/un-exclude always creates a NEW row rather than reusing the old one (§10 of the design
+  -- doc) — this is the concrete duplicate-mapping/concurrent-double-submit prevention mechanism.
+  CREATE TABLE IF NOT EXISTS bank_reconciliation_matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bank_statement_transaction_id INTEGER NOT NULL,
+    transaction_id INTEGER NOT NULL,
+    allocated_amount INTEGER NOT NULL,
+    match_strategy TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'SUGGESTED',
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    confirmed_at TEXT,
+    confirmed_by TEXT,
+    unmatched_at TEXT,
+    unmatched_by TEXT,
+    FOREIGN KEY (bank_statement_transaction_id) REFERENCES bank_statement_transactions(id),
+    FOREIGN KEY (transaction_id) REFERENCES transactions(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_bank_reconciliation_matches_bank_txn_id
+    ON bank_reconciliation_matches(bank_statement_transaction_id);
+
+  CREATE INDEX IF NOT EXISTS idx_bank_reconciliation_matches_transaction_id
+    ON bank_reconciliation_matches(transaction_id);
+
+  CREATE INDEX IF NOT EXISTS idx_bank_reconciliation_matches_status
+    ON bank_reconciliation_matches(status);
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_reconciliation_matches_active_pair
+    ON bank_reconciliation_matches(bank_statement_transaction_id, transaction_id)
+    WHERE status IN ('SUGGESTED', 'MATCHED', 'CONFIRMED', 'NEEDS_REVIEW');
+
+  -- STEP D.3 — bank_reconciliation_audit, per docs/RECONCILIATION_DATA_MODEL.md §6. Append-only audit
+  -- trail for every human decision (and system-detected NEEDS_REVIEW flag) made against a
+  -- bank_reconciliation_matches row — no UPDATE/DELETE function will ever be provided for this table,
+  -- same convention as this schema's other immutable audit trails (inventory_movements, STEP 36;
+  -- ai_cost_ledger, STEP 21). Deliberately does NOT log SUGGESTED row creation (a system-generated
+  -- candidate is not a decision) — only MATCHED/CONFIRMED/UNMATCHED/EXCLUDED/NEEDS_REVIEW_FLAGGED/
+  -- RESOLVED actions are recorded. Does NOT denormalize bank_statement_transaction_id/transaction_id
+  -- onto this table (unlike bank_statement_transactions.bank_account_id, STEP C.2, which was
+  -- denormalized specifically because SQLite cannot express a unique index across a join) — nothing
+  -- here needs an index across that join, since match_id's own two FKs are immutable, so
+  -- audit -> match -> (bank row, financial row) always resolves correctly via a plain join.
+  CREATE TABLE IF NOT EXISTS bank_reconciliation_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    reason TEXT,
+    performed_by TEXT NOT NULL,
+    performed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (match_id) REFERENCES bank_reconciliation_matches(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_bank_reconciliation_audit_match_id
+    ON bank_reconciliation_audit(match_id);
+
+  CREATE INDEX IF NOT EXISTS idx_bank_reconciliation_audit_performed_at
+    ON bank_reconciliation_audit(performed_at);
 `);
 
 // STEP 15 — เก็บ duration/size ของวิดีโอที่ดาวน์โหลดสำเร็จจริง (ยืนยันด้วย ffprobe) ไว้แสดงใน UI
@@ -494,6 +815,29 @@ if (!orderColumnNames.has("tracking_number")) {
 
 if (!orderColumnNames.has("delivery_status")) {
   db.exec("ALTER TABLE orders ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'pending'");
+}
+
+// STEP C.6 — persists the column mapping (including dateFormat, which is already a field *within*
+// BankStatementColumnMapping — src/lib/bankStatementCsv.ts — not a second, duplicate representation)
+// that produced a statement's preview, so a PREVIEW_READY statement can be re-parsed on demand by a
+// future GET /api/bank-statements/[id] (deterministic: same stored file + same persisted mapping ->
+// same rows, every time — the CSV engine is pure), and so POST .../confirm no longer needs the
+// client to resubmit the mapping at all (closing the STEP C.4 PREVIEW_MISMATCH-by-resubmitted-mapping
+// gap that STEP C.6's audit flagged). Nullable — existing rows created before this column existed
+// (none exist in production as of this STEP, verified live) get NULL, never backfilled/guessed;
+// every future INSERT (src/lib/bankStatements.ts createBankStatement()) always supplies it, since
+// the calling route already validates the mapping's shape before creating the statement row at all.
+// Stored as JSON TEXT — this project has no JSON column type (SQLite has none natively) and no
+// schema-validation dependency, matching this table's own existing status/enum columns, which are
+// also plain TEXT validated in the TS layer, never a native/typed column.
+const bankStatementColumns = db
+  .prepare("PRAGMA table_info(bank_statements)")
+  .all() as Array<{ name: string }>;
+
+const bankStatementColumnNames = new Set(bankStatementColumns.map((column) => column.name));
+
+if (!bankStatementColumnNames.has("column_mapping")) {
+  db.exec("ALTER TABLE bank_statements ADD COLUMN column_mapping TEXT");
 }
 
 export default db;

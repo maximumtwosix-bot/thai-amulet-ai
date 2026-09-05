@@ -5802,6 +5802,70 @@ were changed by this entry).
 
 ---
 
+## STEP 83 — LIVE VERIFICATION OF STEP 82 ITEMS 1-3 (READ-ONLY, NO DATA CHANGED)
+
+Date: 2026-09-05
+
+**Purpose**: STEP 82 explicitly flagged that items 1-3 (STEP 63's returned-order warning, TAX-1/TAX-2's
+cancelled-order export warning, and the Bank/Statement/Reconciliation feature) had no recorded
+post-implementation live-verification evidence. This entry performs and records that pass. Every
+check below used the real, already-running production process (`GET`/authenticated `GET` requests
+only) — **no order, transaction, customer, bank account, bank statement, or reconciliation record was
+created, modified, or deleted**, and no temporary data of any kind was created for this pass.
+
+**1. TAX-1/TAX-2 cancelled-order export warning — LIVE-VERIFIED against real pre-existing data.**
+Real order **#38** (`ORD-1788275591118`, customer #5 — the same order/customer this document has used
+as an unchanged-data anchor since STEP 76) is a genuinely cancelled order with a real linked income
+transaction, **#69** (created 2026-09-01, ฿299). Confirmed via `GET /api/tax/summary`:
+transaction 69's `linkedOrderStatus` is correctly `"cancelled"`. Confirmed via
+`GET /api/tax/export` for that date: the CSV row for transaction 69 carries `🚫 ยกเลิก` in the order
+status column and `⚠️ ออเดอร์นี้ถูกยกเลิก — ไม่ควรนับเป็นรายได้ที่ต้องเสียภาษี` in the tax-warning
+column; the trailing summary block correctly reports cancelled-order income of ฿299, a cancelled
+order count of 1, and a tax-safe income total of ฿0 (correct, since transaction 69 was the only
+income transaction in that day's range). This is genuine live confirmation, not code inspection.
+
+**2. STEP 63 returned-but-not-cancelled warning — NOT live-verified; no real example exists.**
+Checked all 3 real orders currently in the system (`#1`, `#38`, `#45`) — none has
+`delivery_status = "returned"` while `status != "cancelled"`, so there is currently no real order that
+would trigger this warning path. What **was** confirmed: the rendering condition
+(`t.linkedDeliveryStatus === "returned" && t.linkedOrderStatus !== "cancelled"`) is present, correctly
+gated, and unchanged in both `src/app/finance/page.tsx` and `src/app/tax/page.tsx` — but this is
+source-code inspection, not an observed live case, and per this task's own instructions is not
+reported as a passed live test. Creating a temporary order in a `returned` delivery state to force
+this path was deliberately not done, since it was not clearly required and this pass prioritized
+verifying against real data wherever real data already existed.
+
+**3. Bank Account / Bank Statement / Reconciliation — auth gates and empty-state behavior
+LIVE-VERIFIED; no real workflow data exists to test against.** `GET /api/bank-accounts`,
+`GET /api/bank-statements`, and `GET /api/reconciliation` all returned `HTTP 200` with
+`{"success":true,"data":[],"count":0}` when authenticated — consistent with the STEP 82 backup
+manifest's row counts of 0 for `bank_accounts`, `bank_statements`, `bank_statement_transactions`,
+`bank_reconciliation_matches`, and `bank_reconciliation_audit`. **This production instance has never
+had a real bank account, statement import, or reconciliation match created in it.** The same three
+endpoints, plus the `/bank` page, were also confirmed to correctly reject unauthenticated requests
+(`401 {"success":false,"error":"Unauthorized"}` for the three API endpoints; `307` redirect to
+`/login?next=%2Fbank` for the page) — the authentication gate is confirmed intact. **No verification
+of the actual CSV-import, matching, or confirm/exclude/unmatch workflows was performed or is claimed**
+— doing so would require creating real or clearly-labeled temporary bank account/statement/
+reconciliation records, which was not done in this pass.
+
+**4. Post-pass data-safety check.** Transaction count confirmed unchanged (6, same as every prior
+baseline this session). Order #38 and Order #1 confirmed byte-identical to their state before this
+verification pass.
+
+**5. Explicit limitation — no browser was used.** The Claude in Chrome browser extension was declined
+for this session (per earlier instruction in this conversation), so no actual rendered-DOM/visual
+confirmation of the Finance or Tax page's cancelled-order warning was performed — only the underlying
+API data (item 1 above) and the unchanged source-code rendering condition were confirmed. This is not
+claimed as a browser/UI verification.
+
+**STEP 83 STATUS: PASS for items verifiable via read-only HTTP checks (1, and the auth-gate/empty-state
+half of 3); NOT VERIFIED for item 2 (no real trigger case exists) and the workflow half of item 3 (no
+real data exists to exercise CSV import/matching against) — both remain open, as stated above, not
+silently resolved.**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:
@@ -5824,12 +5888,16 @@ their own STEP:
 - Further Ollama/tool-use reliability work beyond the STEP 79 grounding system prompt.
 - A live browser/React click test of the STEP 80 Approve double-click guard (only a plain-function
   pattern reproduction exists as of STEP 81 — no testing-library dependency in this project).
-- No dedicated post-implementation test-run evidence (assertion counts, live verification) has been
-  recorded anywhere for the STEP 63 returned-order warning, TAX-1/TAX-2 cancelled-order export
-  warning, or the Bank Account/Bank Statement/Reconciliation feature (commits `8c685ae`, `17a1b6b`,
-  `cfea894`, `9323efb` — see STEP 82 above) — only design-time documentation and code review exist for
-  those; a live/manual verification pass would need to be run and recorded if that assurance is
-  wanted.
+- STEP 83 (above) closed the TAX-1/TAX-2 live-verification gap using real order #38/transaction #69.
+  Two gaps remain open from the original STEP 82 list:
+  - STEP 63's returned-but-not-cancelled warning has no real order to trigger it against (none of the
+    3 real orders in the system has `delivery_status = "returned"` with `status != "cancelled"`) — only
+    the unchanged source-code condition was inspected, not an observed live case.
+  - The Bank Account/Bank Statement/Reconciliation feature (commits `cfea894`, `9323efb`) has never
+    had a real bank account, statement import, or reconciliation match created in this
+    production instance (all three tables are confirmed empty) — only its authentication gates and
+    empty-list API responses were live-verified (STEP 83); the actual CSV-import/matching/confirm/
+    exclude/unmatch workflows remain untested against either real or temporary data.
 - Production logs (`logs/production-*.log`) have no rotation or retention mechanism (STEP 82, item
   4) — every production start leaves a new permanent file pair.
 

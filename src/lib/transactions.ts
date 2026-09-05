@@ -23,6 +23,7 @@ export type ExpenseCategory =
   | "PACKAGING"
   | "FACEBOOK_ADS"
   | "FUEL"
+  | "PLATFORM_FEE"
   | "OTHER";
 
 export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
@@ -33,6 +34,7 @@ export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
   "PACKAGING",
   "FACEBOOK_ADS",
   "FUEL",
+  "PLATFORM_FEE",
   "OTHER",
 ];
 

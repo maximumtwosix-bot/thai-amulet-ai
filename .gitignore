@@ -52,3 +52,6 @@ next-env.d.ts
 # Playwright MCP tool output (console logs / page snapshots from interactive testing sessions) —
 # ephemeral test-tool exhaust, not source code or a fixture the project depends on.
 /.playwright-mcp/
+
+# STEP PROD-LOG-1 — persistent production stdout/stderr logs, machine-specific runtime output.
+/logs/

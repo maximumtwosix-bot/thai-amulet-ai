@@ -5,4 +5,22 @@ $PnpmPath = "C:\Users\maxim\AppData\Local\Microsoft\WinGet\Packages\OpenJS.NodeJ
 
 Set-Location $ProjectPath
 
-& $PnpmPath start
+# STEP PROD-LOG-2 — persistent stdout/stderr logging (Option B from the PROD-LOG-1 audit).
+# One timestamped file pair per script invocation (rotation-by-restart, no dependency added).
+$LogDir = Join-Path $ProjectPath "logs"
+
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+}
+
+$Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$StdOutLog = Join-Path $LogDir "production-stdout-$Timestamp.log"
+$StdErrLog = Join-Path $LogDir "production-stderr-$Timestamp.log"
+
+# Start-Process -Wait keeps this blocking/foreground, matching the prior `& $PnpmPath start`
+# behavior exactly (no detachment). -RedirectStandardOutput/-Error capture the child process's raw
+# output streams at the OS level rather than through PowerShell's console encoding pipeline, which
+# avoids both the Windows PowerShell 5.1 NativeCommandError stderr-wrapping quirk and the ANSI-
+# codepage mojibake risk that the simpler `*>>` operator would carry for this app's Thai-text output.
+Start-Process -FilePath $PnpmPath -ArgumentList "start" -NoNewWindow -Wait `
+    -RedirectStandardOutput $StdOutLog -RedirectStandardError $StdErrLog

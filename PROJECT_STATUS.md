@@ -5866,6 +5866,77 @@ silently resolved.**
 
 ---
 
+## STEP 83B — TEMP-DATA RECONCILIATION WORKFLOW TEST ATTEMPT (BANK ACCOUNT PASSED; STATEMENT/RECONCILIATION STOPPED)
+
+Date: 2026-09-05
+
+**Purpose**: STEP 83 left the Bank Statement Import and Reconciliation workflows (its item 3) verified
+only for auth gates and empty-list responses, not for the actual import/matching workflow. This entry
+attempts a temporary-data-only live test of that workflow, following the pre-approved test matrix in
+`docs/RECONCILIATION_DATA_MODEL.md` §15, and records exactly how far it safely got.
+
+**1. Scenario A — temporary bank account: PASS.** Created a clearly labeled temporary record via
+`POST /api/bank-accounts` (`bankName: "TEST/RECON BANK - DO NOT USE"`, `accountName: "TEST/RECON TEMP
+ACCOUNT"`) → `201`, captured `id = 23` immediately. Verified via `GET /api/bank-accounts/23` (full
+detail) and `GET /api/bank-accounts` (masked list) — both correct. Applied `PATCH
+{"isActive": false}` → `200`, confirmed. Cleaned up: `DELETE /api/bank-accounts/23` → `200`, followed
+by `GET /api/bank-accounts/23` → `404`, confirming the record no longer exists.
+
+**2. Scenarios B-E (bank statement import, temp financial transaction, reconciliation
+match/confirm/unmatch/exclude, source-immutability check) — intentionally STOPPED, NOT ATTEMPTED.**
+Before creating a temporary bank statement, `src/app/api/bank-statements/route.ts`,
+`src/app/api/bank-statements/[id]/route.ts`, and
+`src/app/api/bank-statements/[id]/confirm/route.ts` were read in full: **none of them exports a
+`DELETE` handler**, and `src/lib/bankStatements.ts` has no `deleteBankStatement` function at all —
+there is no application-level path to remove a `bank_statements` or `bank_statement_transactions` row
+once created. Confirming an upload also writes a permanent file under
+`public/generated/bank-statements/<bankAccountId>/<year>/<month>/<uuid>.csv`, again with no deletion
+endpoint. Separately, `src/app/api/bank-accounts/[id]/route.ts`'s `DELETE` handler
+(`deleteBankAccount()` in `src/lib/bankAccounts.ts`) explicitly throws `BANK_ACCOUNT_HAS_STATEMENTS`
+once any `bank_statements` row references that account — so creating a statement against the Scenario
+A temp account would have also made that account permanently undeletable via the API. Separately from
+statements, `src/lib/reconciliation.ts` (near line 728) and `docs/RECONCILIATION_DATA_MODEL.md` §5/§10
+confirm the reconciliation match table is deliberately append-only: a match "is never deleted, only
+flipped to UNMATCHED... which is row-terminal" — by design, not an oversight. Creating any temporary
+reconciliation match would therefore leave a permanent row in `bank_reconciliation_matches`/
+`bank_reconciliation_audit`. Per this test's own explicit stop condition ("if the current API does not
+permit safe deletion/cleanup of a temporary record, STOP before creating dependent data that cannot be
+cleaned up safely"), Scenarios B-E were not attempted.
+
+**3. Scenario F — cleanup: PASS** for the one record actually created (Scenario A's temp bank account
+`id = 23`, deleted as described above via its exact ID, no broad `DELETE`, no delete-by-label).
+
+**4. Scenario G — post-cleanup verification: PASS.** All 9 baseline counts restored exactly:
+`products = 5`, `orders = 3`, `transactions = 6`, `customers = 2`, `bank_accounts = 0`,
+`bank_statements = 0`, `bank_statement_transactions = 0`, `bank_reconciliation_matches = 0`,
+`bank_reconciliation_audit = 0` (all confirmed via `pnpm run backup`'s row-count report). Order #38
+and Order #1 confirmed byte-identical to their pre-test snapshots via `GET /api/orders/38` and
+`GET /api/orders/1`.
+
+**5. Conclusion — Bank Statement Import and Reconciliation remain NOT live-tested in production.**
+Only their authentication gates and empty-list responses are confirmed (STEP 83, item 3). The actual
+CSV-import, preview/confirm, matching, and confirm/unmatch/exclude workflows have never been exercised
+against either real or temporary data in this production instance. Valid options going forward: (a) a
+separate staging/non-production database where temporary records can be created and left in place
+without concern, or (b) explicitly authorized direct database cleanup outside the app's own API
+(deliberately not done in this pass, per "prefer existing documented APIs/workflows... do not invent
+endpoints").
+
+**6. This is a deliberate design/safety limitation, not a code defect.** The absence of a bank
+statement delete path and the append-only reconciliation audit trail are intentional architectural
+choices (evidence immutability for bank statements; a permanent, non-repudiable audit trail for
+reconciliation decisions) — they are working as designed. The gap is in this project's ability to
+*test* that design safely against production data, not a bug in the design itself.
+
+**7. No source code, schema, configuration, or other project file was changed by this test or by
+writing this entry** (this STEP 83B section in `PROJECT_STATUS.md` is the only file change). No
+commit, no push.
+
+**STEP 83B STATUS: PASS (Scenario A, create/verify/cleanup) / STOPPED (Scenarios B-E, by design, per
+the safe-cleanup limitation above) — not a failure, a correctly-applied stop condition.**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

@@ -5995,6 +5995,77 @@ no PLATFORM_FEE record was manufactured to force a result.
 
 ---
 
+## STEP 85 — READ-ONLY POST-PUSH PRODUCTION TAX VERIFICATION
+
+Date: 2026-09-05
+
+**Purpose**: this was a **read-only** re-check of the same Production Tax page/API surface as STEP
+84, performed after `cc38a15` (the commit recording STEP 84 itself) was pushed to `origin/master`,
+to confirm the push didn't disturb anything and that the running production process still reflects
+the correct, already-deployed code.
+
+**1. Documentation push vs. runtime deployment — distinguished explicitly.** `git push` updates the
+remote git repository; it does **not** by itself change what a running Node.js process is executing.
+This STEP's central finding is that these are two different things and must not be conflated.
+
+**2. Git state, confirmed via `git fetch` + `git rev-parse`**: `HEAD = cc38a15`, `origin/master =
+cc38a15`, `git status --short` / `git diff --stat` showed no tracked modifications (only the
+pre-existing untracked `*.stepNN-backup-*` scratch files present, as always).
+
+**3. `cc38a15` and the three documentation commits before it (`886b10e`, `8cb3546`, `5f75bf3`) only
+ever modified `PROJECT_STATUS.md`.** None of them touched any application runtime source file. The
+last commit that changed actual runtime source was `757528c` (the TAX-3 feature itself); `08dbc25`
+after it changed only a deploy *script* comment (`scripts/start-production.ps1`), not app code
+bundled into the running server.
+
+**4. Production process identity — unchanged, correctly so.** The running process remained **PID
+6200**, serving the exact same `.next/BUILD_ID` (`X1RD-B0ZaZqBPm8AXcsKJ`) produced during the earlier
+TAX-3 runtime deployment (STEP 82 item 5) earlier the same day. **No restart was performed or needed**
+for this documentation-only push — there was nothing in it for a restart to pick up. Confirmed
+independently: no new `logs/production-*.log` file pair appeared during this verification (still only
+the same two pairs from earlier in the day), which is what "no restart occurred" looks like from the
+logging mechanism's own perspective.
+
+**5. Exact URLs/APIs checked**: `http://localhost:3000/tax` (authenticated),
+`GET /api/tax/summary`, `GET /api/tax/export`, `GET /api/transactions?category=PLATFORM_FEE`,
+`GET /api/orders/38`, `GET /api/health`.
+
+**6. All returned `HTTP 200`.** `/tax` was fetched with a valid authenticated session, returned no
+redirect and no login-page markers, and its body was confirmed to be the genuine Tax page shell.
+
+**7. Tax data — identical to STEP 84, as expected (no data changed between the two checks)**:
+`totalIncome = 598`, `totalExpense = 2090`, `transactionCount = 6`;
+`expenseByCategory`: `FACEBOOK_ADS = 1800 / 3`, `SHIPPING = 290 / 1`. `GET /api/tax/export` matched
+these figures exactly.
+
+**8. TAX-2 cancelled-order handling — PASS, using the same real data as STEP 84.** Order #38 /
+transaction #69 (status `cancelled`, ฿299) still correctly flagged; the CSV export still carries the
+cancellation warning and the correct adjusted arithmetic: ฿598 − ฿299 = ฿299.
+
+**9. TAX-3 PLATFORM_FEE**: `GET /api/transactions?category=PLATFORM_FEE` → `count: 0` — real data
+absent, not exercised. No test transaction was created for this check.
+
+**10. Production logs checked** (`production-stdout-20260905-181017.log`,
+`production-stderr-20260905-181017.log` — the same, unchanged pair from STEP 84, confirming no
+restart): no matches for `ERROR`, `Exception`, `FATAL`, `Unhandled`, `EADDRINUSE`, `ECONNREFUSED`,
+`Prisma`, or `panic`.
+
+**11. Data integrity — confirmed unchanged.** Transaction count 6→6, order count 3→3, Order #38
+byte-identical before and after, including `linkedIncomeTransactionId: 69`.
+
+**12. Browser/DOM/console verification: not performed.** No browser tooling was available this
+session; nothing is claimed about rendered DOM or browser console state.
+
+**13. No files or data were changed by this verification pass itself.** `PROJECT_STATUS.md` was not
+modified during the verification pass — this STEP 85 section was written afterward, as a separate
+step, to record the result. No additional commit or push was made by the verification itself.
+
+**STEP 85 STATUS: PASS** for the read-only post-push Production Tax verification — the push to
+`origin/master` correctly changed only documentation, the running production process correctly did
+not need to (and did not) restart, and the Tax page/API behavior is unchanged and correct.
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

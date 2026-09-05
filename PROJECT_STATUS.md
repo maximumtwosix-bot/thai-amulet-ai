@@ -6117,6 +6117,75 @@ error signal in its logs and no unaccounted-for restart.
 
 ---
 
+## STEP 87 — TAX PAGE BROWSER CHECK (READ-ONLY)
+
+Date: 2026-09-05
+
+**Purpose**: an actual rendered-browser verification of the production Tax page, distinct from every
+prior check this session (STEP 83-86), which were all limited to HTTP/API-level checks with an
+explicit "browser verification not performed" caveat because no browser tooling was available.
+
+**HEAD at time of check**: `e7b8190`.
+
+**1. Browser tooling availability.** The `playwright` CLI was not found in `PATH`, but the
+**Playwright MCP browser tool** was genuinely available in this session and was used to drive a real
+automated browser end-to-end. This is a separate mechanism from the Claude in Chrome browser
+extension the user had earlier declined for this session — **the extension was not installed, not
+enabled, and not used**; only the independent Playwright MCP tooling was exercised.
+
+**2. Login flow.** Navigated to `/login`, authenticated via the login form, and was redirected
+successfully (to `/`).
+
+**3. Tax page load — genuine rendered confirmation.** Navigated to `/tax` — loaded successfully with
+**no redirect back to `/login`**. Heading rendered: "📑 สรุปภาษี / รายรับ-รายจ่าย".
+
+**4. Summary figures — rendered and correct**: รายรับรวม ฿598.00, รายจ่ายรวม ฿2,090.00, สุทธิ
+฿-1,492.00, จำนวนรายการ 6.
+
+**5. Income/expense breakdowns — rendered correctly**: income by channel showed Facebook ฿299 and an
+unlabeled-channel row ฿299; expense by category showed Facebook Ads ฿1,800 and Shipping ฿290.
+
+**6. Export control**: the "⬇️ ส่งออก CSV" link was visible, correctly pointing to
+`/api/tax/export?year=2026&month=9` — **it was not clicked**, keeping this pass strictly read-only
+(the export content itself was already independently verified via a direct API call, matching).
+
+**7. No visible error state** anywhere on the rendered page.
+
+**8. Browser console**: 0 errors, 0 warnings.
+
+**9. TAX-2 — confirmed live in the rendered DOM, not just via API.** The transaction row for real
+Order #38 visibly rendered the `#38 (🚫 ยกเลิก)` cancelled-order badge — the actual UI warning, seen
+on screen for the first time this session rather than inferred from source code or API JSON alone.
+
+**10. TAX-3 PLATFORM_FEE — correctly absent, not a failure.** No `PLATFORM_FEE` row appears in the
+rendered transaction list, because production currently has 0 real `PLATFORM_FEE` transactions (as
+established in STEP 84/85). This is explicitly **not** a failure, and no fake/test production record
+was created to force a different result.
+
+**11. API cross-check.** `GET /api/tax/summary` and `GET /api/tax/export` (called directly,
+authenticated) both returned figures matching everything rendered in the browser above, exactly.
+
+**12. No mutation occurred.** Transaction count remained `6`, order count remained `3`, checked via
+API immediately after the browser session closed.
+
+**13. `PROJECT_STATUS.md` was not modified during the verification itself** — this STEP 87 section
+was written afterward, as a separate step, to record the result. No commit and no push were
+performed as part of the verification.
+
+**14. Browser session closed cleanly** after the check completed.
+
+**15. Significance**: this is the **first genuine browser-rendered verification of the Tax page in
+this session** — every earlier Tax-related STEP (83, 84, 85) explicitly stated that browser
+verification was not performed because no browser tooling was available; Playwright MCP becoming
+available in this turn changed that, without any change to the Claude in Chrome extension's declined
+status.
+
+**STEP 87 STATUS: PASS** — the production Tax page renders correctly, with correct figures, correct
+TAX-2 cancelled-order UI behavior, no console errors, and zero data mutation, now confirmed by actual
+rendered-browser observation rather than API inference alone.
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

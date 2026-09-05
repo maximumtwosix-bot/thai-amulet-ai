@@ -5937,6 +5937,64 @@ the safe-cleanup limitation above) — not a failure, a correctly-applied stop c
 
 ---
 
+## STEP 84 — READ-ONLY PRODUCTION TAX PAGE VERIFICATION
+
+Date: 2026-09-05
+
+**Purpose**: a read-only live verification of the production Tax page and its backing tax APIs,
+using only existing production data — no record of any kind was created, updated, or deleted.
+
+**1. Exact page checked**: `http://localhost:3000/tax` (authenticated).
+
+**2. Backing APIs checked**: `GET /api/tax/summary` and `GET /api/tax/export`.
+
+**3. Production health**: `GET /api/health` → `HTTP 200`; `app`, `database`, and `socialWorker` all
+`ok`; `aiImage` `configured`; `aiVideo` `not_configured` (pre-existing, unrelated configuration
+state, not a regression).
+
+**4. Tax page load**: authenticated `GET /tax` → `HTTP 200`, no redirect, response body confirmed to
+be the genuine Tax page shell (not the login page).
+
+**5. Existing production tax data, confirmed via `GET /api/tax/summary`**:
+`totalIncome = 598`, `totalExpense = 2090`, `transactionCount = 6`; `expenseByCategory` =
+`FACEBOOK_ADS: 1800 / 3 transactions`, `SHIPPING: 290 / 1 transaction`. `GET /api/tax/export`
+returned a CSV matching these same figures.
+
+**6. TAX-3 PLATFORM_FEE — real-data result: absent, not tested.** No real `PLATFORM_FEE` transaction
+currently exists in production: `GET /api/transactions?category=PLATFORM_FEE` returned `count: 0`,
+and `expenseByCategory` above contains no `PLATFORM_FEE` entry. **This pass did not create or test a
+PLATFORM_FEE transaction** — per instruction, none was manufactured. This confirms only that no real
+data currently exercises that category, not that the category itself is broken or missing (its
+availability was established separately in this session's earlier TAX-3 implementation/deploy work,
+STEP 82 item 5).
+
+**7. TAX-2 cancelled-order handling — PASS, using real data.** Real order **#38**, linked income
+transaction **#69** (status `cancelled`, ฿299) is still correctly flagged: `linkedOrderStatus:
+"cancelled"` in the summary API, and the CSV export still carries the cancellation warning plus the
+correct adjusted tax-safe income arithmetic: ฿598 − ฿299 = ฿299.
+
+**8. Errors found**: none — no HTTP error codes anywhere in this pass.
+
+**9. Browser/console verification**: **not performed.** No browser tooling was available this
+session; nothing is claimed about rendered DOM or browser console state.
+
+**10. Data integrity — confirmed unchanged.** Transaction count 6→6, order count 3→3, Order #38
+byte-identical before and after, including `linkedIncomeTransactionId: 69`.
+
+**11. Git status**: clean apart from the same pre-existing untracked `*.stepNN-backup-*` scratch
+files; `git diff --stat` showed zero changes to any tracked file at the time of this check.
+
+**12. No source code, schema, configuration, database data, or other project file was changed by
+this verification pass itself** (this STEP 84 section in `PROJECT_STATUS.md` is the only file
+change, made afterward to record the result). No commit, no push.
+
+**STEP 84 STATUS: PASS** for the read-only Production Tax page verification (page load, summary/export
+data integrity, TAX-2 cancelled-order handling, no mutation). The TAX-3 PLATFORM_FEE check is
+correctly reported as "real data absent, not exercised" rather than a pass/fail on functionality —
+no PLATFORM_FEE record was manufactured to force a result.
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

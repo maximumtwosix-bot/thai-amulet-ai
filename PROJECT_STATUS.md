@@ -5666,6 +5666,142 @@ the time this file was written; see `git log` for the actual commit once created
 
 ---
 
+## STEP 82 — CATCH-UP: TAX EXPORT WARNINGS, BANK/RECONCILIATION, PRODUCTION LOGGING, PLATFORM FEE
+
+Date range: 2026-09-02 → 2026-09-05
+
+**Purpose**: this file was last updated at STEP 81 (2026-09-03, Assistant feature only) and had no
+record of six real commits that landed on `master` afterward (and one, STEP 63, that landed before
+STEP 81 but was never logged here either). This entry brings the recovery document current through
+`HEAD` without inventing detail beyond what the commits, their diffs, and the existing `docs/*.md`
+files actually establish. Unlike STEP 76-81 above, most of the work below predates this file being
+kept current in real time, so **no fabricated "Tested:" assertion counts are given for commits this
+entry did not itself produce** — see each item's own note on what test evidence actually exists.
+
+**1. STEP 63 (commit `8c685ae`, 2026-09-02) — returned-but-not-cancelled warning.**
+Per the STEP 61/62 audit finding that `orders.delivery_status` had no automatic accounting effect
+anywhere, `taxSummary.ts` and `transactions.ts` added `linkedDeliveryStatus` to the same existing
+order LEFT JOIN already used for `linkedOrderStatus` (no new join, no new query). `finance/page.tsx`
+and `tax/page.tsx` use it to show a visual-only warning on transaction rows linked to a
+returned-but-not-cancelled order. Explicitly display-only: does not affect `totalIncome`,
+`totalExpense`, `netIncome`, or `monthlyBreakdown`. No dedicated test evidence is recorded in the
+commit itself beyond the source comments describing this scope.
+
+**2. TAX-1/TAX-2 (commit `17a1b6b`, 2026-09-04) — cancelled-order tax export warning.**
+`src/app/api/tax/export/route.ts` was extended (55 lines, additive) to flag order-linked income rows
+where the linked order's status is `cancelled`. The CSV gained two trailing columns
+("สถานะออเดอร์ที่เกี่ยวข้อง", "คำเตือนภาษี") plus an additional summary block reporting
+`รายรับจากออเดอร์ที่ยกเลิก` (cancelled-order income total), the count of cancelled orders included in
+the headline total, and a recommended `รายรับรวม ไม่รวมออเดอร์ที่ยกเลิก` (tax-safe income total) — all
+computed by filtering the same `summary.transactions` array `getTaxSummary()` already returns, with
+zero change to that function's own totals or to `รายรับรวม` itself (per the STEP 32 rule that
+cancellation never changes Finance/Tax totals). No per-commit test evidence is recorded beyond the
+diff and the route's own inline comments.
+
+**3. Bank Accounts + Bank Statement Import + Reconciliation, Parts B/C/D (commits `cfea894` and
+`9323efb`, 2026-09-04).** `cfea894` is the large, additive implementation commit (29 files, ~10,146
+insertions, 0 deletions) delivering:
+- **Bank Accounts** (`src/lib/bankAccounts.ts`, `src/app/api/bank-accounts/**`, `src/app/bank/page.tsx`) —
+  per `docs/BANK_ACCOUNT_NUMBER_POLICY.md`, account numbers are stored with only pre-existing
+  whitespace-trim normalization; no digit-stripping, zero-padding, or bank-specific format-guessing.
+- **Bank Statement Import** (`src/lib/bankStatements.ts`, `src/lib/bankStatementCsv.ts`,
+  `src/app/api/bank-statements/**`, `src/app/bank/statements/**`) — per
+  `docs/BANK_STATEMENT_IMPORT_POLICY.md`, a preview/commit CSV import flow with its own money/
+  parsing/duplicate-idempotency decisions documented ahead of implementation.
+- **Reconciliation** (`src/lib/reconciliation.ts`, `bank_reconciliation_matches` and
+  `bank_reconciliation_audit` tables added to `src/lib/db.ts`, `src/app/api/reconciliation/**`,
+  `src/app/bank/reconciliation/**`) — per `docs/RECONCILIATION_DATA_MODEL.md`, both tables are
+  additive with no change to any existing table; match status enum is
+  `SUGGESTED | MATCHED | CONFIRMED | EXCLUDED | UNMATCHED | NEEDS_REVIEW`; match strategy enum is
+  `BANK_TRANSACTION_ID | EXACT_DATE_AMOUNT_ACCOUNT | CONSTRAINED_FINGERPRINT | MANUAL`; documented
+  invariants include satang-only money handling, WHERE-guarded atomic state transitions, a
+  once-`CONFIRMED` row being terminal (re-linking creates a new row rather than mutating history),
+  and a partial unique index preventing duplicate active match pairs.
+- `scripts/backup.ts` was extended (+18 lines) to include the new bank/reconciliation tables in its
+  row-count manifest.
+- `9323efb` is a narrow follow-up fix removing explicit `any` types from the two bank-account route
+  files (48 lines changed across 2 files) — no behavior change.
+- No dedicated post-implementation test-run evidence (assertion counts, live verification) is
+  recorded in either commit message; the design-time safety analysis lives in the three `docs/*.md`
+  files named above, which predate and informed the implementation.
+
+**4. Production persistent logging (commit `bc0dbf8`, 2026-09-05).**
+`scripts/start-production.ps1` was extended so each invocation writes a timestamped
+`logs/production-stdout-<timestamp>.log` / `logs/production-stderr-<timestamp>.log` pair (via
+`Start-Process -RedirectStandardOutput/-RedirectStandardError`, OS-level stream capture, avoiding
+both the PowerShell 5.1 native-command stderr-wrapping quirk and ANSI-codepage mojibake for this
+app's Thai-text output). `.gitignore` was updated to exclude `logs/`. **No log rotation or retention
+mechanism exists** — every `start-production.ps1` run creates a new, permanent file pair; nothing in
+the codebase currently deletes old ones (this session manually deleted 31 unrelated stale
+`.playwright-mcp/console-*.log` files as a one-off filesystem cleanup, unrelated to this feature, and
+left all `logs/production-*.log` files untouched, per explicit instruction each time).
+
+**5. TAX-3 — Platform Fee expense category (commit `757528c`, 2026-09-05).** Performed and verified
+directly in this session (not inherited from an untested commit):
+- Audited first (`src/lib/transactions.ts`'s `ExpenseCategory` is TS-layer-validated free `TEXT` in
+  SQLite, no CHECK constraint, no Prisma/migration involved) and confirmed additive-only was safe
+  before implementing.
+- Added `"PLATFORM_FEE"` to `ExpenseCategory`/`EXPENSE_CATEGORIES` in `src/lib/transactions.ts`, to
+  `finance/page.tsx`'s own local duplicate of that same type (a pre-existing Client-Component
+  boundary workaround, not a new duplication), and the Thai label `"ค่าธรรมเนียมแพลตฟอร์ม"` to both
+  `finance/page.tsx` and `tax/page.tsx`'s label maps. **No schema migration** — confirmed by design
+  and by the fact `pnpm exec tsc --noEmit` and `pnpm run build` both passed with only these 3 files
+  touched.
+- `profitSummary.ts` was deliberately left unchanged, per instruction — `PLATFORM_FEE` falls into its
+  existing `operatingExpenses` bucket via that file's pre-existing `NOT IN (SHIPPING, COD_FEE,
+  RETURNED_PARCEL)` blacklist query, gaining no new named bucket.
+- **Live-verified** against a temporary local build (a separate `next start` instance, not the
+  then-running production process): created a real `PLATFORM_FEE` expense transaction, confirmed it
+  appeared in `GET /api/transactions`, confirmed `GET /api/tax/summary`'s `totalExpense` and
+  `expenseByCategory` included it, confirmed `GET /api/profit/summary`'s `operatingExpenses`
+  included it with no new bucket, confirmed the CSV export (`GET /api/tax/export`) included it,
+  confirmed an invalid category was still rejected, confirmed the pre-existing `SHIPPING` category
+  still worked, then deleted both temporary transactions and confirmed the transaction count and
+  Order #1 were unchanged before and after.
+- **Deployed to the real production process**: backed up the database (`pnpm run backup`,
+  zero row-count mismatches), rebuilt (`pnpm run build`), stopped the running production `next start`
+  process, and started a new one via `scripts/start-production.ps1`. Post-deploy, confirmed via an
+  authenticated request that the live production `/tax` page actually renders
+  `ค่าธรรมเนียมแพลตฟอร์ม`, confirmed the compiled `.next` build output (both server and
+  browser-served static chunks) contains `PLATFORM_FEE`/`ค่าธรรมเนียมแพลตฟอร์ม`, confirmed the
+  transaction count and Order #1 were unchanged after the deploy, and scanned the new production
+  logs for `ERROR|Exception|FATAL|Unhandled|EADDRINUSE|ECONNREFUSED|Prisma|panic` — no matches.
+
+**6. Production safe process-stop documentation (commit `08dbc25`, 2026-09-05).** During the TAX-3
+deploy above, stopping the old production process via
+`Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "next start" } | Stop-Process`
+also matched and killed the PowerShell host running that very deployment script (because the
+script's own command text contained the literal string "next start"), aborting the stop sequence
+before it reached the real server process. Recovered by explicitly stopping the confirmed listener
+PID instead (found via `Get-NetTCPConnection -LocalPort 3000`). `scripts/start-production.ps1` was
+then given a comment-only safety note (no behavior change) directing any future production stop to
+identify the actual listener PID first, rather than matching on command-line text. This is
+documentation/safety guidance only, not a runtime feature — verified by parsing the modified script
+with `[System.Management.Automation.Language.Parser]::ParseFile` (no syntax errors) and confirming
+the running production process was untouched by the edit.
+
+**7. Current state as of this update.**
+- Current `HEAD` is `08dbc25`; `origin/master` is synchronized with it (verified via `git fetch` +
+  `git rev-parse`).
+- The working tree is clean except for the same pre-existing untracked `*.stepNN-backup-*` scratch
+  files that have been present throughout this document's history (see STEP 30-era backup-script
+  entries above) — nothing new was left uncommitted by any of the work in this STEP 82 entry.
+- Production health was verified via `GET /api/health` → HTTP 200, all reported subsystems
+  (`app`, `database`, `socialWorker`, `aiImage`) healthy (`aiVideo` reports `not_configured`, which
+  is an existing, unrelated configuration state, not a regression from this work). The production
+  process is listening on port 3000 (both its `0.0.0.0` and `::` dual-stack sockets resolve to the
+  same single process).
+
+**Explicitly not claimed by this STEP 82 entry**: no new tests were written or run for items 1-3
+(STEP 63, TAX-1/TAX-2, Bank/Reconciliation) as part of compiling this status update — those sections
+report only what the commits, diffs, and pre-existing `docs/*.md` files already establish. Items 4-6
+were directly performed and verified in this session, as described above.
+
+**STEP 82 STATUS: PASS** (documentation catch-up only — no source code, schema, or production files
+were changed by this entry).
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:
@@ -5680,17 +5816,26 @@ Then provide the current PROJECT_STATUS.md if needed.
 
 The next development target is:
 
-No target has been decided beyond STEP 81 as of this update. Known open items, none yet scheduled as
-their own STEP (see STEP 78/79/80 sections above for full detail):
+No target has been decided beyond STEP 82 as of this update. Known open items, none yet scheduled as
+their own STEP:
 
 - Stateless Assistant confirmation-token replay edge case (STEP 78) — closing it fully would require
   a persisted single-use state store, deliberately not added through STEP 81.
 - Further Ollama/tool-use reliability work beyond the STEP 79 grounding system prompt.
 - A live browser/React click test of the STEP 80 Approve double-click guard (only a plain-function
   pattern reproduction exists as of STEP 81 — no testing-library dependency in this project).
+- No dedicated post-implementation test-run evidence (assertion counts, live verification) has been
+  recorded anywhere for the STEP 63 returned-order warning, TAX-1/TAX-2 cancelled-order export
+  warning, or the Bank Account/Bank Statement/Reconciliation feature (commits `8c685ae`, `17a1b6b`,
+  `cfea894`, `9323efb` — see STEP 82 above) — only design-time documentation and code review exist for
+  those; a live/manual verification pass would need to be run and recorded if that assurance is
+  wanted.
+- Production logs (`logs/production-*.log`) have no rotation or retention mechanism (STEP 82, item
+  4) — every production start leaves a new permanent file pair.
 
 The previous "VOICE STUDIO → VIDEO STUDIO" target recorded here (as of STEP 54) was stale — no
-Assistant-feature work through STEP 81 touched Voice Studio, Video Studio, Content Studio, or Social.
+Assistant-feature work through STEP 81, nor the STEP 82 catch-up items, touched Voice Studio, Video
+Studio, Content Studio, or Social.
 
 ---
 

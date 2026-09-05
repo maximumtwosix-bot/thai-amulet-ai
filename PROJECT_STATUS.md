@@ -6237,6 +6237,55 @@ every prior check today, with no error signal in its logs and no unaccounted-for
 
 ---
 
+## STEP 89 — POST-PUSH PRODUCTION HEALTH CHECK (READ-ONLY)
+
+Date: 2026-09-05
+
+**Purpose**: a read-only verification performed immediately after pushing the STEP 88 documentation
+commit `e545165`, to confirm production remained stable and unaffected by that push.
+
+**1. Git HEAD**: `e545165`.
+
+**2. `origin/master`**: `e545165` (fetched fresh) — matches HEAD.
+
+**3. Working tree**: no tracked changes; only the same pre-existing untracked `*.stepNN-backup-*`
+files remain.
+
+**4. `GET /api/health`** → `HTTP 200`, exact response:
+`{"app":"ok","database":"ok","socialWorker":"ok","aiImage":"configured","aiVideo":"not_configured"}`.
+
+**5. Production listener**: `[::]:3000`, `PID 6200`.
+
+**6. Process**: Node `PID 6200`, `StartTime 2026-09-05 18:10:18` — identical to the prior known
+healthy state.
+
+**7. `.next/BUILD_ID`**: `X1RD-B0ZaZqBPm8AXcsKJ` — unchanged.
+
+**8. Production logs**: the same four files / two stdout-stderr pairs, timestamps `160800` and
+`181017` — no new pair appeared.
+
+**9. Error-pattern scan** across all four logs: **no matches** for `ERROR`, `Exception`, `FATAL`,
+`Unhandled`, `EADDRINUSE`, `ECONNREFUSED`, `Prisma`, or `panic`.
+
+**10. Runtime comparison**: no difference from the prior known healthy runtime (PID 6200 / BUILD_ID
+`X1RD-B0ZaZqBPm8AXcsKJ`).
+
+**11. No restart was performed.**
+
+**12. The entire check was read-only.** No files, database data, or `PROJECT_STATUS.md` were modified
+during the health check itself — this STEP 89 section was written afterward, as a separate step, to
+record the result.
+
+**13. No commit or push was performed during the health check.**
+
+**14. `aiVideo: not_configured`** remains the same pre-existing state observed throughout this
+session and is not a new failure.
+
+**STEP 89 STATUS: PASS** — the STEP 88 documentation push had no effect on the running production
+process, which remains healthy, unchanged, and error-free.
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

@@ -6361,6 +6361,47 @@ were made.
 
 ---
 
+## STEP 92 — PRODUCTION LOG ROTATION/RETENTION
+
+Date: 2026-09-05
+
+**Result: PASS**
+
+**Scope**: added production log retention to `scripts/start-production.ps1`. Retains only the newest
+10 complete stdout/stderr production log pairs. Cleanup runs before the current invocation's own log
+pair is created, so the pair being created by this run can never be matched or deleted by the
+retention step. Files that don't match the expected naming convention, or can't be safely paired
+(an orphaned stdout with no stderr, or vice versa), are skipped, never guessed at. Locked/in-use
+files are handled per-file, independently, without aborting startup. The existing safe process-stop
+guidance comment and the `Start-Process` launch behavior were preserved unchanged. No dependencies,
+schema, database, data, or application runtime source were changed.
+
+**Verification**:
+- Static diff: `PASS` — only `scripts/start-production.ps1` changed for this implementation.
+- Isolated retention test: `PASS` — 13 synthetic pairs plus an orphan and a non-matching file;
+  exactly the oldest 3 pairs (6 files) were removed, the newest 10 pairs were retained, and the
+  orphan and non-matching file were both retained untouched.
+- Real logs safety check: `PASS` — the actual `logs/` directory contains only 2 complete pairs, so
+  the retention logic's own deletion condition is never met; nothing was deleted.
+- Locked-file test: `PASS` — a deliberately locked, otherwise-eligible file produced a caught
+  warning and remained in place; cleanup continued without throwing and independently removed the
+  unlocked eligible file from the same pair.
+- Temporary test directories were created outside the repository (under `$env:TEMP`) and fully
+  removed afterward.
+- Production PID 6200 was not stopped or restarted at any point.
+- No real production log was deleted.
+- No commit or push was performed during implementation.
+
+**Implementation note**: timestamp parsing uses deterministic filename string parsing
+(`StartsWith`/`Substring`/`IsDigit`) rather than a regex — the original regex sketch triggered a
+false-positive from an unrelated `Remove-Item` safety guardrail that misread a `\d` escape sequence
+as a filesystem path fragment. The string-parsing approach avoids that class of false positive while
+preserving identical retention behavior.
+
+**STEP 92 IMPLEMENTATION: PASS**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

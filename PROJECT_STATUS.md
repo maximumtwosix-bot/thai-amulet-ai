@@ -6286,6 +6286,44 @@ process, which remains healthy, unchanged, and error-free.
 
 ---
 
+## STEP 90 — POST-PUSH PRODUCTION HEALTH CHECK (READ-ONLY)
+
+Date: 2026-09-05
+
+**Purpose**: a read-only verification performed after pushing the STEP 89 documentation commit
+`1127c29`, to confirm production remained stable and unaffected.
+
+**1. Git sync**: `PASS` — branch `master`; HEAD `1127c29`; `origin/master` `1127c29`; a fresh
+`git fetch` confirmed sync; no unexpected tracked modifications (only the same pre-existing untracked
+`*.stepNN-backup-*` files).
+
+**2. Production listener/process**: `PASS` — `PID 6200` listening on `0.0.0.0:3000` and `[::]:3000`;
+confirmed via process inspection to be the project's genuine `node .../next start` production
+process, not a lookalike.
+
+**3. `/api/health`**: `PASS` — `HTTP 200`, exact response:
+`{"app":"ok","database":"ok","socialWorker":"ok","aiImage":"configured","aiVideo":"not_configured"}`.
+
+**4. `.next/BUILD_ID`**: `PASS` — `X1RD-B0ZaZqBPm8AXcsKJ`, unchanged from the previous checkpoint.
+
+**5. Production logs**: `PASS` — same 4 files / 2 stdout-stderr pairs, timestamps `160800` and
+`181017`; no matches for `ERROR`, `Exception`, `FATAL`, `Unhandled`, `EADDRINUSE`, `ECONNREFUSED`,
+`Prisma`, or `panic`.
+
+**6. Restart evidence**: `PASS` — PID and BUILD_ID unchanged; no new production log pair; no evidence
+of an unexpected restart.
+
+**7. Data safety**: `PASS` — only `GET`/read-only filesystem and process inspection commands were
+used; no database mutation, no file mutation outside this requested `PROJECT_STATUS.md` update, no
+git add/commit/push, no process restart.
+
+**PRODUCTION HEALTH CHECK: PASS**
+
+**STEP 90 STATUS: PASS** — entirely read-only; no runtime, source, config, schema, or data changes
+were made.
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

@@ -6186,6 +6186,57 @@ rendered-browser observation rather than API inference alone.
 
 ---
 
+## STEP 88 — READ-ONLY PRODUCTION HEALTH CHECK
+
+Date: 2026-09-05
+
+**Purpose**: a general, read-only health check of the running production application, independent of
+any specific feature, performed after the STEP 87 push to confirm production remained stable.
+
+**1. Git HEAD**: `d39ee7e`.
+
+**2. `origin/master`**: `d39ee7e` (fetched fresh) — matches HEAD.
+
+**3. Working tree**: no tracked changes; only the same pre-existing untracked `*.stepNN-backup-*`
+files remain.
+
+**4. `GET /api/health`** → `HTTP 200`, exact response:
+`{"app":"ok","database":"ok","socialWorker":"ok","aiImage":"configured","aiVideo":"not_configured"}`.
+
+**5. Production listener**: alive on port 3000.
+
+**6. Process**: **PID 6200** — the same Node process observed in every prior check today; not
+restarted (`StartTime` unchanged at 9/5/2026 6:10:18 PM, matching the TAX-3 runtime deployment).
+
+**7. `.next/BUILD_ID`**: `X1RD-B0ZaZqBPm8AXcsKJ` — unchanged.
+
+**8. Production logs**: the same four files / two timestamped stdout-stderr pairs observed in every
+prior check today (`production-{stdout,stderr}-20260905-160800.log` and
+`production-{stdout,stderr}-20260905-181017.log`).
+
+**9. Error-pattern scan** across all four production logs found **no matches** for `ERROR`,
+`Exception`, `FATAL`, `Unhandled`, `EADDRINUSE`, `ECONNREFUSED`, `Prisma`, or `panic`.
+
+**10. No unexpected new production log pair appeared.**
+
+**11. `aiVideo: not_configured`** is the same pre-existing state observed throughout this session and
+is explicitly **not** treated as a new failure.
+
+**12. The check was completely read-only** — no source, schema, configuration, dependency, or
+production data was touched.
+
+**13. No production data changed.**
+
+**14. `PROJECT_STATUS.md` was untouched during the health check itself** — this STEP 88 section was
+written afterward, as a separate step, to record the result.
+
+**15. No commit or push was performed during the health check.**
+
+**STEP 88 STATUS: PASS** — production remains healthy, running the same unchanged build/process as
+every prior check today, with no error signal in its logs and no unaccounted-for restart.
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

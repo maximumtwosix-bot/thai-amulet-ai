@@ -6066,6 +6066,57 @@ not need to (and did not) restart, and the Tax page/API behavior is unchanged an
 
 ---
 
+## STEP 86 — READ-ONLY PRODUCTION HEALTH CHECK
+
+Date: 2026-09-05
+
+**Purpose**: a general, read-only health check of the running production application, independent of
+any specific feature (Tax, Bank, etc.) — confirms the process, its dependencies, and its logs are all
+in a normal state.
+
+**Overall status: PASS.**
+
+**1. `GET /api/health`** → `HTTP 200`, exact response:
+`{"app":"ok","database":"ok","socialWorker":"ok","aiImage":"configured","aiVideo":"not_configured"}`.
+
+**2. Database connectivity**: `ok`.
+
+**3. socialWorker**: `ok`.
+
+**4. aiImage**: `configured`.
+
+**5. aiVideo**: `not_configured` — this is the same pre-existing state observed in every prior check
+this session; explicitly not treated as a new failure.
+
+**6. Production listener**: alive on port 3000, both `0.0.0.0:3000` and `[::]:3000` bound to the
+same process, **PID 6200**.
+
+**7. Runtime/build identifier**: PID `6200` and `.next/BUILD_ID = X1RD-B0ZaZqBPm8AXcsKJ` — unchanged
+from every earlier check today, confirming this is still the same running instance from the TAX-3
+runtime deployment (STEP 82 item 5), not a new one.
+
+**8. Latest production logs checked**: `production-stdout-20260905-181017.log` and
+`production-stderr-20260905-181017.log`. No matches for `ERROR`, `Exception`, `FATAL`, `Unhandled`,
+`EADDRINUSE`, `ECONNREFUSED`, `Prisma`, or `panic`.
+
+**9. No unexpected restart**: confirmed — no new `logs/production-*.log` file pair appeared during
+this check (still only the same two pairs as in STEP 84/85), and PID/`BUILD_ID` are unchanged.
+
+**10. Git state**: `HEAD = a8245a7`, `origin/master = a8245a7` (fetched fresh), no tracked
+working-tree changes — only the same pre-existing untracked `*.stepNN-backup-*` scratch files.
+
+**11. Browser verification**: not performed — no browser tooling was available this session; nothing
+is claimed about rendered DOM or browser console state.
+
+**12. No files or database data were changed by this health check.** `PROJECT_STATUS.md` was not
+touched during the verification itself — this STEP 86 section was written afterward, as a separate
+step, to record the result. No commit and no push were performed by the verification.
+
+**STEP 86 STATUS: PASS** — production is healthy, running the expected unchanged build, with no
+error signal in its logs and no unaccounted-for restart.
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

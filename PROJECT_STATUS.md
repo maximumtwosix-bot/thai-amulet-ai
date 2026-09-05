@@ -6324,6 +6324,43 @@ were made.
 
 ---
 
+## STEP 91 — POST-COMMIT PRODUCTION HEALTH CHECK (READ-ONLY)
+
+Date: 2026-09-05
+
+**Purpose**: a read-only verification performed after the STEP 90 documentation commit `a4e25e3`, to
+confirm production remained stable and unaffected.
+
+**1. Git sync**: `PASS` — branch `master`; HEAD `a4e25e3`; `origin/master` `a4e25e3`; a fresh
+`git fetch` confirmed sync; no unexpected working-tree changes.
+
+**2. Production listener/process**: `PASS` — `PID 6200` listening on `0.0.0.0:3000` and `[::]:3000`;
+confirmed as the project's genuine Node/Next.js production process using `next start`;
+`CreationDate 9/5/2026 6:10:18 PM`.
+
+**3. `/api/health`**: `PASS` — `HTTP 200`, exact response:
+`{"app":"ok","database":"ok","socialWorker":"ok","aiImage":"configured","aiVideo":"not_configured"}`.
+
+**4. `.next/BUILD_ID`**: `PASS` — `X1RD-B0ZaZqBPm8AXcsKJ`, unchanged from the previous checkpoint.
+
+**5. Production logs**: `PASS` — same 4 files / 2 stdout-stderr pairs, timestamps `160800` and
+`181017`; no matches for `ERROR`, `Exception`, `FATAL`, `Unhandled`, `EADDRINUSE`, `ECONNREFUSED`,
+`Prisma`, or `panic`.
+
+**6. Restart evidence**: `PASS` — PID `6200`, `CreationDate`, and BUILD_ID unchanged; no new
+production log pair; no evidence of an unexpected restart.
+
+**7. Data safety**: `PASS` — only read-only `GET`/filesystem/process inspection/`git fetch`
+operations were performed; no database mutation, process restart, git add/commit/push, or unrelated
+file modification.
+
+**PRODUCTION HEALTH CHECK: PASS**
+
+**STEP 91 STATUS: PASS** — entirely read-only; no runtime, source, config, schema, or data changes
+were made.
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

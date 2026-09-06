@@ -5,6 +5,7 @@ import {
   SESSION_MAX_AGE_SECONDS,
   verifyCredentials,
 } from "@/lib/auth";
+import { resolveBootstrapTaxpayerProfileId } from "@/lib/sessionBootstrap";
 
 export const runtime = "nodejs";
 
@@ -41,9 +42,17 @@ export async function POST(request: Request) {
       );
     }
 
-    const token = createSessionToken();
+    // STEP 113 — bootstrap resolution only, never guessed: exactly one active taxpayer_profiles
+    // row binds the new session to it; zero or more-than-one leaves the session unbound (still
+    // fully authenticated, per existing behavior) and reports which case it was. No taxpayer is
+    // created or modified here.
+    const bootstrap = resolveBootstrapTaxpayerProfileId();
+    const boundTaxpayerProfileId =
+      bootstrap.status === "BOUND" ? bootstrap.taxpayerProfileId : undefined;
 
-    const response = NextResponse.json({ success: true });
+    const token = createSessionToken(boundTaxpayerProfileId);
+
+    const response = NextResponse.json({ success: true, taxpayerBootstrap: bootstrap.status });
 
     response.cookies.set(SESSION_COOKIE_NAME, token, {
       httpOnly: true,

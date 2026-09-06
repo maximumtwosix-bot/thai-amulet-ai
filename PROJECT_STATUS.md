@@ -6402,6 +6402,110 @@ preserving identical retention behavior.
 
 ---
 
+## STEP 47G-21 — PRODUCT MEDIA RUNTIME FILE SERVING FIX
+
+Root cause (proven by controlled test in STEP 47G-19/20/20B): the production Next.js process
+serves `public/` statically, bound at build/start time — files written into
+`public/generated/product-media/` *after* the running production process started were never
+served, even though the DB row and disk file both existed correctly.
+
+Minimal fix, exactly two files in scope:
+
+- New route `src/app/api/products/[id]/media/[mediaId]/file/route.ts` — GET handler that reads
+  the file from disk at request time (`node:fs/promises`, runtime read, not static serving).
+  Looks up the media record via the existing `getProductMediaById(productId, mediaId)` (already
+  scopes by product, so cross-product IDs 404 the same as every other media route). Rejects
+  non-image media (video) with 400. Never accepts a raw filename from the request — resolves the
+  DB-stored `fileName` against the resolved `public/generated/product-media` directory and
+  verifies the resolved path stays inside it before reading (path-traversal guard). Returns
+  404 if the DB record or the on-disk file is missing. Sets `Content-Type` from the file
+  extension (jpg/jpeg/png/gif/webp) and `Cache-Control: public, max-age=31536000, immutable`
+  (safe — filenames are `randomUUID()`-based and never reused/mutated).
+- `src/lib/productMedia.ts` — `mapRow()` now maps a stored `image_url` that starts with
+  `/generated/product-media/` to the new runtime route
+  (`/api/products/{productId}/media/{id}/file`) automatically. Every other URL (AI images under
+  `/generated/ai-images/`, external URLs) is returned unchanged. No DB migration, no re-upload of
+  existing images — existing records are covered automatically because the mapping reads the
+  existing stored URL, not a new field.
+
+**Necessary follow-on fix (same STEP, disclosed, not part of the original two-file scope):** the
+existing DELETE handler in `src/app/api/products/[id]/media/[mediaId]/route.ts` used
+`deleted.url` (from `deleteProductMedia()`, which itself calls `getProductMediaById`/`mapRow`) to
+compute the on-disk path to `unlink`. Once `mapRow()` started returning the new API URL instead
+of the raw `/generated/...` path for local product-media items, that `unlink` call would have
+silently stopped deleting the physical file on every future delete (DB row removed, disk file
+orphaned). Added `resolveLocalProductMediaFilePath()` in that route file, which recognizes the
+mapped URL shape for the exact product/media id being deleted and resolves the disk path from the
+trusted DB `fileName` instead (same traversal-safety pattern as the new route); every other media
+URL (AI image/video) falls through to the original `isSafeGeneratedPath` logic, unchanged.
+`deleteProductMedia()` itself, and all primary/source rules in `productMedia.ts`
+(`insertProductMedia`, `setPrimaryProductMedia`), were **not** modified.
+
+Untouched, exactly as instructed: `src/proxy.ts` (new route is not matched by any existing
+protected-path rule, so no change was needed), `src/lib/ai/imageGeneration.ts`, AI image URL
+behavior, database schema, existing media records, Video Studio, Voice Studio, Content Studio,
+Social, AI Image generation, Finance, Orders, Inventory, Customers, Authentication.
+
+**Build**: `pnpm exec tsc --noEmit` — PASSED (zero errors; one error found and fixed during
+implementation — `NextResponse` body needed `Uint8Array` instead of `Buffer`). `pnpm build` —
+PASSED; route table confirmed exactly one new route added:
+`ƒ /api/products/[id]/media/[mediaId]/file`.
+
+**Files changed**: `src/app/api/products/[id]/media/[mediaId]/file/route.ts` (new),
+`src/lib/productMedia.ts`, `src/app/api/products/[id]/media/[mediaId]/route.ts`. No unrelated
+files changed.
+
+**Commit**: `43c6995` — pushed to `origin/master`.
+
+**STEP 47G-21 IMPLEMENTATION: PASS**
+
+## STEP 47G-22 — LIVE PRODUCTION VERIFICATION (RESTART + REAL UPLOAD TEST)
+
+Production service `ThaiAmuletAI` (NSSM-managed Windows Service, `Auto` start mode) restarted via
+`Restart-Service -Name ThaiAmuletAI -Force` — the correct method for this deployment (not a raw
+process kill; the running `node.exe` is a child of `nssm.exe`, which is the service's process).
+New `node.exe` process confirmed listening on port 3000 within 30s, running `next start` against
+the build produced by STEP 47G-21 (which includes the fix).
+
+**Existing-record check**: `GET /api/products/50/media/65/file` against the restarted live server
+returned HTTP 200, `Content-Type: image/jpeg`, `Cache-Control: public, max-age=31536000,
+immutable`, and valid JPEG bytes — confirms the new route and URL mapping work against real,
+pre-existing data.
+
+**Live upload → serve without restart** (the exact original bug scenario, reproduced and fixed):
+one small valid JPEG uploaded to real product #50 via the existing, unmodified upload API.
+
+- `POST /api/products/50/media` → HTTP 200, created media id 66.
+- DB record: id=66, product_id=50,
+  file_name=`product-50-68f93003-b5bf-4c16-a263-9b25a9cede11.jpg`,
+  image_url=`/generated/product-media/product-50-68f93003-b5bf-4c16-a263-9b25a9cede11.jpg`
+  (raw DB value, unchanged by design), source=`product`, type=`image`, is_primary=0.
+- Physical file confirmed present under `public/generated/product-media/` — i.e. genuinely
+  written to disk *after* the already-running (restarted) production process started.
+- `GET /api/products/50/media` confirmed the mapped URL for id 66:
+  `/api/products/50/media/66/file`.
+- `GET` on that mapped URL, against the still-running production server, **with no restart
+  between upload and fetch**: HTTP 200, `Content-Type: image/jpeg`, 287 bytes (chunked transfer —
+  no explicit `Content-Length` header; actual byte count verified directly), bytes byte-for-byte
+  identical to the uploaded file and confirmed as a valid JPEG.
+
+**Cleanup**: `DELETE /api/products/50/media/66` → HTTP 200. Confirmed both: the DB row for id 66
+is gone (product #50's media count back to its original 4), and the physical file is gone from
+disk. Product #50's own row (name, price, cost, stock, status, `updated_at`, etc.) verified
+byte-for-byte unchanged before vs. after the test. No source files were modified during
+verification; two local scratch test files created under the project root during testing were
+deleted afterward. No commit, no push made during this STEP.
+
+**STEP 47G-22 RESULT: PASS**
+
+**Conclusion (STEP 47G-21/22)**: the original product-image serving issue is confirmed fixed. Root
+cause was production Next.js's static `public/` file serving being bound at build/start time, so
+product-media files created by uploads after the process started were never served. The runtime
+API serving approach resolves this permanently — future uploads do not require a production
+restart to become visible.
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

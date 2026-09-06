@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createTransaction, listTransactions } from "@/lib/transactions";
+import { resolveTransactionOwner } from "@/lib/taxOwnership";
+import { SESSION_COOKIE_NAME, resolveSessionTaxpayerId } from "@/lib/auth";
 
 function errorToResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "Unknown error";
@@ -116,10 +118,50 @@ export async function GET(request: NextRequest) {
       limit,
     });
 
+    // STEP 117 — reporting-only ownership check (STEP 112/114 design). Applied here, on the
+    // existing GET (list) handler, rather than GET /api/transactions/[id] — no such single-item GET
+    // handler exists anywhere in this codebase (src/app/api/transactions/[id]/route.ts only defines
+    // PATCH/DELETE), confirmed by direct inspection; inventing a brand-new GET capability where none
+    // existed would expand this endpoint's surface beyond "reporting-only". READ-ONLY:
+    // resolveTransactionOwner() (src/lib/taxOwnership.ts) and resolveSessionTaxpayerId()
+    // (src/lib/auth.ts, decodes the already-verified session cookie) are both pure reads — neither
+    // mutates anything. Purely additive: `success`/`data`/`count` are completely unchanged; only a
+    // new top-level `ownershipReport` array is added, parallel to `data` — individual transaction
+    // objects in `data` are never touched. Never denies access, never changes any status code.
+    const sessionTaxpayerId = resolveSessionTaxpayerId(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+
+    const ownershipReport = rows.map((row) => {
+      const ownership = resolveTransactionOwner(row.id);
+
+      let sessionTaxpayerMatch: "MATCH" | "MISMATCH" | "SESSION_TAXPAYER_UNAVAILABLE" | "OWNER_UNRESOLVED";
+
+      if (sessionTaxpayerId === null) {
+        // Never guessed, never defaulted to "the one active taxpayer" — an unbound session (STEP
+        // 113: old-format token, or bootstrap was UNAVAILABLE/AMBIGUOUS at login) reports this
+        // explicitly, regardless of the transaction's own resolution state.
+        sessionTaxpayerMatch = "SESSION_TAXPAYER_UNAVAILABLE";
+      } else if (ownership.status !== "RESOLVED") {
+        // Zero tax_year_transaction_links rows for this transaction (or a CONFLICT) — no
+        // meaningful MATCH/MISMATCH comparison is possible. Never inferred from customer, order,
+        // order item, product, bank account, amount, date, payment method, channel, or "the
+        // active taxpayer".
+        sessionTaxpayerMatch = "OWNER_UNRESOLVED";
+      } else {
+        sessionTaxpayerMatch = ownership.taxpayerProfileId === sessionTaxpayerId ? "MATCH" : "MISMATCH";
+      }
+
+      return {
+        transactionId: row.id,
+        ownerStatus: ownership.status,
+        sessionTaxpayerMatch,
+      };
+    });
+
     return NextResponse.json({
       success: true,
       data: rows,
       count: rows.length,
+      ownershipReport,
     });
   } catch (error) {
     return errorToResponse(error);

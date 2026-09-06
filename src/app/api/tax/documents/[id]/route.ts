@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTaxDocumentById, updateTaxDocument } from "@/lib/taxDocuments";
+import { resolveTaxDocumentOwner } from "@/lib/taxOwnership";
+import { SESSION_COOKIE_NAME, resolveSessionTaxpayerId } from "@/lib/auth";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -69,7 +71,36 @@ export async function GET(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ success: false, error: "Tax document not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, data: document });
+    // STEP 116 — reporting-only ownership check (STEP 112/114 design). READ-ONLY: calls only
+    // resolveTaxDocumentOwner() (a pure query, src/lib/taxOwnership.ts) and
+    // resolveSessionTaxpayerId() (decodes the already-verified session cookie, src/lib/auth.ts) —
+    // neither mutates anything. Purely additive to the response; never denies access, never
+    // changes the status code above, never alters `success`/`data`. A future STEP may eventually
+    // make this authorization-enforcing — this one does not.
+    const ownership = resolveTaxDocumentOwner(document.id);
+    const sessionTaxpayerId = resolveSessionTaxpayerId(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+
+    let sessionTaxpayerMatch: "MATCH" | "MISMATCH" | "SESSION_TAXPAYER_UNAVAILABLE" | "NOT_APPLICABLE";
+
+    if (sessionTaxpayerId === null) {
+      // Never guessed, never defaulted to "the one active taxpayer" — an unbound session (STEP
+      // 113: old-format token, or bootstrap was UNAVAILABLE/AMBIGUOUS at login) reports this
+      // explicitly, regardless of whether the document's own owner resolved cleanly.
+      sessionTaxpayerMatch = "SESSION_TAXPAYER_UNAVAILABLE";
+    } else if (ownership.status !== "RESOLVED") {
+      // The document's own owner is UNRESOLVED/CONFLICT — no meaningful MATCH/MISMATCH comparison
+      // is possible against it.
+      sessionTaxpayerMatch = "NOT_APPLICABLE";
+    } else {
+      sessionTaxpayerMatch = ownership.taxpayerProfileId === sessionTaxpayerId ? "MATCH" : "MISMATCH";
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: document,
+      ownerStatus: ownership.status,
+      sessionTaxpayerMatch,
+    });
   } catch (error) {
     return errorToResponse(error);
   }

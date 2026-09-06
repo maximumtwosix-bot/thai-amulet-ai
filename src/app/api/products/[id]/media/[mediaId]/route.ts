@@ -31,6 +31,46 @@ function isSafeGeneratedPath(url: string): boolean {
   return !cleanUrl.includes("..") && cleanUrl.startsWith("/generated/");
 }
 
+// STEP 47G-21: src/lib/productMedia.ts (mapRow) ตอนนี้ map URL ของสื่อ Product Media ในเครื่องให้เป็น
+// URL ของ runtime file-serving route ใหม่ (/api/products/{productId}/media/{mediaId}/file) แทน path
+// ไฟล์ดิบใต้ /generated/product-media/ — deleted.url ที่ได้จาก deleteProductMedia() จึงไม่ใช่ path ไฟล์
+// ดิบอีกต่อไปสำหรับกรณีนี้ ต้องตรวจแยกว่า URL ที่ได้ตรงกับรูปแบบ mapped URL ของ media รายการนี้เป๊ะๆ
+// หรือไม่ ถ้าใช่ ให้ resolve path ไฟล์จริงจาก fileName ที่เก็บใน DB (ผ่านการตรวจสอบแล้วว่าเป็นของ
+// productId/mediaId นี้จริง) เทียบกับ product-media directory แทน เพื่อให้การลบไฟล์จริงบนดิสก์ยังทำงาน
+// ถูกต้องเหมือนเดิมทุกประการ — ไม่กระทบสื่อชนิดอื่น (AI image/AI video) ซึ่ง URL ไม่ถูก map และยังใช้
+// ตรรกะเดิม (isSafeGeneratedPath) ตามปกติ
+function resolveLocalProductMediaFilePath(
+  productId: number,
+  mediaId: number,
+  url: string,
+  fileName: string
+): string | null {
+  const isMappedProductMediaUrl =
+    url === `/api/products/${productId}/media/${mediaId}/file`;
+
+  if (!isMappedProductMediaUrl) {
+    return null;
+  }
+
+  const mediaDirectory = path.resolve(
+    process.cwd(),
+    "public",
+    "generated",
+    "product-media"
+  );
+
+  const targetPath = path.resolve(mediaDirectory, fileName);
+
+  if (
+    targetPath !== mediaDirectory &&
+    !targetPath.startsWith(mediaDirectory + path.sep)
+  ) {
+    return null;
+  }
+
+  return targetPath;
+}
+
 // DELETE /api/products/[id]/media/[mediaId] — ลบสื่อสินค้า 1 รายการ (รูปจริง/รูป AI/วิดีโอ AI)
 //
 // ตรวจว่า mediaId เป็นของ productId นี้จริงเท่านั้น (deleteProductMedia join ทั้งสองเงื่อนไข
@@ -59,8 +99,18 @@ export async function DELETE(request: Request, context: RouteContext) {
     }
 
     // ลบไฟล์จริงบนดิสก์แบบ best-effort — ถ้าไฟล์หายไปก่อนแล้วก็ไม่ถือเป็น error (record ก็ถูกลบแล้ว)
-    // แต่ถ้า URL ที่บันทึกไว้ผิดปกติ (ไม่ผ่าน isSafeGeneratedPath) จะไม่พยายาม unlink เด็ดขาด
-    if (isSafeGeneratedPath(deleted.url)) {
+    // แต่ถ้า URL ที่บันทึกไว้ผิดปกติ (ไม่ผ่าน isSafeGeneratedPath / resolveLocalProductMediaFilePath)
+    // จะไม่พยายาม unlink เด็ดขาด
+    const localProductMediaFilePath = resolveLocalProductMediaFilePath(
+      productId,
+      mediaId,
+      deleted.url,
+      deleted.fileName
+    );
+
+    if (localProductMediaFilePath) {
+      await unlink(localProductMediaFilePath).catch(() => {});
+    } else if (isSafeGeneratedPath(deleted.url)) {
       const filePath = path.join(
         process.cwd(),
         "public",

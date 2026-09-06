@@ -28,12 +28,26 @@ export type ProductMediaItem = {
 const SELECT_COLUMNS =
   "id, product_id, file_name, image_url, is_primary, source, type, created_at";
 
+// STEP 47G-21: URL เดิมที่ upload route เขียนลง DB ตรงๆ สำหรับ Product Media ที่เก็บไฟล์จริงไว้ใต้
+// public/generated/product-media/ — Next.js static serving ไม่เห็นไฟล์ที่เขียนหลัง production
+// process start ไปแล้ว (proven ใน STEP 47G-19/20/20B) จึงต้อง map URL เดิมนี้ไปที่ runtime API
+// route ใหม่แทน (/api/products/[id]/media/[mediaId]/file) โดยอัตโนมัติ ไม่ต้อง migrate ข้อมูลใน DB
+// เลย — URL อื่นที่ไม่ใช่ local Product Media (เช่น AI image ใน /generated/ai-images/ หรือ URL
+// ภายนอก) ปล่อยผ่านตามเดิมทุกประการ
+const LOCAL_PRODUCT_MEDIA_URL_PREFIX = "/generated/product-media/";
+
 function mapRow(row: ProductMediaRow): ProductMediaItem {
+  const isLocalProductMediaUrl = row.image_url.startsWith(
+    LOCAL_PRODUCT_MEDIA_URL_PREFIX
+  );
+
   return {
     id: row.id,
     productId: row.product_id,
     fileName: row.file_name,
-    url: row.image_url,
+    url: isLocalProductMediaUrl
+      ? `/api/products/${row.product_id}/media/${row.id}/file`
+      : row.image_url,
     type: row.type === "video" ? "video" : "image",
     source: row.source === "ai" ? "ai" : "product",
     isPrimary: row.is_primary === 1,

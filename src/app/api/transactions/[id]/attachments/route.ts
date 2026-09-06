@@ -7,6 +7,7 @@ import {
   insertTransactionAttachment,
   listTransactionAttachments,
 } from "@/lib/transactionAttachments";
+import { assertTransactionMutable } from "@/lib/taxYearTransactionLinks";
 
 export const runtime = "nodejs";
 
@@ -201,6 +202,29 @@ export async function POST(request: NextRequest, context: RouteContext) {
       );
     }
 
+    // STEP 96 — checked here, BEFORE any file I/O, not just inside insertTransactionAttachment()
+    // (src/lib/transactionAttachments.ts). Found during this STEP's own live testing: without this
+    // early check, a rejected upload still wrote its file to disk (the DAL-level guard only stops
+    // the DB row, since the route writes the file before calling it) — an orphaned file with no
+    // database record. The DAL-level check remains the authoritative enforcement (defense in depth,
+    // per Phase 4's "route is not the only security boundary" requirement); this is purely to avoid
+    // the wasted/orphaned disk write on the common path.
+    try {
+      assertTransactionMutable(transactionId);
+    } catch (error) {
+      if (error instanceof Error && error.message === "TAX_YEAR_NOT_OPEN") {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "ไม่สามารถเพิ่มไฟล์แนบได้ — ปีภาษีที่เกี่ยวข้องไม่ได้อยู่ในสถานะ OPEN แล้ว",
+          },
+          { status: 409 }
+        );
+      }
+
+      throw error;
+    }
+
     const typeFolder = resolveEvidenceTypeFolder(transaction.transactionType);
 
     if (!typeFolder) {
@@ -329,6 +353,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     return NextResponse.json({ success: true, data: attachment }, { status: 201 });
   } catch (error) {
+    // STEP 96 — insertTransactionAttachment() (src/lib/transactionAttachments.ts) now checks
+    // assertTransactionMutable() before writing: this transaction's tax year is no longer OPEN.
+    if (error instanceof Error && error.message === "TAX_YEAR_NOT_OPEN") {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "ไม่สามารถเพิ่มไฟล์แนบได้ — ปีภาษีที่เกี่ยวข้องไม่ได้อยู่ในสถานะ OPEN แล้ว",
+        },
+        { status: 409 }
+      );
+    }
+
     console.error("POST /api/transactions/[id]/attachments error:", error);
 
     return NextResponse.json(

@@ -89,10 +89,14 @@ function isProtectedPage(pathname: string): boolean {
 // reasoning, same convention. No file-upload code exists yet in STEP C.2 (that starts at STEP C.3),
 // but the path is protected now so nothing can ever land here unauthenticated once it does — same
 // "protect the path before the feature exists" approach STEP B.4 used for /bank before the page did.
+// STEP 100 — tax-document evidence (TikTok/Facebook/bank/WHT/expense documents recovered after
+// the fact) is at least as sensitive as the transaction-attachments/bank-statements evidence
+// above — gated the exact same way, same reasoning, same convention.
 function isProtectedGeneratedFile(pathname: string): boolean {
   if (pathname.startsWith("/generated/transaction-attachments/")) return true;
   if (pathname.startsWith("/generated/ai-slip-previews/")) return true;
   if (pathname.startsWith("/generated/bank-statements/")) return true;
+  if (pathname.startsWith("/generated/tax-documents/")) return true;
 
   return false;
 }
@@ -225,5 +229,7 @@ export const config = {
     "/generated/ai-slip-previews/:path*",
     // STEP C.2 — see isProtectedGeneratedFile() above.
     "/generated/bank-statements/:path*",
+    // STEP 100 — see isProtectedGeneratedFile() above.
+    "/generated/tax-documents/:path*",
   ],
 };

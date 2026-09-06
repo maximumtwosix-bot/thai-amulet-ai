@@ -114,6 +114,8 @@ import {
   type TransactionAttachment,
 } from "./transactionAttachments";
 import { type OrderStatus } from "./orderStatus";
+import { assertTransactionMutable } from "./taxYearTransactionLinks";
+import { recordAuditEvent } from "./taxAuditLog";
 
 export type TransactionRow = {
   id: number;
@@ -326,7 +328,7 @@ export function createTransaction(input: CreateTransactionInput): TransactionRow
       assertNoDuplicateOrderIncome(orderId);
     }
 
-    return db
+    const result = db
       .prepare(
         `
         INSERT INTO transactions (
@@ -348,17 +350,27 @@ export function createTransaction(input: CreateTransactionInput): TransactionRow
         input.paymentMethod?.trim() || null,
         input.notes?.trim() || null
       );
+
+    const row = getById(Number(result.lastInsertRowid));
+
+    if (!row) {
+      throw new Error("TRANSACTION_CREATE_FAILED");
+    }
+
+    // STEP 96 — audit trail. A brand-new transaction can never already be tax-year-linked (the link
+    // table is keyed off an existing transaction id), so no lock check applies here — only
+    // update/delete of an EXISTING transaction can ever be blocked by a tax-year lock.
+    recordAuditEvent({
+      entityType: "transaction",
+      entityId: row.id,
+      action: "CREATE",
+      afterData: row,
+    });
+
+    return row;
   });
 
-  const result = insert();
-
-  const row = getById(Number(result.lastInsertRowid));
-
-  if (!row) {
-    throw new Error("TRANSACTION_CREATE_FAILED");
-  }
-
-  return row;
+  return insert();
 }
 
 export interface ListTransactionsFilters {
@@ -535,6 +547,13 @@ export function updateTransaction(id: number, input: UpdateTransactionInput): Tr
   // to an order that already has income is rejected. Wrapped in db.transaction() with the UPDATE for
   // the same atomicity reason as STEP 34's create path (SAVEPOINT-safe under concurrent requests).
   const update = db.transaction(() => {
+    // STEP 96 — tax-year lock guard. Runs FIRST, inside the same atomic unit as the mutation itself
+    // (better-sqlite3 transactions are fully synchronous — nothing can change the linked tax year's
+    // status between this check and the UPDATE below). A transaction with no tax-year link at all
+    // (the case for every transaction that existed before this STEP, and any transaction never
+    // explicitly opted in) passes through unaffected — identical to pre-STEP-96 behavior.
+    assertTransactionMutable(id);
+
     if (nextType === "income" && nextOrderId !== null) {
       assertNoDuplicateOrderIncome(nextOrderId, id);
     }
@@ -569,17 +588,28 @@ export function updateTransaction(id: number, input: UpdateTransactionInput): Tr
       nextNotes,
       id
     );
+
+    const updated = getById(id);
+
+    if (!updated) {
+      throw new Error("TRANSACTION_UPDATE_FAILED");
+    }
+
+    // STEP 96 — audit trail, atomic with the UPDATE above: if this transaction() throws for any
+    // reason after this point it never runs (better-sqlite3 rolls the whole callback back), so a
+    // failed update can never leave behind an audit event claiming success.
+    recordAuditEvent({
+      entityType: "transaction",
+      entityId: id,
+      action: "UPDATE",
+      beforeData: existing,
+      afterData: updated,
+    });
+
+    return updated;
   });
 
-  update();
-
-  const row = getById(id);
-
-  if (!row) {
-    throw new Error("TRANSACTION_UPDATE_FAILED");
-  }
-
-  return row;
+  return update();
 }
 
 // STEP 21 — คืน attachment rows ที่ถูกลบไปด้วย (ถ้ามี) ให้ caller (route) เอา fileUrl แต่ละไฟล์ไปลบ
@@ -607,9 +637,27 @@ export function deleteTransaction(
     throw new Error("ORDER_LINKED_CONFIRMATION_REQUIRED");
   }
 
-  const deletedAttachments = deleteAllAttachmentsForTransaction(id);
+  // STEP 96 — tax-year lock guard, checked before any deletion happens. Wrapped in db.transaction()
+  // (this function previously ran its two DELETE-adjacent steps un-transacted) so the guard, the
+  // cascaded attachment deletion (which records its own audit events — see
+  // deleteAllAttachmentsForTransaction() in src/lib/transactionAttachments.ts), the transaction row
+  // deletion, and this function's own audit event are all one atomic unit.
+  const remove = db.transaction(() => {
+    assertTransactionMutable(id);
 
-  db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
+    const deletedAttachments = deleteAllAttachmentsForTransaction(id);
 
-  return deletedAttachments;
+    db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
+
+    recordAuditEvent({
+      entityType: "transaction",
+      entityId: id,
+      action: "DELETE",
+      beforeData: existing,
+    });
+
+    return deletedAttachments;
+  });
+
+  return remove();
 }

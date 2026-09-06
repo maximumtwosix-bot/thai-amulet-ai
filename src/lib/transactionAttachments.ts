@@ -1,4 +1,6 @@
 import db from "@/lib/db";
+import { assertTransactionMutable } from "@/lib/taxYearTransactionLinks";
+import { recordAuditEvent } from "@/lib/taxAuditLog";
 
 // Evidence attachments for a transaction (receipt / transfer slip photo) — STEP 21.
 // Mirrors src/lib/productMedia.ts's shape and conventions exactly (same getById-scoped-to-parent
@@ -59,28 +61,55 @@ export function getTransactionAttachmentById(
 }
 
 // ไฟล์ต้องถูกเขียนลงดิสก์เรียบร้อยแล้วก่อนเรียกฟังก์ชันนี้ (เหมือน insertProductMedia)
+//
+// STEP 96 — guarded by the same tax-year lock as the parent transaction: new evidence cannot be
+// added to a transaction once its tax year is FINALIZED/LOCKED (adding evidence after the fact is
+// exactly the kind of silent post-lock change the STEP 95 audit flagged). The file itself is already
+// written to disk by the caller before this runs (existing convention, unchanged) — this only guards
+// the DB row + audit trail, wrapped together in one db.transaction() for atomicity.
 export function insertTransactionAttachment(params: {
   transactionId: number;
   fileName: string;
   fileUrl: string;
 }): TransactionAttachment {
-  const result = db
-    .prepare(
-      `INSERT INTO transaction_attachments (transaction_id, file_name, file_url)
-       VALUES (?, ?, ?)`
-    )
-    .run(params.transactionId, params.fileName, params.fileUrl);
+  const insert = db.transaction(() => {
+    assertTransactionMutable(params.transactionId);
 
-  const row = db
-    .prepare(`SELECT ${SELECT_COLUMNS} FROM transaction_attachments WHERE id = ?`)
-    .get(result.lastInsertRowid) as TransactionAttachmentRow;
+    const result = db
+      .prepare(
+        `INSERT INTO transaction_attachments (transaction_id, file_name, file_url)
+         VALUES (?, ?, ?)`
+      )
+      .run(params.transactionId, params.fileName, params.fileUrl);
 
-  return mapRow(row);
+    const row = db
+      .prepare(`SELECT ${SELECT_COLUMNS} FROM transaction_attachments WHERE id = ?`)
+      .get(result.lastInsertRowid) as TransactionAttachmentRow;
+
+    const attachment = mapRow(row);
+
+    recordAuditEvent({
+      entityType: "transaction_attachment",
+      entityId: attachment.id,
+      action: "CREATE",
+      afterData: attachment,
+    });
+
+    return attachment;
+  });
+
+  return insert();
 }
 
 /**
  * ลบไฟล์แนบ 1 รายการ — คืนแถวที่ลบไปแล้ว (เพื่อให้ route เอา fileUrl ไปลบไฟล์จริงบนดิสก์ต่อ)
  * หรือ undefined ถ้าไม่พบ (รวมถึงกรณี attachmentId มีอยู่จริงแต่เป็นของ transaction อื่น)
+ *
+ * STEP 96 — guarded by the parent transaction's tax-year lock, same reasoning as
+ * insertTransactionAttachment() above: evidence cannot be removed once the tax year is
+ * FINALIZED/LOCKED either (removing it would be just as much a silent post-lock change as adding
+ * it). Throws TAX_YEAR_NOT_OPEN rather than returning undefined, so the route can distinguish
+ * "not found" (undefined, unchanged) from "found but locked" (thrown error).
  */
 export function deleteTransactionAttachment(
   transactionId: number,
@@ -92,9 +121,22 @@ export function deleteTransactionAttachment(
     return undefined;
   }
 
-  db.prepare(`DELETE FROM transaction_attachments WHERE id = ?`).run(attachmentId);
+  const remove = db.transaction(() => {
+    assertTransactionMutable(transactionId);
 
-  return existing;
+    db.prepare(`DELETE FROM transaction_attachments WHERE id = ?`).run(attachmentId);
+
+    recordAuditEvent({
+      entityType: "transaction_attachment",
+      entityId: attachmentId,
+      action: "DELETE",
+      beforeData: existing,
+    });
+
+    return existing;
+  });
+
+  return remove();
 }
 
 /**
@@ -102,6 +144,11 @@ export function deleteTransactionAttachment(
  * ก่อนลบตัว transaction เองเสมอ กัน orphaned rows คืนรายการที่ถูกลบ (เพื่อให้ caller เอา fileUrl
  * แต่ละไฟล์ไปลบไฟล์จริงบนดิสก์ต่อแบบ best-effort เหมือน route DELETE รายตัว)
  */
+// STEP 96 — NOT re-guarded here: this is a cascade helper called only from deleteTransaction()
+// (src/lib/transactions.ts), which has already checked assertTransactionMutable() for the parent
+// transaction before calling this. Re-checking here would be redundant, not safer. Each cascaded
+// row still gets its own audit event, since a deleted attachment is tax-relevant data regardless of
+// why it was deleted.
 export function deleteAllAttachmentsForTransaction(
   transactionId: number
 ): TransactionAttachment[] {
@@ -111,6 +158,15 @@ export function deleteAllAttachmentsForTransaction(
     db.prepare(`DELETE FROM transaction_attachments WHERE transaction_id = ?`).run(
       transactionId
     );
+
+    for (const row of rows) {
+      recordAuditEvent({
+        entityType: "transaction_attachment",
+        entityId: row.id,
+        action: "DELETE",
+        beforeData: row,
+      });
+    }
   }
 
   return rows;

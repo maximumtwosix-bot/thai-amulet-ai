@@ -48,7 +48,25 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       );
     }
 
-    const deleted = deleteTransactionAttachment(transactionId, attachmentId);
+    let deleted;
+
+    try {
+      deleted = deleteTransactionAttachment(transactionId, attachmentId);
+    } catch (error) {
+      // STEP 96 — deleteTransactionAttachment() (src/lib/transactionAttachments.ts) now checks
+      // assertTransactionMutable() before deleting: this transaction's tax year is no longer OPEN.
+      if (error instanceof Error && error.message === "TAX_YEAR_NOT_OPEN") {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "ไม่สามารถลบไฟล์แนบได้ — ปีภาษีที่เกี่ยวข้องไม่ได้อยู่ในสถานะ OPEN แล้ว",
+          },
+          { status: 409 }
+        );
+      }
+
+      throw error;
+    }
 
     if (!deleted) {
       return NextResponse.json(

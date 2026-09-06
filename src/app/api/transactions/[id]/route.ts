@@ -86,6 +86,19 @@ function errorToResponse(error: unknown) {
     );
   }
 
+  // STEP 96 — assertTransactionMutable() (src/lib/taxYearTransactionLinks.ts), called from both
+  // updateTransaction() and deleteTransaction(): this transaction is linked to a tax year that is
+  // no longer OPEN.
+  if (message === "TAX_YEAR_NOT_OPEN") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "ไม่สามารถแก้ไข/ลบรายการนี้ได้ — ปีภาษีที่เกี่ยวข้องไม่ได้อยู่ในสถานะ OPEN แล้ว",
+      },
+      { status: 409 }
+    );
+  }
+
   console.error("Transaction detail API error:", error);
 
   return NextResponse.json(

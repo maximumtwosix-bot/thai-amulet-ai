@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getWhtRecordById, updateWhtRecord, type WhtRecordRow } from "@/lib/whtRecords";
+import { resolveWhtRecordOwner } from "@/lib/taxOwnership";
+import { SESSION_COOKIE_NAME, resolveSessionTaxpayerId } from "@/lib/auth";
 
 // STEP 94 — single WHT record detail/update. Full payerTaxId IS included on GET by design (unlike
 // the list endpoint) — same precedent as GET /api/tax/taxpayer-profile/[id] and
@@ -121,7 +123,30 @@ export async function GET(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ success: false, error: "WHT record not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, data: record });
+    // STEP 118 — reporting-only ownership check (same pattern as STEP 116's
+    // GET /api/tax/documents/[id]). READ-ONLY: resolveWhtRecordOwner() (src/lib/taxOwnership.ts,
+    // STEP 114) and resolveSessionTaxpayerId() (decodes the already-verified session cookie,
+    // src/lib/auth.ts) are both pure reads. Purely additive to the response; never denies access,
+    // never changes the status code above, never alters `success`/`data`.
+    const ownership = resolveWhtRecordOwner(record.id);
+    const sessionTaxpayerId = resolveSessionTaxpayerId(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+
+    let sessionTaxpayerMatch: "MATCH" | "MISMATCH" | "SESSION_TAXPAYER_UNAVAILABLE" | "NOT_APPLICABLE";
+
+    if (sessionTaxpayerId === null) {
+      sessionTaxpayerMatch = "SESSION_TAXPAYER_UNAVAILABLE";
+    } else if (ownership.status !== "RESOLVED") {
+      sessionTaxpayerMatch = "NOT_APPLICABLE";
+    } else {
+      sessionTaxpayerMatch = ownership.taxpayerProfileId === sessionTaxpayerId ? "MATCH" : "MISMATCH";
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: record,
+      ownerStatus: ownership.status,
+      sessionTaxpayerMatch,
+    });
   } catch (error) {
     return errorToResponse(error);
   }

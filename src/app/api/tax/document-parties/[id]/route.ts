@@ -4,6 +4,8 @@ import {
   unlinkDocumentParty,
   updateLinkNote,
 } from "@/lib/taxDocumentParties";
+import { resolveDocumentPartyLinkOwner } from "@/lib/taxOwnership";
+import { SESSION_COOKIE_NAME, resolveSessionTaxpayerId } from "@/lib/auth";
 
 // STEP 110 — single document-party link read + its two mutation paths. PATCH accepts ONLY `note`
 // — party/document/row/role are immutable by construction in the DAL (no code path here or in
@@ -79,7 +81,31 @@ export async function GET(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ success: false, error: "Document-party link not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, data: link });
+    // STEP 118 — reporting-only ownership check (same pattern as STEP 116's
+    // GET /api/tax/documents/[id]). READ-ONLY: resolveDocumentPartyLinkOwner()
+    // (src/lib/taxOwnership.ts, STEP 114) and resolveSessionTaxpayerId() (decodes the
+    // already-verified session cookie, src/lib/auth.ts) are both pure reads. Purely additive to the
+    // response; never denies access, never changes the status code above, never alters
+    // `success`/`data`.
+    const ownership = resolveDocumentPartyLinkOwner(link.id);
+    const sessionTaxpayerId = resolveSessionTaxpayerId(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+
+    let sessionTaxpayerMatch: "MATCH" | "MISMATCH" | "SESSION_TAXPAYER_UNAVAILABLE" | "NOT_APPLICABLE";
+
+    if (sessionTaxpayerId === null) {
+      sessionTaxpayerMatch = "SESSION_TAXPAYER_UNAVAILABLE";
+    } else if (ownership.status !== "RESOLVED") {
+      sessionTaxpayerMatch = "NOT_APPLICABLE";
+    } else {
+      sessionTaxpayerMatch = ownership.taxpayerProfileId === sessionTaxpayerId ? "MATCH" : "MISMATCH";
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: link,
+      ownerStatus: ownership.status,
+      sessionTaxpayerMatch,
+    });
   } catch (error) {
     return errorToResponse(error);
   }

@@ -9,6 +9,7 @@ import {
   createBankStatementTransaction,
   findBankStatementTransactionByBankId,
   findBankStatementTransactionByFingerprint,
+  type BankStatementRow,
 } from "@/lib/bankStatements";
 import {
   parseAndValidateStatementCsv,
@@ -17,6 +18,11 @@ import {
   type BankStatementColumnMapping,
   type ParsedRowResult,
 } from "@/lib/bankStatementCsv";
+// STEP E.6 — PDF branch, additive alongside the CSV path below. bankStatementCsv.ts itself is not
+// imported any differently than before.
+import { extractPdfText, pdfFileErrorMessage } from "@/lib/bankStatementPdf";
+import { extractStatementRowsFromPdfText } from "@/lib/bankStatementPdfRows";
+import { isKnownPdfLayoutId, getPdfStatementLayout } from "@/lib/bankStatementPdfLayouts";
 
 export const runtime = "nodejs";
 
@@ -153,6 +159,206 @@ function overrideFingerprint(
   });
 }
 
+// ===== STEP E.6 — PDF branch. Additive alongside the CSV path below; nothing in this section is
+// called by, or changes the behavior of, the CSV path. =====
+//
+// CRITICAL SECURITY PROPERTY OF THIS FUNCTION (this STEP's audit finding — see
+// src/lib/bankStatementPdfLayouts.ts's own header comment for the full reasoning): the actual
+// row-extraction RULES used here come ONLY from PDF_STATEMENT_LAYOUTS, a fixed, developer-authored
+// registry — NEVER from `statement.columnMapping` (the client's original, arbitrary-regex
+// submission from STEP E.5's upload route) and NEVER from any regex/pattern field the confirm
+// request body might contain. The request body may supply `layoutId` (a plain string, validated
+// against the registry below) and `password` — nothing else from it is capable of influencing how a
+// single byte of the PDF is interpreted. A request that also happens to include e.g. a `rowPattern`
+// or `money` field alongside a valid `layoutId` has those fields silently ignored — they are never
+// read.
+async function handlePdfStatementConfirm(request: NextRequest, id: number, statement: BankStatementRow) {
+  try {
+    let body: unknown = {};
+    const rawBody = await request.text();
+
+    if (rawBody.trim()) {
+      try {
+        body = JSON.parse(rawBody);
+      } catch {
+        return NextResponse.json({ success: false, error: "Invalid request body (must be JSON)" }, { status: 400 });
+      }
+
+      if (!body || typeof body !== "object") {
+        return NextResponse.json({ success: false, error: "Invalid request body" }, { status: 400 });
+      }
+    }
+
+    const bodyObj = body as Record<string, unknown>;
+
+    // The ONLY source of truth for parsing rules — see this function's header comment above.
+    const layoutIdRaw = bodyObj.layoutId;
+    if (!isKnownPdfLayoutId(layoutIdRaw)) {
+      return NextResponse.json({ success: false, error: "ไม่รู้จักรูปแบบ PDF (layoutId) ที่ระบุ" }, { status: 400 });
+    }
+    const layout = getPdfStatementLayout(layoutIdRaw)!;
+
+    // Password lifecycle (docs/BANK_STATEMENT_PDF_IMPORT_POLICY.md §3): request-scope ONLY.
+    // STEP E.1's decision explicitly accepted, as a deliberate trade-off, that the password is
+    // never persisted anywhere — including across the upload -> confirm boundary — so it must be
+    // supplied again here. Never assigned to a module-level variable, never logged, never included
+    // in ANY response, never written to the database, never passed to updateBankStatementStatus()'s
+    // errorSummary.
+    const passwordRaw = bodyObj.password;
+    const password = typeof passwordRaw === "string" && passwordRaw.length > 0 ? passwordRaw : undefined;
+
+    const overrideRaw = bodyObj.overrideDuplicateRowNumbers;
+    const overrideRowNumbers = new Set<number>(
+      Array.isArray(overrideRaw) ? overrideRaw.filter((n): n is number => Number.isInteger(n)) : []
+    );
+
+    // Re-read the ACTUAL stored file from disk — same trusted-source principle as the CSV path
+    // below, never trusting anything the client claims about the file's content.
+    const filePath = path.join(process.cwd(), "public", statement.sourceFileUrl.replace(/^\/+/, ""));
+
+    let buffer: Buffer;
+    try {
+      buffer = await readFile(filePath);
+    } catch {
+      updateBankStatementStatus(id, "FAILED", { errorSummary: "ไม่สามารถอ่านไฟล์ต้นฉบับได้" });
+      throw new Error("SOURCE_FILE_UNREADABLE");
+    }
+
+    const recomputedHash = createHash("sha256").update(buffer).digest("hex");
+    if (recomputedHash !== statement.sourceFileHash) {
+      updateBankStatementStatus(id, "FAILED", {
+        errorSummary: "ไฟล์ต้นฉบับถูกเปลี่ยนแปลงหลังจากตรวจสอบตัวอย่างแล้ว",
+      });
+      throw new Error("FILE_HASH_MISMATCH");
+    }
+
+    const extracted = await extractPdfText(buffer, password);
+
+    if (extracted.error) {
+      const message = pdfFileErrorMessage(extracted.error);
+      updateBankStatementStatus(id, "FAILED", { errorSummary: message });
+
+      return NextResponse.json({
+        success: true,
+        data: { statementId: id, status: "FAILED", fatalError: { code: extracted.error, message } },
+      });
+    }
+
+    const reparsed = extractStatementRowsFromPdfText(extracted.pageLines ?? [], statement.bankAccountId, layout);
+
+    // Same consistency guard as the CSV path's own PREVIEW_MISMATCH check below. Here it ALSO
+    // catches the (expected, disclosed) case where the trusted registry layout used here produces
+    // different counts than whatever client-submitted layout computed the original STEP E.5
+    // preview — a client-influenced preview can never silently become what actually gets imported;
+    // any discrepancy fails closed, exactly like a genuine CSV preview/confirm mismatch would.
+    if (
+      reparsed.summary.total !== statement.rowCountTotal ||
+      reparsed.summary.valid !== statement.rowCountValid ||
+      reparsed.summary.invalid !== statement.rowCountInvalid
+    ) {
+      updateBankStatementStatus(id, "FAILED", {
+        errorSummary: "ผลการตรวจสอบไฟล์ไม่ตรงกับตัวอย่างที่เคยแสดงไว้",
+      });
+      throw new Error("PREVIEW_MISMATCH");
+    }
+
+    // Fresh duplicate re-check — identical logic/shape to the CSV path below.
+    const bankAccountId = statement.bankAccountId;
+    let duplicateCount = 0;
+    const rowsToImport: Array<{
+      rowNumber: number;
+      canonical: NonNullable<ParsedRowResult["canonical"]>;
+      raw: Record<string, string>;
+    }> = [];
+
+    for (const row of reparsed.rows) {
+      if ((row.category !== "NEW" && row.category !== "WARNING") || !row.canonical) {
+        continue;
+      }
+
+      const byBankId = row.canonical.bankTransactionId
+        ? findBankStatementTransactionByBankId(bankAccountId, row.canonical.bankTransactionId)
+        : undefined;
+
+      if (byBankId) {
+        duplicateCount += 1;
+        continue;
+      }
+
+      const byFingerprint = findBankStatementTransactionByFingerprint(bankAccountId, row.canonical.duplicateFingerprint);
+
+      if (byFingerprint) {
+        if (overrideRowNumbers.has(row.rowNumber)) {
+          rowsToImport.push({
+            rowNumber: row.rowNumber,
+            canonical: {
+              ...row.canonical,
+              duplicateFingerprint: overrideFingerprint(
+                bankAccountId,
+                row as ParsedRowResult & { canonical: NonNullable<ParsedRowResult["canonical"]> },
+                row.rowNumber
+              ),
+            },
+            raw: row.raw,
+          });
+        } else {
+          duplicateCount += 1;
+        }
+        continue;
+      }
+
+      rowsToImport.push({ rowNumber: row.rowNumber, canonical: row.canonical, raw: row.raw });
+    }
+
+    // Atomic, all-or-nothing commit — the exact same guard/transaction shape as the CSV path below.
+    const commit = db.transaction(() => {
+      const guardResult = db
+        .prepare("UPDATE bank_statements SET status = 'IMPORTING', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'PREVIEW_READY'")
+        .run(id);
+
+      if (guardResult.changes !== 1) {
+        throw new Error("CONFIRM_ALREADY_IN_PROGRESS_OR_STALE");
+      }
+
+      for (const { rowNumber, canonical, raw } of rowsToImport) {
+        createBankStatementTransaction({
+          bankStatementId: id,
+          bankTransactionId: canonical.bankTransactionId,
+          transactionDate: canonical.transactionDate,
+          description: canonical.description,
+          debit: canonical.debit,
+          credit: canonical.credit,
+          amount: canonical.amount,
+          balance: canonical.balance,
+          duplicateFingerprint: canonical.duplicateFingerprint,
+          rawRowIndex: rowNumber,
+          rawRowText: JSON.stringify(raw),
+        });
+      }
+
+      updateBankStatementStatus(id, "IMPORTED", { rowCountDuplicate: duplicateCount });
+    });
+
+    commit();
+
+    const finalStatement = getBankStatementById(id);
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        statementId: id,
+        status: finalStatement?.status ?? "IMPORTED",
+        imported: rowsToImport.length,
+        skippedDuplicates: duplicateCount,
+      },
+    });
+  } catch (error) {
+    return errorToResponse(error);
+  }
+}
+
+// ===== End of STEP E.6 PDF branch. Everything below is the pre-STEP-E.6 CSV path. =====
+
 export async function POST(request: NextRequest, context: RouteContext) {
   try {
     const { id: idParam } = await context.params;
@@ -172,6 +378,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
     // everything above this point involves async file I/O that cannot live inside one).
     if (statement.status !== "PREVIEW_READY") {
       throw new Error("STATEMENT_NOT_PREVIEW_READY");
+    }
+
+    // STEP E.6 — format branch decision, from TRUSTED DB state only (statement.sourceFileType,
+    // read above from the database, never from this request's body/headers/query string) — a
+    // client cannot make a PDF statement take the CSV path (or a CSV statement take the PDF path)
+    // by shaping their confirm request a certain way. Everything below this block, for a CSV
+    // statement, is BYTE-FOR-BYTE UNCHANGED from before this STEP.
+    if (statement.sourceFileType === "PDF") {
+      return handlePdfStatementConfirm(request, id, statement);
     }
 
     // STEP C.6 — the request body now carries ONLY the user's review decisions

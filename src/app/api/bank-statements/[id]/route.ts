@@ -7,6 +7,7 @@ import {
   getBankStatementById,
   findBankStatementTransactionByBankId,
   findBankStatementTransactionByFingerprint,
+  type BankStatementRow,
 } from "@/lib/bankStatements";
 import {
   parseAndValidateStatementCsv,
@@ -14,6 +15,12 @@ import {
   type BankStatementColumnMapping,
   type ParsedRowResult,
 } from "@/lib/bankStatementCsv";
+// STEP E.6.1 — PDF branch, additive alongside the CSV path below. bankStatementCsv.ts itself is not
+// imported any differently than before, and validateMappingShape() (CSV-specific, below) is never
+// called with PDF data.
+import { extractPdfText, pdfFileErrorMessage } from "@/lib/bankStatementPdf";
+import { extractStatementRowsFromPdfText } from "@/lib/bankStatementPdfRows";
+import { isKnownPdfLayoutId, getPdfStatementLayout } from "@/lib/bankStatementPdfLayouts";
 
 export const runtime = "nodejs";
 
@@ -180,6 +187,30 @@ function classifyDuplicates(
   return { rows: classified as ParsedRowResult[], duplicateCount };
 }
 
+// STEP E.6.1 — never throws (unlike a bare JSON.parse() call) — used for the display-only `mapping`
+// field below, for BOTH CSV and PDF statements alike (this column has always stored opaque JSON
+// text for either format, src/lib/bankStatements.ts's own BankStatementRow.columnMapping comment).
+// A statement whose stored text somehow isn't valid JSON now degrades to `mapping: null` instead of
+// taking down the whole request with an uncaught exception — a pure robustness improvement with no
+// behavior change for the (only-ever-seen-in-practice) valid-JSON case.
+function safeJsonParseOrNull(text: string | null): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+// STEP E.6.1 — the ONE entry in src/lib/bankStatementPdfLayouts.ts's trusted registry this read-only
+// route will ever use to reconstruct a PDF statement's row-level preview. GET never accepts a
+// client-supplied layoutId (there is no query-string or body channel for one that wouldn't repeat
+// the exact "client chooses parsing rules" mistake STEP E.6 fixed for Confirm) — this is a fixed,
+// compile-time-known constant, not configuration. isKnownPdfLayoutId() below is still checked
+// explicitly rather than assumed, so a future rename/removal of this registry entry fails safely
+// here instead of silently reading `undefined` from the registry map.
+const DEFAULT_PDF_LAYOUT_ID = "GENERIC_DATE_DESC_DEBIT_CREDIT_BALANCE_V1";
+
 // STEP C.6 §8 — plain offset/limit pagination, matching every other list function in this codebase
 // (no cursor pagination exists anywhere here) and STEP C.4's own maxPreviewRows precedent for what
 // "a page" of statement rows means. No new index added — IMPORTED rows are already served by
@@ -196,6 +227,122 @@ function parsePagination(searchParams: URLSearchParams): { page: number; pageSiz
       : DEFAULT_CSV_LIMITS.maxPreviewRows;
 
   return { page, pageSize };
+}
+
+// STEP E.6.1 — PDF branch of the PREVIEW_READY reconstruction. Read-only, same as the CSV branch it
+// sits alongside: no db.transaction(), no INSERT/UPDATE anywhere in this function.
+//
+// CRITICAL DIFFERENCE FROM THE CSV BRANCH, BY NECESSITY: a GET request has no password (there is no
+// query-string-password channel — docs/BANK_STATEMENT_PDF_IMPORT_POLICY.md §3 explicitly forbids
+// one — and no established GET-with-body convention anywhere in this codebase), so this function can
+// only ever call extractPdfText() WITHOUT a password. For an unencrypted PDF that is enough to fully
+// reconstruct row-level detail, exactly like CSV. For a password-protected PDF, decryption fails
+// with PASSWORD_REQUIRED — handled below by degrading gracefully to the already-persisted
+// metadata/summary (computed and stored by the upload/confirm flow itself, genuinely trustworthy
+// DB state, not a guess) with an empty row list and a `pdfRequiresPasswordForPreview` flag, rather
+// than either (a) failing the whole request, or (b) inventing a way to obtain a password this
+// endpoint was never meant to have. Row-level detail for an encrypted PDF remains available via
+// Confirm (STEP E.6), which legitimately accepts a freshly-entered password for exactly this reason.
+//
+// Row extraction, when it does run, uses ONLY the trusted server-side registry
+// (src/lib/bankStatementPdfLayouts.ts) — never `statement.columnMapping` (the client's original,
+// arbitrary-regex STEP E.5 upload submission), matching STEP E.6's Confirm-route fix applied here to
+// the read-only preview path as well. `mapping` in the returned shape is always `null` for a PDF
+// statement — exposing the client's original raw regex there would misrepresent what actually
+// governs this response.
+async function buildPdfPreviewData(
+  statement: BankStatementRow,
+  base: Record<string, unknown>,
+  page: number,
+  pageSize: number
+): Promise<Record<string, unknown>> {
+  const emptyPagination = { page: 1, pageSize, total: 0, hasNext: false, hasPrevious: false };
+  const persistedSummary = {
+    total: statement.rowCountTotal,
+    valid: statement.rowCountValid,
+    invalid: statement.rowCountInvalid,
+    duplicate: statement.rowCountDuplicate,
+  };
+
+  if (!isKnownPdfLayoutId(DEFAULT_PDF_LAYOUT_ID)) {
+    // Defensive only — see DEFAULT_PDF_LAYOUT_ID's own comment for why this should be unreachable.
+    // Fails safely with a fixed diagnostic rather than falling back to any looser interpretation.
+    return {
+      ...base,
+      mapping: null,
+      fatalError: {
+        code: "PDF_LAYOUT_NOT_TRUSTED",
+        message: "ไม่พบรูปแบบ PDF ที่เชื่อถือได้สำหรับแสดงตัวอย่างนี้",
+      },
+      summary: persistedSummary,
+      pagination: emptyPagination,
+      rows: [],
+    };
+  }
+
+  const layout = getPdfStatementLayout(DEFAULT_PDF_LAYOUT_ID)!;
+
+  const filePath = path.join(process.cwd(), "public", statement.sourceFileUrl.replace(/^\/+/, ""));
+
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(filePath);
+  } catch {
+    throw new Error("SOURCE_FILE_UNREADABLE");
+  }
+
+  const extracted = await extractPdfText(buffer, undefined);
+
+  if (extracted.error === "PASSWORD_REQUIRED") {
+    return {
+      ...base,
+      mapping: null,
+      summary: persistedSummary,
+      pagination: emptyPagination,
+      rows: [],
+      pdfRequiresPasswordForPreview: true,
+    };
+  }
+
+  if (extracted.error) {
+    // Any other extraction failure (e.g. the stored file changed after preview) — should not happen
+    // in practice for an already-PREVIEW_READY statement; handled defensively, same posture as the
+    // CSV branch's own reparsed.fatalError case just below this function's call site.
+    return {
+      ...base,
+      mapping: null,
+      fatalError: { code: extracted.error, message: pdfFileErrorMessage(extracted.error) },
+      summary: persistedSummary,
+      pagination: emptyPagination,
+      rows: [],
+    };
+  }
+
+  const reparsed = extractStatementRowsFromPdfText(extracted.pageLines ?? [], statement.bankAccountId, layout);
+  const { rows: classifiedRows, duplicateCount } = classifyDuplicates(statement.bankAccountId, reparsed.rows);
+
+  const total = classifiedRows.length;
+  const pageStart = (page - 1) * pageSize;
+  const pageRows = classifiedRows.slice(pageStart, pageStart + pageSize);
+
+  return {
+    ...base,
+    mapping: null,
+    summary: {
+      total: reparsed.summary.total,
+      valid: reparsed.summary.valid - duplicateCount >= 0 ? reparsed.summary.valid - duplicateCount : 0,
+      invalid: reparsed.summary.invalid,
+      duplicate: duplicateCount,
+    },
+    pagination: {
+      page,
+      pageSize,
+      total,
+      hasNext: page * pageSize < total,
+      hasPrevious: page > 1,
+    },
+    rows: pageRows,
+  };
 }
 
 export async function GET(request: NextRequest, context: RouteContext) {
@@ -235,6 +382,12 @@ export async function GET(request: NextRequest, context: RouteContext) {
       accountName: account?.accountName ?? null,
       accountNumberMasked: account ? maskAccountNumber(account.accountNumber) : null,
       sourceFileName: statement.sourceFileName,
+      // STEP E.6.1 addition — read from the statement row itself (trusted DB state, set once at
+      // upload time by src/app/api/bank-statements/route.ts, STEP E.5), never from this request's
+      // query string/body — there is no `sourceFileType` request parameter anywhere in this route
+      // for a client to supply in the first place. Purely additive to this response shape: an
+      // existing CSV consumer that doesn't look for this field is unaffected.
+      sourceFileType: statement.sourceFileType,
       status: statement.status,
       statementPeriodFrom: statement.statementPeriodFrom,
       statementPeriodTo: statement.statementPeriodTo,
@@ -279,7 +432,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
         success: true,
         data: {
           ...base,
-          mapping: statement.columnMapping ? JSON.parse(statement.columnMapping) : null,
+          mapping: safeJsonParseOrNull(statement.columnMapping),
           summary: {
             total: statement.rowCountTotal,
             valid: statement.rowCountValid,
@@ -318,6 +471,18 @@ export async function GET(request: NextRequest, context: RouteContext) {
     }
 
     if (statement.status === "PREVIEW_READY") {
+      // STEP E.6.1 — format branch decision, from TRUSTED DB state only (statement.sourceFileType,
+      // read above from the database, never from this request's query string/body) — a client
+      // cannot make a PDF statement take the CSV path (or vice versa) by shaping their request a
+      // certain way. Everything below this block, for a CSV statement, is BYTE-FOR-BYTE UNCHANGED
+      // from before this STEP.
+      if (statement.sourceFileType === "PDF") {
+        return NextResponse.json({
+          success: true,
+          data: await buildPdfPreviewData(statement, base, page, pageSize),
+        });
+      }
+
       // STEP C.6 — on-demand reconstruction, never a stored preview. Re-reads the same file confirm
       // itself re-reads, using the mapping persisted at upload time (STEP C.6's schema addition) —
       // no client input is used to interpret the file in any way, matching confirm's own
@@ -395,7 +560,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       success: true,
       data: {
         ...base,
-        mapping: statement.columnMapping ? JSON.parse(statement.columnMapping) : null,
+        mapping: safeJsonParseOrNull(statement.columnMapping),
         summary: {
           total: statement.rowCountTotal,
           valid: statement.rowCountValid,

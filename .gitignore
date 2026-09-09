@@ -55,3 +55,6 @@ next-env.d.ts
 
 # STEP PROD-LOG-1 — persistent production stdout/stderr logs, machine-specific runtime output.
 /logs/
+
+# STEP E.7-QA-PREP — private local QA workspace for real bank statement PDFs; never committed.
+/_private/

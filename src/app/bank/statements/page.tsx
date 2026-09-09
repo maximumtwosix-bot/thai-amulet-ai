@@ -100,7 +100,7 @@ type ApiResponse<T = unknown> = {
 // Same friendly-error-message convention as src/app/bank/page.tsx — 401/500 mapped to fixed safe
 // Thai text regardless of what the server actually sent; 400/404/409 show the server's own
 // pre-written safe message.
-function friendlyErrorMessage(status: number, data: ApiResponse<unknown> | null): string {
+export function friendlyErrorMessage(status: number, data: ApiResponse<unknown> | null): string {
   if (status === 401) {
     return "เซสชันหมดอายุหรือยังไม่ได้เข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่";
   }
@@ -118,7 +118,7 @@ function friendlyErrorMessage(status: number, data: ApiResponse<unknown> | null)
 // best-effort read of just the first line, for display/selection convenience. A quoted header
 // containing a comma would misalign here, but that only affects which option labels are shown; the
 // actual upload always goes through the real server-side parser regardless of what this produced.
-function sniffHeaderRow(text: string): string[] {
+export function sniffHeaderRow(text: string): string[] {
   const firstLine = text.split(/\r\n|\r|\n/, 1)[0] ?? "";
   return firstLine
     .split(",")
@@ -143,6 +143,45 @@ const emptyMappingForm = {
   positiveMeans: "credit" as "credit" | "debit",
 };
 
+// STEP E.7 — PDF branch, additive alongside the CSV form above.
+
+type FileKind = "csv" | "pdf" | "unsupported" | null;
+
+export function detectFileKind(file: File | null): FileKind {
+  if (!file) return null;
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf")) return "pdf";
+  if (name.endsWith(".csv")) return "csv";
+  // Client-side hint only (per this STEP's explicit "extension/MIME เป็นเพียง UX hint" instruction)
+  // — the server's own magic-byte/extension checks (src/app/api/bank-statements/route.ts) remain
+  // the real authority regardless of what this function decides to show.
+  return "unsupported";
+}
+
+// CRITICAL (this STEP's explicit instruction): the UI must never let the user author or edit a
+// regex/layout — doing so would let a client change how PDF text gets interpreted as financial
+// data. This object is a FIXED constant, never rendered in any editable form control anywhere in
+// this file. It exists only to compute a non-authoritative PREVIEW at upload time (STEP E.5) — it
+// mirrors (does not need to byte-for-byte equal) the ONE entry in the server's trusted registry
+// (src/lib/bankStatementPdfLayouts.ts's GENERIC_DATE_DESC_DEBIT_CREDIT_BALANCE_V1) so the preview a
+// user sees closely matches what Confirm will actually import, but Confirm (STEP E.6) never reads
+// this value at all — it always re-derives independently from that same server-side trusted
+// registry, keyed by TRUSTED_PDF_LAYOUT_ID (src/app/bank/statements/[id]/page.tsx). Duplicated here
+// as a plain constant rather than imported from src/lib/bankStatementPdfLayouts.ts because that
+// module transitively imports src/lib/bankStatementCsv.ts, which imports node:crypto — importing
+// any src/lib/* module into a Client Component is exactly what this file's own top comment already
+// says never to do (matches the same reasoning as sniffHeaderRow() above being a client-only,
+// best-effort helper rather than the real parser).
+export const FIXED_PDF_PREVIEW_LAYOUT = {
+  repeatedHeaderPatterns: [] as string[],
+  repeatedFooterPatterns: ["^หน้า\\s+\\d+(\\s*/\\s*\\d+)?$", "^[Pp]age\\s+\\d+(\\s*of\\s*\\d+)?$"],
+  transactionStartPattern: "^\\d{2}/\\d{2}/\\d{4}",
+  rowPattern:
+    "^(?<date>\\d{2}/\\d{2}/\\d{4})\\s+(?<description>.+?)\\s+(?<debit>[\\d,]+\\.\\d{2}|-)\\s+(?<credit>[\\d,]+\\.\\d{2}|-)\\s+(?<balance>[\\d,]+\\.\\d{2})$",
+  dateFormat: "DD/MM/YYYY",
+  money: { kind: "separate_columns" as const, debitColumn: "debit", creditColumn: "credit" },
+};
+
 export default function BankStatementsPage() {
   const router = useRouter();
 
@@ -154,6 +193,12 @@ export default function BankStatementsPage() {
   const [file, setFile] = useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [mappingForm, setMappingForm] = useState(emptyMappingForm);
+  // STEP E.7 — PDF upload password. Component-memory only: never written to localStorage/
+  // sessionStorage/a cookie/a URL, never logged, never sent anywhere except as this one FormData
+  // field on submit. Cleared on file change (a password typed for a previously-selected file must
+  // never linger once a different file is chosen) and after upload completes, success or failure —
+  // there is no "resume this upload later" flow that would need it to persist any longer than that.
+  const [pdfPassword, setPdfPassword] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [alreadyImportedNotice, setAlreadyImportedNotice] = useState<{
@@ -237,8 +282,16 @@ export default function BankStatementsPage() {
     setCsvHeaders([]);
     setUploadError("");
     setAlreadyImportedNotice(null);
+    // STEP E.7 — a password typed for a previously-selected file must never linger once the file
+    // changes (this STEP's explicit "clear เมื่อ...เปลี่ยนไฟล์" requirement).
+    setPdfPassword("");
 
     if (!selected) return;
+
+    // STEP E.7 — CSV-only header sniff, unchanged; skipped entirely for a PDF (or unrecognized)
+    // file, since sniffHeaderRow() reading raw PDF bytes as text would only ever produce garbage
+    // that is never displayed to anyone for that case anyway.
+    if (detectFileKind(selected) !== "csv") return;
 
     try {
       const text = await selected.text();
@@ -299,8 +352,23 @@ export default function BankStatementsPage() {
     return null;
   }
 
+  // STEP E.7 — PDF's client-side pre-submit check. No mapping to validate at all (the layout is a
+  // fixed constant, never user-input — see FIXED_PDF_PREVIEW_LAYOUT's own comment) and password is
+  // optional (an unencrypted PDF needs none) — only the two universal prerequisites remain.
+  function validatePdfSubmission(): string | null {
+    if (!selectedAccountId) return "กรุณาเลือกบัญชีธนาคาร";
+    if (!file) return "กรุณาเลือกไฟล์ PDF";
+    return null;
+  }
+
   async function submitUpload() {
-    const validationError = validateMapping();
+    // STEP E.7 — format branch decision, from the selected file's own extension (client-side hint
+    // only — src/app/api/bank-statements/route.ts's own magic-byte/extension checks remain the real
+    // authority regardless of what this evaluates to). Everything under the `else` branch below,
+    // for a CSV file, is BYTE-FOR-BYTE UNCHANGED from before this STEP.
+    const fileKind = detectFileKind(file);
+
+    const validationError = fileKind === "pdf" ? validatePdfSubmission() : validateMapping();
     if (validationError) {
       setUploadError(validationError);
       return;
@@ -311,6 +379,19 @@ export default function BankStatementsPage() {
     setUploading(true);
 
     try {
+      const formData = new FormData();
+      formData.set("bankAccountId", String(selectedAccountId));
+
+      if (fileKind === "pdf") {
+        // STEP E.7 — PDF branch. FIXED_PDF_PREVIEW_LAYOUT is a fixed constant the user never edits
+        // (see its own comment above) — this is the only place it is read. Password is read
+        // directly from component state at the moment of submission and included in this one
+        // FormData field; it is cleared from state in this function's `finally` block below
+        // regardless of outcome — never logged, never stored, never sent anywhere else.
+        formData.set("pdfLayout", JSON.stringify(FIXED_PDF_PREVIEW_LAYOUT));
+        if (pdfPassword) formData.set("password", pdfPassword);
+        formData.set("file", file as File);
+      } else {
       const mapping =
         mappingForm.moneyKind === "separate_columns"
           ? {
@@ -356,10 +437,9 @@ export default function BankStatementsPage() {
                 },
               };
 
-      const formData = new FormData();
-      formData.set("bankAccountId", String(selectedAccountId));
-      formData.set("mapping", JSON.stringify(mapping));
-      formData.set("file", file as File);
+        formData.set("mapping", JSON.stringify(mapping));
+        formData.set("file", file as File);
+      }
 
       const response = await fetch("/api/bank-statements", { method: "POST", body: formData });
 
@@ -402,8 +482,15 @@ export default function BankStatementsPage() {
       setUploadError(err instanceof Error ? err.message : "ไม่สามารถอัปโหลดไฟล์ได้");
     } finally {
       setUploading(false);
+      // STEP E.7 — cleared after every upload attempt, success or failure alike: this step's job is
+      // done either way (a successful upload navigates away entirely; a failed one requires
+      // re-selecting/re-submitting, which naturally means typing the password again rather than
+      // silently reusing whatever is left in memory).
+      setPdfPassword("");
     }
   }
+
+  const fileKind = detectFileKind(file);
 
   return (
     <main className="min-h-screen bg-slate-50 p-6">
@@ -412,7 +499,7 @@ export default function BankStatementsPage() {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">📄 นำเข้า Bank Statement</h1>
             <p className="mt-1 text-sm text-slate-500">
-              อัปโหลดไฟล์ CSV จากธนาคาร ตรวจสอบตัวอย่างก่อนยืนยันนำเข้าจริง
+              อัปโหลดไฟล์ CSV หรือ PDF จากธนาคาร ตรวจสอบตัวอย่างก่อนยืนยันนำเข้าจริง
             </p>
           </div>
 
@@ -469,17 +556,55 @@ export default function BankStatementsPage() {
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500">ไฟล์ CSV *</label>
+                <label className="mb-1 block text-xs font-medium text-slate-500">ไฟล์ Statement *</label>
                 <input
                   type="file"
-                  accept=".csv"
+                  accept=".csv,.pdf"
                   onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
                   className="w-full max-w-lg rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
                 />
+                {/* STEP E.7 — supported file types shown explicitly; extension check here is a
+                    display hint only, matching this STEP's explicit instruction — the server's own
+                    magic-byte/extension validation remains the real authority regardless. */}
+                <p className="mt-1 text-xs text-slate-400">รองรับไฟล์ประเภท: CSV (.csv) และ PDF (.pdf)</p>
                 {file && <p className="mt-1 text-xs text-slate-500">เลือกไฟล์: {file.name}</p>}
+                {fileKind === "unsupported" && (
+                  <p className="mt-1 text-xs text-red-600">
+                    ไม่รองรับไฟล์ประเภทนี้ กรุณาเลือกไฟล์ .csv หรือ .pdf
+                  </p>
+                )}
               </div>
 
-              {file && csvHeaders.length > 0 && (
+              {/* ===== STEP E.7 — PDF section: no mapping UI at all (the layout is a fixed,
+                  non-editable constant — see FIXED_PDF_PREVIEW_LAYOUT's own comment). Only an
+                  optional password field for an encrypted PDF. ===== */}
+              {file && fileKind === "pdf" && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <h3 className="text-sm font-semibold text-slate-800">ไฟล์ PDF</h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    ระบบจะอ่านและตรวจสอบไฟล์ PDF โดยอัตโนมัติ — ไม่ต้องตั้งค่าคอลัมน์เอง
+                  </p>
+                  <div className="mt-3 max-w-sm">
+                    <label htmlFor="pdf-password" className="mb-1 block text-xs font-medium text-slate-500">
+                      รหัสผ่านไฟล์ PDF (กรอกเฉพาะกรณีไฟล์มีการป้องกันด้วยรหัสผ่าน)
+                    </label>
+                    <input
+                      id="pdf-password"
+                      type="password"
+                      autoComplete="off"
+                      value={pdfPassword}
+                      onChange={(e) => setPdfPassword(e.target.value)}
+                      placeholder="เว้นว่างไว้ถ้าไฟล์ไม่มีรหัสผ่าน"
+                      className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                    />
+                    <p className="mt-1 text-xs text-slate-400">
+                      รหัสผ่านนี้ใช้เฉพาะการอัปโหลดครั้งนี้เท่านั้น ระบบจะไม่บันทึกรหัสผ่านไว้ที่ใดทั้งสิ้น
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {file && fileKind === "csv" && csvHeaders.length > 0 && (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                   <h3 className="text-sm font-semibold text-slate-800">ตั้งค่าคอลัมน์ (Mapping)</h3>
                   <p className="mt-1 text-xs text-slate-500">
@@ -801,7 +926,7 @@ export default function BankStatementsPage() {
                 <button
                   type="button"
                   onClick={submitUpload}
-                  disabled={uploading || !file}
+                  disabled={uploading || !file || fileKind === "unsupported"}
                   className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
                 >
                   {uploading ? "กำลังอัปโหลดและตรวจสอบ..." : "อัปโหลดและดูตัวอย่าง"}

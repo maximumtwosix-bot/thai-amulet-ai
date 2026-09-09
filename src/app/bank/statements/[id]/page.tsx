@@ -27,10 +27,10 @@ const statusBadgeClass: Record<string, string> = {
   FAILED: "bg-red-50 text-red-700",
   CANCELLED: "bg-slate-100 text-slate-600",
 };
-function statusLabel(status: string): string {
+export function statusLabel(status: string): string {
   return statusLabels[status] ?? status;
 }
-function statusBadge(status: string): string {
+export function statusBadge(status: string): string {
   return statusBadgeClass[status] ?? "bg-slate-100 text-slate-600";
 }
 
@@ -38,11 +38,11 @@ function statusBadge(status: string): string {
 // src/app/api/bank-statements/route.ts's classifyDuplicates() / [id]/confirm/route.ts) — the ONLY
 // reliable way to tell them apart client-side, since a row's mere presence of a bankTransactionId
 // does not by itself guarantee it collided on that field specifically.
-const BANK_ID_DUPLICATE_MESSAGE = "พบเลขอ้างอิงธุรกรรมนี้ในระบบแล้ว (ธนาคารระบุ ID ซ้ำ)";
+export const BANK_ID_DUPLICATE_MESSAGE = "พบเลขอ้างอิงธุรกรรมนี้ในระบบแล้ว (ธนาคารระบุ ID ซ้ำ)";
 
 type RowCategory = "NEW" | "INVALID" | "WARNING" | "INFORMATIONAL" | "DUPLICATE_CANDIDATE" | "IMPORTED";
 
-const categoryLabels: Record<RowCategory, string> = {
+export const categoryLabels: Record<RowCategory, string> = {
   NEW: "ใช้งานได้",
   WARNING: "คำเตือน",
   INVALID: "ผิดพลาด",
@@ -50,7 +50,7 @@ const categoryLabels: Record<RowCategory, string> = {
   DUPLICATE_CANDIDATE: "รายการซ้ำ",
   IMPORTED: "นำเข้าแล้ว",
 };
-const categoryBadgeClass: Record<RowCategory, string> = {
+export const categoryBadgeClass: Record<RowCategory, string> = {
   NEW: "bg-emerald-50 text-emerald-700",
   WARNING: "bg-amber-50 text-amber-700",
   INVALID: "bg-red-50 text-red-700",
@@ -99,6 +99,10 @@ type StatementDetail = {
   accountName: string | null;
   accountNumberMasked: string | null;
   sourceFileName: string;
+  // STEP E.7 — matches GET /api/bank-statements/[id]'s sourceFileType field, added in STEP E.6.1.
+  // Read-only display value from trusted server/DB state — this page never lets the client change
+  // or spoof it.
+  sourceFileType?: "CSV" | "PDF";
   status: string;
   statementPeriodFrom: string | null;
   statementPeriodTo: string | null;
@@ -111,7 +115,40 @@ type StatementDetail = {
   pagination: { page: number; pageSize: number; total: number; hasNext: boolean; hasPrevious: boolean };
   rows: (PreviewRow | ImportedRow)[];
   fatalError?: { code: string; message: string };
+  // STEP E.7 — matches GET's own field (STEP E.6.1): true when this is a password-protected PDF
+  // whose row-level detail cannot be reconstructed by a read-only request (which never has a
+  // password) — row-level detail becomes available only via Confirm, which does accept one.
+  pdfRequiresPasswordForPreview?: boolean;
 };
+
+// STEP E.7 — must name a real entry in the server's trusted registry
+// (src/lib/bankStatementPdfLayouts.ts, STEP E.6). Duplicated here as a plain string constant for
+// the same reason src/app/bank/statements/page.tsx duplicates FIXED_PDF_PREVIEW_LAYOUT rather than
+// importing src/lib/* into a Client Component (transitively pulls in node:crypto via
+// bankStatementCsv.ts). This is NEVER exposed as a user-editable field anywhere in this file — the
+// user does not choose a layout; there is exactly one trusted option today.
+export const TRUSTED_PDF_LAYOUT_ID = "GENERIC_DATE_DESC_DEBIT_CREDIT_BALANCE_V1";
+
+// STEP E.7 — extracted as a standalone, exported, pure function (no closure over component state)
+// specifically so this security-critical request shape can be unit-tested directly (this project
+// has no DOM-testing framework and STEP E.7 forbids adding one — see
+// src/app/bank/statements/[id]/__tests__/page.security.test.ts). Behavior is byte-for-byte what
+// submitConfirm() below already computed inline before this extraction — never guesses/invents a
+// field; `layoutId`/`password` are added ONLY for a PDF statement, exactly as before.
+export function buildConfirmRequestBody(
+  sourceFileType: "CSV" | "PDF" | undefined,
+  overrideRowNumbers: Set<number>,
+  pdfPassword: string
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { overrideDuplicateRowNumbers: Array.from(overrideRowNumbers) };
+
+  if (sourceFileType === "PDF") {
+    body.layoutId = TRUSTED_PDF_LAYOUT_ID;
+    if (pdfPassword) body.password = pdfPassword;
+  }
+
+  return body;
+}
 
 type ApiResponse<T = unknown> = {
   success?: boolean;
@@ -119,18 +156,18 @@ type ApiResponse<T = unknown> = {
   error?: string;
 };
 
-function friendlyErrorMessage(status: number, data: ApiResponse<unknown> | null): string {
+export function friendlyErrorMessage(status: number, data: ApiResponse<unknown> | null): string {
   if (status === 401) return "เซสชันหมดอายุหรือยังไม่ได้เข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่";
   if (status === 500) return "เกิดข้อผิดพลาดที่เซิร์ฟเวอร์ กรุณาลองใหม่อีกครั้ง";
   if (typeof data?.error === "string" && data.error.trim()) return data.error;
   return "เกิดข้อผิดพลาดบางอย่าง กรุณาลองใหม่อีกครั้ง";
 }
 
-function isPreviewRow(row: PreviewRow | ImportedRow): row is PreviewRow {
+export function isPreviewRow(row: PreviewRow | ImportedRow): row is PreviewRow {
   return !("date" in row);
 }
 
-function formatSatang(value: number | null | undefined): string {
+export function formatSatang(value: number | null | undefined): string {
   if (value === null || value === undefined) return "-";
   const sign = value < 0 ? "-" : "";
   const abs = Math.abs(value);
@@ -152,6 +189,13 @@ export default function BankStatementDetailPage() {
   const [overrideRowNumbers, setOverrideRowNumbers] = useState<Set<number>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState("");
+  // STEP E.7 — PDF confirm password. Component-memory only: never written to localStorage/
+  // sessionStorage/a cookie/a URL, never logged, never sent anywhere except as this one JSON field
+  // on submit (POST .../confirm). This is a REQUIRED re-entry, not a re-use of whatever the upload
+  // page's own password field held — that value never leaves the upload page's own component state
+  // and this page never receives it (docs/BANK_STATEMENT_PDF_IMPORT_POLICY.md §3 / STEP E.6 —
+  // password is never persisted across the upload -> confirm boundary).
+  const [pdfPassword, setPdfPassword] = useState("");
   const [confirmResult, setConfirmResult] = useState<{ imported: number; skippedDuplicates: number } | null>(
     null
   );
@@ -214,16 +258,30 @@ export default function BankStatementDetailPage() {
     setConfirming(true);
 
     try {
-      // STEP C.5/C.6 — body carries ONLY the user's review decision; never a mapping. The server
-      // exclusively uses the mapping it already persisted at upload time.
+      // STEP C.5/C.6 — CSV body carries ONLY the user's review decision; never a mapping. The
+      // server exclusively uses the mapping it already persisted at upload time.
+      //
+      // STEP E.7 — PDF body ADDITIONALLY carries `layoutId` (a fixed, non-user-editable constant —
+      // never a regex/layout the user authored; the server's own trusted registry,
+      // src/lib/bankStatementPdfLayouts.ts, is the sole authority regardless of what this value is,
+      // per STEP E.6) and `password`, read fresh from this page's own component-memory state (never
+      // the upload page's password — that value never reaches this page at all). See
+      // buildConfirmRequestBody()'s own comment for why this is a standalone, unit-tested function.
+      const body = buildConfirmRequestBody(statement?.sourceFileType, overrideRowNumbers, pdfPassword);
+
       const response = await fetch(`/api/bank-statements/${statementId}/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ overrideDuplicateRowNumbers: Array.from(overrideRowNumbers) }),
+        body: JSON.stringify(body),
       });
 
-      let data: ApiResponse<{ statementId: number; status: string; imported: number; skippedDuplicates: number }> | null =
-        null;
+      let data: ApiResponse<{
+        statementId: number;
+        status: string;
+        imported?: number;
+        skippedDuplicates?: number;
+        fatalError?: { code: string; message: string };
+      }> | null = null;
       try {
         data = await response.json();
       } catch {
@@ -234,13 +292,35 @@ export default function BankStatementDetailPage() {
         throw new Error(friendlyErrorMessage(response.status, data));
       }
 
+      // STEP E.7 fix — confirm has always been able to return `{success:true, data:{status:
+      // "FAILED", fatalError}}` at HTTP 200 (STEP C.4's own defensive "re-derivation itself
+      // discovered a fatal error" path) — this was never actually checked here before, only
+      // theoretical for CSV (should not happen in practice, per that path's own comment), but very
+      // real and common for PDF (an incorrect password is exactly this shape). Checked BEFORE
+      // treating anything as a successful import, mirroring src/app/bank/statements/page.tsx's own
+      // upload-response handling.
+      if (data.data?.status === "FAILED") {
+        setConfirmError(data.data.fatalError?.message || "ไม่สามารถยืนยันการนำเข้าได้");
+        return;
+      }
+
       if (data.data) {
-        setConfirmResult({ imported: data.data.imported, skippedDuplicates: data.data.skippedDuplicates });
+        setConfirmResult({
+          imported: data.data.imported ?? 0,
+          skippedDuplicates: data.data.skippedDuplicates ?? 0,
+        });
       }
     } catch (err) {
       setConfirmError(err instanceof Error ? err.message : "ไม่สามารถยืนยันการนำเข้าได้");
     } finally {
       setConfirming(false);
+      // STEP E.7 — cleared after every confirm attempt without exception: FAILED is a terminal
+      // status (src/lib/bankStatements.ts's ALLOWED_STATUS_TRANSITIONS — no transition out of it),
+      // so there is never a legitimate "fix the password and retry on this same statement" flow —
+      // a wrong password, a corrupted file, or any other confirm failure all equally mean the only
+      // way forward is re-uploading as a brand-new statement (a different page, with its own fresh
+      // password field), so retaining this value here would serve no purpose.
+      setPdfPassword("");
       // Always resync with server truth after a confirm attempt, success or failure — never trust
       // local state alone (STEP C.5 §17: use server response, reload statement state on conflict).
       await loadStatement(page);
@@ -299,7 +379,15 @@ export default function BankStatementDetailPage() {
             <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-900">{statement.sourceFileName}</h2>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-lg font-semibold text-slate-900">{statement.sourceFileName}</h2>
+                    {/* STEP E.7 — file type shown explicitly, read from trusted server state. */}
+                    {statement.sourceFileType && (
+                      <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+                        {statement.sourceFileType}
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-1 text-sm text-slate-500">
                     ช่วงวันที่:{" "}
                     {statement.statementPeriodFrom && statement.statementPeriodTo
@@ -318,7 +406,9 @@ export default function BankStatementDetailPage() {
                 <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
                   <p className="font-medium">นำเข้าไม่สำเร็จ: {statement.errorSummary || "เกิดข้อผิดพลาด"}</p>
                   <p className="mt-2">
-                    กรุณาแก้ไขไฟล์ CSV หรือการตั้งค่าคอลัมน์ (Mapping) แล้วอัปโหลดใหม่
+                    {statement.sourceFileType === "PDF"
+                      ? "กรุณาตรวจสอบไฟล์ PDF หรือรหัสผ่าน แล้วอัปโหลดใหม่"
+                      : "กรุณาแก้ไขไฟล์ CSV หรือการตั้งค่าคอลัมน์ (Mapping) แล้วอัปโหลดใหม่"}
                   </p>
                   <Link
                     href="/bank/statements"
@@ -371,6 +461,30 @@ export default function BankStatementDetailPage() {
                   )}
                 </div>
 
+                {/* ===== STEP E.7 — PDF password re-entry. Never reused from the upload page's own
+                    password state (that value never reaches this page) — the user must type it
+                    again here, per docs/BANK_STATEMENT_PDF_IMPORT_POLICY.md §3 / STEP E.6's
+                    "password is never persisted across the upload -> confirm boundary" decision. ===== */}
+                {statement.sourceFileType === "PDF" && (
+                  <div className="mt-4 max-w-sm">
+                    <label htmlFor="confirm-pdf-password" className="mb-1 block text-xs font-medium text-slate-500">
+                      รหัสผ่านไฟล์ PDF{statement.pdfRequiresPasswordForPreview ? " *" : " (กรอกเฉพาะกรณีไฟล์มีรหัสผ่าน)"}
+                    </label>
+                    <input
+                      id="confirm-pdf-password"
+                      type="password"
+                      autoComplete="off"
+                      value={pdfPassword}
+                      onChange={(e) => setPdfPassword(e.target.value)}
+                      placeholder={statement.pdfRequiresPasswordForPreview ? "จำเป็นต้องกรอกรหัสผ่าน" : "เว้นว่างไว้ถ้าไฟล์ไม่มีรหัสผ่าน"}
+                      className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                    />
+                    <p className="mt-1 text-xs text-slate-400">
+                      ต้องกรอกรหัสผ่านใหม่ทุกครั้งที่ยืนยันการนำเข้า — ระบบไม่บันทึกรหัสผ่านไว้ที่ใดทั้งสิ้น
+                    </p>
+                  </div>
+                )}
+
                 {confirmError && (
                   <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                     {confirmError}
@@ -380,7 +494,10 @@ export default function BankStatementDetailPage() {
                 <button
                   type="button"
                   onClick={submitConfirm}
-                  disabled={confirming}
+                  disabled={
+                    confirming ||
+                    (statement.sourceFileType === "PDF" && statement.pdfRequiresPasswordForPreview && !pdfPassword)
+                  }
                   className="mt-4 rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
                 >
                   {confirming ? "กำลังยืนยันการนำเข้า..." : "✅ ยืนยันนำเข้า"}
@@ -413,7 +530,13 @@ export default function BankStatementDetailPage() {
 
               {statement.rows.length === 0 ? (
                 <div className="p-10 text-center text-sm text-slate-500">
-                  {statement.fatalError?.message || "ไม่มีรายการให้แสดง"}
+                  {/* STEP E.7 — a password-protected PDF has no row-level detail to show here (GET
+                      never has a password to decrypt with, STEP E.6.1) — explained honestly rather
+                      than shown as a generic empty state; row-level detail becomes visible only
+                      after Confirm, which does accept a freshly-entered password. */}
+                  {statement.pdfRequiresPasswordForPreview
+                    ? "ไฟล์ PDF นี้มีการป้องกันด้วยรหัสผ่าน — ระบบจะแสดงรายการโดยละเอียดหลังจากกรอกรหัสผ่านและยืนยันการนำเข้า"
+                    : statement.fatalError?.message || "ไม่มีรายการให้แสดง"}
                 </div>
               ) : (
                 <>

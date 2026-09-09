@@ -18,8 +18,18 @@ import {
   DEFAULT_CSV_LIMITS,
   fileErrorMessage,
   type BankStatementColumnMapping,
+  type BankStatementMoneyStrategy,
   type ParsedRowResult,
 } from "@/lib/bankStatementCsv";
+// STEP E.5 — PDF branch, additive alongside the CSV path above. bankStatementCsv.ts itself is not
+// imported any differently than before (only one new type import, BankStatementMoneyStrategy,
+// reused as-is for the PDF layout's money shape — see validatePdfLayoutShape() below).
+import { extractPdfText, pdfFileErrorMessage } from "@/lib/bankStatementPdf";
+import {
+  extractStatementRowsFromPdfText,
+  type BankStatementPdfDateFormat,
+  type BankStatementPdfRowLayout,
+} from "@/lib/bankStatementPdfRows";
 
 export const runtime = "nodejs";
 
@@ -273,6 +283,329 @@ export async function GET(request: NextRequest) {
   }
 }
 
+// ===== STEP E.5 — PDF branch. Additive alongside the CSV path below; nothing in this section is
+// called by, or changes the behavior of, the CSV path. =====
+
+// PDFs legitimately run larger than a CSV text export of the same statement (embedded font/
+// structure overhead) — 20MB is generous headroom for a realistic multi-page bank statement while
+// still bounding memory usage, same "generous but bounded" reasoning as
+// DEFAULT_CSV_LIMITS.maxFileSizeBytes above.
+const MAX_PDF_FILE_SIZE_BYTES = 20 * 1024 * 1024;
+
+const ALLOWED_PDF_MIME_TYPES = new Set([
+  "application/pdf",
+  // Same reasoning as ALLOWED_CSV_MIME_TYPES's own inclusion of this generic type above — some
+  // clients/OSes fall back to it when they can't determine a more specific one.
+  "application/octet-stream",
+]);
+
+// A layout's regex patterns cross the wire as plain strings (JSON has no regex type) and are
+// compiled into real RegExp objects here — never inside the pure src/lib/bankStatementPdfRows.ts
+// module itself. Bounded length before compilation: this is genuinely NEW attack surface PDF
+// import introduces that CSV's own mapping never had (a CSV column-name string is only ever used as
+// a plain Map lookup key, never compiled into executable regex) — a length cap is a minimal,
+// disclosed mitigation against a pathologically expensive hand-crafted pattern, not a complete
+// ReDoS defense; see this STEP's report, Security section, for what is and isn't covered.
+const MAX_LAYOUT_PATTERN_LENGTH = 500;
+
+function compilePattern(source: unknown): RegExp | null {
+  if (typeof source !== "string" || !source || source.length > MAX_LAYOUT_PATTERN_LENGTH) return null;
+
+  try {
+    return new RegExp(source);
+  } catch {
+    return null;
+  }
+}
+
+function compilePatternArray(source: unknown): RegExp[] | null {
+  if (!Array.isArray(source)) return null;
+
+  const compiled: RegExp[] = [];
+
+  for (const item of source) {
+    const pattern = compilePattern(item);
+    if (!pattern) return null;
+    compiled.push(pattern);
+  }
+
+  return compiled;
+}
+
+function isValidPdfDateFormat(value: unknown): value is BankStatementPdfDateFormat {
+  return (
+    value === "YYYY-MM-DD" ||
+    value === "DD/MM/YYYY" ||
+    value === "DD-MM-YYYY" ||
+    value === "YYYY/MM/DD" ||
+    value === "DD/MM/BBBB" ||
+    value === "DD-MM-BBBB" ||
+    value === "D_MMMTHAI_BBBB" ||
+    value === "DD-MM-YY"
+  );
+}
+
+// Duplicated intentionally from validateMappingShape()'s own money-shape check below (same
+// small-scale-duplication convention already used repeatedly in this codebase — e.g.
+// [id]/confirm/route.ts's own comment documenting this exact choice for this exact validation
+// snippet) — not refactored into a function shared with validateMappingShape(), per this STEP's
+// "ห้ามทำ refactor ใหญ่" instruction and to guarantee the CSV path is not touched at all.
+function validatePdfMoneyStrategyShape(value: unknown): BankStatementMoneyStrategy | null {
+  const money = value as Record<string, unknown> | undefined;
+  if (!money || typeof money !== "object") return null;
+
+  if (money.kind === "separate_columns") {
+    if (typeof money.debitColumn !== "string" || typeof money.creditColumn !== "string") return null;
+  } else if (money.kind === "amount_with_direction") {
+    if (
+      typeof money.amountColumn !== "string" ||
+      typeof money.directionColumn !== "string" ||
+      !Array.isArray(money.creditValues) ||
+      !Array.isArray(money.debitValues) ||
+      !money.creditValues.every((v) => typeof v === "string") ||
+      !money.debitValues.every((v) => typeof v === "string")
+    ) {
+      return null;
+    }
+  } else if (money.kind === "signed_amount") {
+    if (
+      typeof money.amountColumn !== "string" ||
+      (money.positiveMeans !== "credit" && money.positiveMeans !== "debit")
+    ) {
+      return null;
+    }
+  } else {
+    return null;
+  }
+
+  return money as BankStatementMoneyStrategy;
+}
+
+// Wire-format shape validation for BankStatementPdfRowLayout (src/lib/bankStatementPdfRows.ts) —
+// explicit only, never guessed, same "ห้ามทำ magic mapping" principle CSV's own
+// validateMappingShape() follows.
+function validatePdfLayoutShape(value: unknown): BankStatementPdfRowLayout | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+
+  const repeatedHeaderPatterns = compilePatternArray(v.repeatedHeaderPatterns);
+  const repeatedFooterPatterns = compilePatternArray(v.repeatedFooterPatterns);
+  const transactionStartPattern = compilePattern(v.transactionStartPattern);
+  const rowPattern = compilePattern(v.rowPattern);
+
+  if (!repeatedHeaderPatterns || !repeatedFooterPatterns || !transactionStartPattern || !rowPattern) {
+    return null;
+  }
+
+  if (!isValidPdfDateFormat(v.dateFormat)) return null;
+
+  const money = validatePdfMoneyStrategyShape(v.money);
+  if (!money) return null;
+
+  return {
+    repeatedHeaderPatterns,
+    repeatedFooterPatterns,
+    transactionStartPattern,
+    rowPattern,
+    dateFormat: v.dateFormat,
+    money,
+  };
+}
+
+// The PDF upload+preview entry point — mirrors the CSV path's own upload -> validate -> parse ->
+// classify-duplicates -> PREVIEW_READY lifecycle exactly (same BankStatement state machine, same
+// classifyDuplicates()/findOverlappingImportedStatements() reuse below, same response shape) — only
+// the file-format-specific parsing step differs (PDF decrypt+extract+row-extraction instead of the
+// CSV grammar parser). See this STEP's report for confirm's (STEP E.6, not touched here) current
+// behavior when it receives a PDF-sourced statement.
+async function handlePdfStatementUpload(bankAccountId: number, formData: FormData) {
+  try {
+    const layoutRaw = formData.get("pdfLayout");
+    let layoutParsed: unknown;
+    try {
+      layoutParsed = typeof layoutRaw === "string" ? JSON.parse(layoutRaw) : null;
+    } catch {
+      return NextResponse.json({ success: false, error: "pdfLayout ต้องเป็น JSON ที่ถูกต้อง" }, { status: 400 });
+    }
+
+    const layout = validatePdfLayoutShape(layoutParsed);
+    if (!layout) {
+      return NextResponse.json(
+        { success: false, error: "การตั้งค่ารูปแบบ PDF (pdfLayout) ไม่ถูกต้องหรือไม่ครบถ้วน" },
+        { status: 400 }
+      );
+    }
+
+    const file = formData.get("file");
+    if (!(file instanceof File)) {
+      return NextResponse.json({ success: false, error: "กรุณาเลือกไฟล์" }, { status: 400 });
+    }
+
+    if (file.size <= 0) {
+      return NextResponse.json({ success: false, error: "ไฟล์ว่างเปล่า" }, { status: 400 });
+    }
+
+    if (file.size > MAX_PDF_FILE_SIZE_BYTES) {
+      return NextResponse.json({ success: false, error: "ไฟล์มีขนาดใหญ่เกินกำหนด" }, { status: 400 });
+    }
+
+    const declaredMime = file.type.split(";")[0].trim().toLowerCase();
+    if (declaredMime && !ALLOWED_PDF_MIME_TYPES.has(declaredMime)) {
+      return NextResponse.json(
+        { success: false, error: "ชนิดไฟล์ไม่รองรับ — กรุณาอัปโหลดไฟล์ PDF" },
+        { status: 400 }
+      );
+    }
+
+    // Password lifecycle (docs/BANK_STATEMENT_PDF_IMPORT_POLICY.md §3): request-scope ONLY from
+    // this point on. `password` never leaves this function — never assigned to a module-level
+    // variable, never logged (grep this whole branch: no console.* call ever references it), never
+    // included in ANY response (success or error), never written to the database (createBankStatement()
+    // below is never given it), never passed to updateBankStatementStatus()'s errorSummary.
+    const passwordRaw = formData.get("password");
+    const password = typeof passwordRaw === "string" && passwordRaw.length > 0 ? passwordRaw : undefined;
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const sourceFileHash = createHash("sha256").update(buffer).digest("hex");
+
+    // Same proactive file-level duplicate check as the CSV path below — reused verbatim, format-
+    // agnostic (keyed on bankAccountId + raw file hash only).
+    const existingStatement = findBankStatementByFileHash(bankAccountId, sourceFileHash);
+    if (existingStatement) {
+      return NextResponse.json({
+        success: true,
+        data: {
+          alreadyImported: true,
+          existingStatementId: existingStatement.id,
+          existingStatementStatus: existingStatement.status,
+        },
+      });
+    }
+
+    // Original, still-encrypted PDF is preserved as-is (docs/BANK_STATEMENT_PDF_IMPORT_POLICY.md
+    // §5) — never a decrypted copy. Same storage path convention as CSV (protected
+    // /generated/bank-statements/ prefix, already covered by src/proxy.ts, untouched by this STEP),
+    // same randomUUID()-named on-disk file (never derived from the client-supplied filename).
+    const uploadedAt = new Date();
+    const year = String(uploadedAt.getUTCFullYear());
+    const month = String(uploadedAt.getUTCMonth() + 1).padStart(2, "0");
+    const storageDir = path.join(
+      process.cwd(),
+      "public",
+      "generated",
+      "bank-statements",
+      String(bankAccountId),
+      year,
+      month
+    );
+
+    await mkdir(storageDir, { recursive: true });
+
+    const storedFileName = `${randomUUID()}.pdf`;
+    const storedFilePath = path.join(storageDir, storedFileName);
+    await writeFile(storedFilePath, buffer);
+
+    const sourceFileUrl = `/generated/bank-statements/${bankAccountId}/${year}/${month}/${storedFileName}`;
+
+    const statement = createBankStatement({
+      bankAccountId,
+      sourceFileName: file.name,
+      sourceFileHash,
+      sourceFileUrl,
+      // bank_statements.column_mapping is documented (src/lib/bankStatements.ts,
+      // BankStatementRow.columnMapping) as opaque, format-agnostic JSON config text — reused as-is
+      // for the PDF layout, no schema change needed for this.
+      columnMapping: JSON.stringify(layoutParsed),
+      sourceFileType: "PDF",
+    });
+
+    updateBankStatementStatus(statement.id, "VALIDATING");
+
+    // Magic-byte validation happens FIRST inside extractPdfText() itself (before any pdfjs-dist
+    // call) — not duplicated here. Decrypt + deterministic text extraction (STEP E.3); no
+    // rendering, no PDF JavaScript execution, no network access, no temp file — see
+    // src/lib/bankStatementPdf.ts's own header comment for exactly what guarantees that.
+    const extracted = await extractPdfText(buffer, password);
+
+    if (extracted.error) {
+      const message = pdfFileErrorMessage(extracted.error);
+      updateBankStatementStatus(statement.id, "FAILED", { errorSummary: message });
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          statementId: statement.id,
+          status: "FAILED",
+          fatalError: { code: extracted.error, message },
+        },
+      });
+    }
+
+    // Deterministic row extraction (STEP E.4) — never AI/OCR, never a network call. A row this
+    // module cannot structurally prove is a transaction comes back as category "INVALID" with a
+    // fixed diagnostic message, exactly like an invalid CSV row — never guessed, never silently
+    // turned into a valid transaction.
+    const { rows: extractedRows, summary } = extractStatementRowsFromPdfText(
+      extracted.pageLines ?? [],
+      bankAccountId,
+      layout
+    );
+
+    // Everything from here down is IDENTICAL in shape to the CSV path below: the same
+    // classifyDuplicates()/findOverlappingImportedStatements() DB-touching helpers, the same
+    // PREVIEW_READY transition, the same response shape — because extractedRows is the exact same
+    // ParsedRowResult[] type the CSV engine produces.
+    const { rows: classifiedRows, duplicateCount } = classifyDuplicates(bankAccountId, extractedRows);
+
+    const importableDates = classifiedRows
+      .filter((r) => r.canonical)
+      .map((r) => r.canonical!.transactionDate)
+      .sort();
+    const periodFrom = importableDates[0] ?? null;
+    const periodTo = importableDates[importableDates.length - 1] ?? null;
+
+    const overlapping = findOverlappingImportedStatements(bankAccountId, periodFrom, periodTo);
+
+    const updatedStatement = updateBankStatementStatus(statement.id, "PREVIEW_READY", {
+      statementPeriodFrom: periodFrom,
+      statementPeriodTo: periodTo,
+      rowCountTotal: summary.total,
+      rowCountValid: summary.valid,
+      rowCountInvalid: summary.invalid,
+      rowCountDuplicate: duplicateCount,
+    });
+
+    const rowsForPreview = classifiedRows.slice(0, DEFAULT_CSV_LIMITS.maxPreviewRows);
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        statementId: updatedStatement.id,
+        status: updatedStatement.status,
+        statementPeriodFrom: updatedStatement.statementPeriodFrom,
+        statementPeriodTo: updatedStatement.statementPeriodTo,
+        overlappingStatementWarning: overlapping.length > 0,
+        overlappingStatementIds: overlapping.map((s) => s.id),
+        summary: {
+          total: summary.total,
+          valid: summary.valid - duplicateCount >= 0 ? summary.valid - duplicateCount : 0,
+          invalid: summary.invalid,
+          duplicates: duplicateCount,
+          warnings: summary.warnings,
+          informational: summary.informational,
+        },
+        rowsShown: rowsForPreview.length,
+        rowsTotal: classifiedRows.length,
+        rows: rowsForPreview,
+      },
+    });
+  } catch (error) {
+    return errorToResponse(error);
+  }
+}
+
+// ===== End of STEP E.5 PDF branch. Everything below is the pre-STEP-E.5 CSV path. =====
+
 export async function POST(request: NextRequest) {
   try {
     let formData: FormData;
@@ -296,6 +629,15 @@ export async function POST(request: NextRequest) {
     const bankAccount = getBankAccountById(bankAccountId);
     if (!bankAccount) {
       return NextResponse.json({ success: false, error: "ไม่พบบัญชีธนาคารนี้" }, { status: 404 });
+    }
+
+    // STEP E.5 — format branch decision. Read-only peek at the file's extension: FormData.get()
+    // does not consume the entry, so the CSV path below re-retrieves `file` itself completely
+    // unchanged, in its original position, with its original validation. Everything from here to
+    // the end of this function (the CSV path) is BYTE-FOR-BYTE UNCHANGED from before this STEP.
+    const peekedFile = formData.get("file");
+    if (peekedFile instanceof File && path.extname(peekedFile.name).toLowerCase() === ".pdf") {
+      return handlePdfStatementUpload(bankAccountId, formData);
     }
 
     const mappingRaw = formData.get("mapping");

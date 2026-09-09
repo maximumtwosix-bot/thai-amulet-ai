@@ -39,6 +39,19 @@ export function isValidBankStatementStatus(value: string): value is BankStatemen
   return (BANK_STATEMENT_STATUSES as string[]).includes(value);
 }
 
+// STEP E.5 — which parser must be used to re-parse this statement's source file (CSV grammar
+// parser vs. PDF decrypt+extract+row-extraction). Enforced in the TS layer only, never a SQL CHECK
+// — same convention as every other enum-like column in this schema (status above, bank_accounts.
+// classification, etc). The DB column itself (bank_statements.source_file_type, STEP E.2) is
+// TEXT NOT NULL DEFAULT 'CSV'.
+export type BankStatementSourceFileType = "CSV" | "PDF";
+
+export const BANK_STATEMENT_SOURCE_FILE_TYPES: BankStatementSourceFileType[] = ["CSV", "PDF"];
+
+export function isValidBankStatementSourceFileType(value: string): value is BankStatementSourceFileType {
+  return (BANK_STATEMENT_SOURCE_FILE_TYPES as string[]).includes(value);
+}
+
 // STEP C.0 §18 / STEP C.2 §4 — the only transitions updateBankStatementStatus() will allow.
 // IMPORTED/FAILED/CANCELLED are terminal (empty arrays) — matches the immutable-once-terminal
 // principle STEP C.1 established for statement-level lifecycle finality.
@@ -85,6 +98,8 @@ export type BankStatementRow = {
   // API route layer, which already imports both, is where this gets JSON.parse()'d. Null only for a
   // hypothetical pre-STEP-C.6 row (none exist in production as of this STEP).
   columnMapping: string | null;
+  // STEP E.5 addition — see BankStatementSourceFileType's own comment above.
+  sourceFileType: BankStatementSourceFileType;
 };
 
 type StatementDbRow = {
@@ -104,6 +119,7 @@ type StatementDbRow = {
   imported_at: string | null;
   created_at: string;
   updated_at: string;
+  source_file_type: string;
   column_mapping: string | null;
 };
 
@@ -126,6 +142,9 @@ function toStatementRow(row: StatementDbRow): BankStatementRow {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     columnMapping: row.column_mapping,
+    sourceFileType: isValidBankStatementSourceFileType(row.source_file_type)
+      ? row.source_file_type
+      : "CSV",
   };
 }
 
@@ -247,6 +266,11 @@ export interface CreateBankStatementInput {
   // mapping by the time it creates a statement row — validation happens before this call, satisfying
   // "ต้องไม่ persist invalid/untrusted mapping ก่อน validation ผ่าน".
   columnMapping: string;
+  // STEP E.5 — optional, defaults to 'CSV' when omitted so the existing CSV call site needs no
+  // change at all. An explicitly-supplied value that fails isValidBankStatementSourceFileType()
+  // throws rather than silently falling back — omission is a safe, intentional default;
+  // an invalid explicit value is a caller bug that must fail loudly, not be masked.
+  sourceFileType?: BankStatementSourceFileType;
 }
 
 // STEP C.2 — creates the metadata row only, always starting at status 'UPLOADED' (relies on the
@@ -271,6 +295,14 @@ export function createBankStatement(input: CreateBankStatementInput): BankStatem
   const sourceFileUrl = normalizeRequiredText(input.sourceFileUrl, "INVALID_SOURCE_FILE_URL");
   const columnMapping = normalizeRequiredText(input.columnMapping, "INVALID_COLUMN_MAPPING");
 
+  let sourceFileType: BankStatementSourceFileType = "CSV";
+  if (input.sourceFileType !== undefined) {
+    if (!isValidBankStatementSourceFileType(input.sourceFileType)) {
+      throw new Error("INVALID_SOURCE_FILE_TYPE");
+    }
+    sourceFileType = input.sourceFileType;
+  }
+
   let result;
 
   try {
@@ -278,12 +310,13 @@ export function createBankStatement(input: CreateBankStatementInput): BankStatem
       .prepare(
         `
         INSERT INTO bank_statements (
-          bank_account_id, source_file_name, source_file_hash, source_file_url, column_mapping
+          bank_account_id, source_file_name, source_file_hash, source_file_url, column_mapping,
+          source_file_type
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         `
       )
-      .run(bankAccountId, sourceFileName, sourceFileHash, sourceFileUrl, columnMapping);
+      .run(bankAccountId, sourceFileName, sourceFileHash, sourceFileUrl, columnMapping, sourceFileType);
   } catch (error) {
     if (isUniqueConstraintError(error)) {
       throw new Error("DUPLICATE_STATEMENT_FILE");

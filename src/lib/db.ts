@@ -1881,5 +1881,23 @@ if (!bankStatementColumnNames.has("column_mapping")) {
   db.exec("ALTER TABLE bank_statements ADD COLUMN column_mapping TEXT");
 }
 
+// STEP E.2 — bank_statements.source_file_type (docs/BANK_STATEMENT_PDF_IMPORT_POLICY.md §4,
+// approved decision). Additive only: records which parser (CSV today; PDF from STEP E.3 onward)
+// must be used to re-parse a statement's source file at confirm time — never guessed from
+// extension/MIME at read time. TEXT NOT NULL DEFAULT 'CSV', not nullable — every row that exists
+// as of this STEP is genuinely a CSV upload (CSV has been this feature's only format until now), so
+// the default is a true fact about existing data, not a guess; SQLite backfills this constant
+// default onto every existing row at ALTER time, matching the same safe-default convention already
+// used elsewhere in this file (e.g. orders.delivery_status, products.low_stock_threshold). Allowed
+// values ('CSV' | 'PDF') are enforced in the TS layer only, never a SQL CHECK constraint — same
+// convention as every other enum-like TEXT column in this schema (bank_statements.status,
+// bank_accounts.classification, etc). This STEP adds only the column: no PDF parser, no API/UI
+// wiring, no TS-layer enum type — those are STEP E.3 onward. Reuses bankStatementColumnNames
+// fetched above rather than a second PRAGMA table_info query, since both checks run against the
+// same schema snapshot within this one module load.
+if (!bankStatementColumnNames.has("source_file_type")) {
+  db.exec("ALTER TABLE bank_statements ADD COLUMN source_file_type TEXT NOT NULL DEFAULT 'CSV'");
+}
+
 export default db;
 

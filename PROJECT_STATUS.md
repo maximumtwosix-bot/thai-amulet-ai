@@ -6400,6 +6400,914 @@ preserving identical retention behavior.
 
 **STEP 92 IMPLEMENTATION: PASS**
 
+**Post-push production health check** (2026-09-05, read-only, after commit `a235672`):
+- Production listener/process: `PASS` — PID `6200` listening on `0.0.0.0:3000`/`[::]:3000`; confirmed
+  as `node .../next start`; `CreationDate 9/5/2026 6:10:18 PM`, identical to the previous known
+  PID/CreationDate.
+- `/api/health`: `PASS` — `HTTP 200`,
+  `{"app":"ok","database":"ok","socialWorker":"ok","aiImage":"configured","aiVideo":"not_configured"}`
+  (`aiVideo: not_configured` is the existing known state, not a new failure).
+- `.next/BUILD_ID`: `PASS` — `X1RD-B0ZaZqBPm8AXcsKJ`, unchanged.
+- Production logs: `PASS` — same 4 files / 2 pairs, timestamps `160800` and `181017`, identical
+  sizes to the previous checkpoint; no matches for `ERROR`, `Exception`, `FATAL`, `Unhandled`,
+  `EADDRINUSE`, `ECONNREFUSED`, `Prisma`, or `panic`.
+- STEP 92 retention safety: `PASS` — the retention code was confirmed present (via read-only
+  inspection) in the committed `scripts/start-production.ps1`; this health check did not execute
+  `start-production.ps1`, so the retention logic did not run, and no log was deleted.
+- Restart evidence: `PASS` — no evidence of a restart.
+- Data safety: `PASS` — read-only checks only; no mutation, no restart, no git add/commit/push.
+
+**STEP 92 POST-PUSH PRODUCTION HEALTH CHECK: PASS**
+
+---
+
+## STEP 93 — PERSONAL TAXPAYER PROFILE & TAX YEAR FOUNDATION ("PIT-1")
+
+Date: 2026-09-06
+
+**Naming note**: the requesting task called this "TAX-1", but that label already belongs to the
+earlier cancelled-order tax-export-warning STEP (commit `17a1b6b`, see STEP 82/83 above) — reusing
+it here would collide with that existing history, so this STEP is recorded as **STEP 93**,
+internally referred to as **PIT-1** (Personal Income Tax, step 1).
+
+**Scope**: foundation only, per the approved TAX Personal Income Filing audit — a Personal Taxpayer
+Profile entity and a Tax Year lifecycle entity. Explicitly excludes (deferred to future STEPs): tax
+calculation engine, expense-deduction rules, allowances, WHT calculation/credit engine, filing
+package generation, Revenue Department integration/submission, payment/refund workflow,
+transaction change audit trail, evidence-architecture expansion.
+
+**User-confirmed profile this STEP was scoped against**: taxpayer type INDIVIDUAL, not
+VAT-registered, WHT applicable=YES, revenue channels FACEBOOK/TIKTOK_SHOP. Filing form intentionally
+left nullable/unconfirmed — no ภ.ง.ด.90/91/94 (or any other) form is asserted anywhere in this
+STEP's code, schema, or validation, per the audit's explicit instruction not to guess current
+Revenue Department rules.
+
+**Data model (additive only, `src/lib/db.ts`)**:
+- `taxpayer_profiles` — id, name, taxpayer_id (13-digit numeric, TS-layer validated — a stable
+  civil-registration format, not a tax-law figure), taxpayer_type (TS-layer restricted to
+  `'INDIVIDUAL'` only for now), vat_registered / wht_applicable (INTEGER 0/1, NOT NULL, no default —
+  explicit business facts, never assumed), filing_form (nullable free TEXT, no enum constraint —
+  deliberately not restricted to `('90'|'91'|'94')`), is_active (NOT NULL DEFAULT 1, same convention
+  as `bank_accounts.is_active`), created_at/updated_at.
+- `tax_years` — id, taxpayer_profile_id (FK), tax_year (INTEGER, 2000-2100 range, same bound as
+  `taxSummary.ts`'s `resolveTaxPeriod()`), status (`'OPEN'` DEFAULT, TS-layer restricted to
+  `OPEN | FINALIZED | LOCKED`), created_at/updated_at. Composite UNIQUE index on
+  `(taxpayer_profile_id, tax_year)` — same pattern as `bank_accounts`' `(bank_name, account_number)`.
+- **Zero changes** to `transactions`, `orders`, `order_items`, `customers`, `products`,
+  `transaction_attachments`, `bank_accounts`, `bank_statements`, or any other existing table/column.
+  No existing STEP 22/37/TAX-1..3 code path (`taxSummary.ts` / `profitSummary.ts` / tax export) reads
+  or writes either new table.
+
+**DAL** (`src/lib/taxpayerProfile.ts`, `src/lib/taxYears.ts`): same `toRow()`/CRUD/validation
+convention as `src/lib/bankAccounts.ts`. Taxpayer profile supports create/read(list+byId)/update
+only — no delete, per this STEP's approved scope. Tax year supports create/read(list+byId) and a
+single dedicated `transitionTaxYearStatus()` — no generic update function exists at all, so "a
+locked year cannot be casually changed" holds by construction (there is no other write path to a
+tax_years row besides its status transition). Allowed transitions: `OPEN -> FINALIZED` and
+`FINALIZED -> LOCKED` only; `LOCKED` is terminal; same-status, backward, and skipped-stage
+transitions are all rejected as `INVALID_STATUS_TRANSITION`.
+
+**API** (all under the already-protected `/api/tax/` prefix — **no `src/proxy.ts` change was
+needed**, since STEP 22 already gates that whole prefix):
+- `GET/POST /api/tax/taxpayer-profile` — list (masked `taxpayerIdMasked`, last 4 digits only, same
+  shape as `bank_accounts`' `accountNumberMasked`) / create.
+- `GET/PATCH /api/tax/taxpayer-profile/[id]` — GET returns the full `taxpayerId` (authenticated,
+  internal, single-admin endpoint — same precedent as `GET /api/bank-accounts/[id]`); PATCH returns
+  the masked DTO (nothing yet reads the full value back from an edit response, same STEP B.6
+  reasoning as bank-accounts' PATCH). `taxpayerType` is never accepted on PATCH — silently ignored if
+  sent.
+- `GET/POST /api/tax/years` — list (optionally filtered by `taxpayerProfileId`/`status`) / create
+  (always starts `OPEN`, no client-settable initial status).
+- `PATCH /api/tax/years/[id]/status` — the one and only mutation for a tax year, same
+  dedicated-sub-route convention as `/api/orders/[id]/status`.
+
+**Validation verified**: required name; taxpayer ID must be exactly 13 digits; taxpayer type must be
+`INDIVIDUAL` (any other value rejected); `vatRegistered`/`whtApplicable` must be explicit booleans
+(no default, no silent assumption); `filingForm` free text with a 32-char abuse-guard length cap,
+never enum-validated; tax year must reference an existing taxpayer profile; tax year integer bounded
+2000-2100; duplicate `(taxpayerProfileId, taxYear)` rejected via the DB unique constraint (race-free,
+same pattern as `bank_accounts`); invalid/skipped/backward/terminal status transitions all rejected.
+
+**Migration safety**: additive `CREATE TABLE IF NOT EXISTS` only, applied automatically via the
+existing `src/lib/db.ts` module-load pattern (same mechanism every prior STEP's new table used) —
+confirmed via direct read-only SQLite inspection that pre-existing table row counts were identical
+before and after the migration ran: `products=5, orders=3, order_items=3, customers=2,
+transactions=6, transaction_attachments=4, bank_accounts=0, bank_statements=0`. Order #1
+byte-for-byte unchanged (verified by direct row comparison before/after this STEP's entire
+implementation and testing).
+
+**Live testing (local dev server on this machine, port 3000 — the same production `next start`
+process on this host, PID 6200 per STEP 92's health check, was never touched or restarted)**:
+1. Taxpayer profile create (valid) — `PASS`.
+2. Taxpayer profile create validation errors (13-digit ID, taxpayer type, missing
+   vatRegistered/whtApplicable, missing name) — all correctly `400` with specific messages — `PASS`.
+3. Taxpayer profile list — masked ID, no raw `taxpayerId` field present — `PASS`.
+4. Taxpayer profile read by id — full `taxpayerId` present — `PASS`.
+5. Taxpayer profile update — name changed, `updatedAt` bumped, `taxpayerType` PATCH attempt silently
+   ignored (stayed `INDIVIDUAL`) — `PASS`.
+6. Taxpayer profile read of a non-existent id — `404` — `PASS`.
+7. Tax year create (valid, linked to the test taxpayer) — `PASS`.
+8. Tax year duplicate create (same taxpayer+year) — `409` — `PASS`.
+9. Tax year create against a non-existent taxpayer profile id — `404` — `PASS`.
+10. Tax year create with an out-of-range year — `400` — `PASS`.
+11. Tax year list filtered by `taxpayerProfileId` — `PASS`.
+12. Status transitions: `OPEN->LOCKED` (skip stage) rejected `409`; `OPEN->OPEN` (same status)
+    rejected `409`; invalid status literal rejected `400`; `OPEN->FINALIZED` succeeds;
+    `FINALIZED->OPEN` (backward) rejected `409`; `FINALIZED->LOCKED` succeeds; `LOCKED->FINALIZED`
+    and `LOCKED->OPEN` (terminal protection) both rejected `409`; status transition on a
+    non-existent tax year id — `404` — all `PASS`.
+13. Authorization — every new route (`/api/tax/taxpayer-profile`, `/api/tax/taxpayer-profile/[id]`,
+    `/api/tax/years`, `/api/tax/years/[id]/status`) returned `401` with no session cookie, `200`
+    with a valid one — `PASS`.
+14. Existing business/financial table counts confirmed unchanged after all of the above — `PASS`.
+
+**Test-data cleanup (limitation and resolution — reported and user-approved before proceeding)**:
+per this STEP's approved scope, no DELETE endpoint exists for either `taxpayer_profiles` or
+`tax_years` (Phase 4 scope explicitly omitted delete for both). This meant temporary test rows
+created through the real API during live testing could not be removed through an application API
+afterward — flagged to the user as the exact "cleanup not safely possible through existing
+application APIs" condition this STEP's own instructions called out as a stop condition. User chose:
+create test data through the real API (full integration test of auth/routing/DAL/DB), then remove
+the exact test row IDs via direct, scoped SQL `DELETE` statements targeting only `taxpayer_profiles`
+and `tax_years` by exact id (re-verified against expected field values immediately before each
+delete; child row deleted before parent; no other table touched, no broad `DELETE`, no `TRUNCATE`,
+no delete-by-name-alone). Post-cleanup verification: both new tables returned to `0` rows (their
+pre-test baseline), the exact test ids (`taxpayer_profiles.id=1`, `tax_years.id=1`) confirmed no
+longer present, every pre-existing business/financial table count unchanged, Order #1 byte-for-byte
+unchanged, and the live API confirmed both list endpoints empty again.
+
+**Build/type/lint**:
+1. `pnpm exec tsc --noEmit` → **PASSED** (zero errors), both before and after the final masking fix.
+2. `pnpm run lint` → pre-existing failures only, all in files this STEP never touched
+   (`src/app/video-studio/page.tsx`, `src/app/voice-studio/page.tsx`,
+   `src/lib/socialQueue.ts`, `test-content-save.cjs`) — confirmed via direct grep that none of the
+   lint output references any TAX-1/PIT-1 file. No unrelated fix attempted, per instructions.
+3. `pnpm run build` → **PASSED**, `✓ Compiled successfully`, all four new routes listed as dynamic
+   (`ƒ`) in the route manifest.
+
+**Data safety (final check)**: no changes to `orders`/`order_items`/`transactions`/
+`transaction_attachments`/`customers`/`products`/`bank_accounts`/`bank_statements`/reconciliation
+tables at any point; Order #1 unchanged; no production process restarted (the only process started
+or stopped during this STEP was a local `next dev` instance on this machine, separate from the
+`next start` production process on PID 6200); no schema change beyond the two new additive tables;
+no DELETE endpoints added; no new dependency added (`package.json`/`pnpm-lock.yaml` unchanged); no
+commit, no push.
+
+**Git diff summary**: `src/lib/db.ts` (+93 lines, additive schema only) plus 4 new files
+(`src/lib/taxpayerProfile.ts`, `src/lib/taxYears.ts`,
+`src/app/api/tax/taxpayer-profile/route.ts` + `[id]/route.ts`,
+`src/app/api/tax/years/route.ts` + `[id]/status/route.ts`) plus this PROJECT_STATUS.md entry. No
+other tracked file modified — confirmed `src/proxy.ts`, `package.json`, and `pnpm-lock.yaml` show
+zero diff.
+
+**TAX-1 PERSONAL TAXPAYER PROFILE & TAX YEAR FOUNDATION: PASS**
+
+---
+
+## STEP 94 — PERSONAL INCOME TAX / WHT FOUNDATION
+
+Date: 2026-09-06
+
+**Scope**: foundation only, additive on top of STEP 93's `taxpayer_profiles`/`tax_years` — a
+`wht_records` entity recording tax withheld FROM this taxpayer's own income (Type A withholding
+only). Explicitly excludes (deferred): tax calculation engine, expense-deduction rules, allowances,
+WHT credit/calculation engine, filing package generation, Revenue Department integration, hard-coded
+filing form (ภ.ง.ด.90/91/94 — still nowhere in the codebase), any WHT rate or legal figure.
+
+**AUDIT (Phase 1, reported before implementation)**: re-inspected `src/lib/db.ts`,
+`src/lib/transactions.ts`, `src/lib/transactionAttachments.ts`, `src/lib/taxpayerProfile.ts`,
+`src/lib/taxYears.ts`, `src/app/api/tax/**`, `src/app/api/transactions/**`. Key decisions this audit
+produced:
+- **Standalone table**, not columns on `transactions` — a real WHT certificate does not always map
+  1:1 onto one existing transaction row (e.g. a platform's consolidated monthly certificate).
+- `taxpayer_profile_id` **denormalized** from `tax_years.taxpayer_profile_id` at insert time (never
+  caller-supplied, never updated) — same precedent as `bank_statement_transactions.bank_account_id`
+  (STEP C.2), needed so a direct `(taxpayer_profile_id, certificate_number)` unique index is
+  possible without a cross-join.
+- `tax_year_id` **required**; `transaction_id` **optional** (nullable).
+- **Evidence reuses the existing `transaction_attachments` mechanism as-is** via the optional
+  `transaction_id` link (upload through the already-existing
+  `POST /api/transactions/[id]/attachments`) — zero schema/API change to
+  `transaction_attachments`. When no `transaction_id` link exists there is currently no
+  evidence-attachment path for that record — a **documented limitation**, not solved in this STEP.
+- **Immutability**: no separate status column on `wht_records` itself — instead, both create and
+  update are blocked unless the linked `tax_years.status === 'OPEN'`, directly reusing STEP 93's own
+  tax-year lifecycle exactly as that STEP's schema comment anticipated.
+- **No DELETE** — same precedent as `taxpayer_profiles`/`tax_years`; corrections happen via update
+  while the tax year is still OPEN.
+- **Duplicate/idempotency**: partial `UNIQUE (taxpayer_profile_id, certificate_number) WHERE
+  certificate_number IS NOT NULL` — same pattern as `bank_statement_transactions`' bank-provided-id
+  index; certificate number stays optional since a record may be entered before the physical
+  certificate arrives.
+- **No design blocker found** — zero changes needed to `transactions.ts`, `transactionAttachments.ts`,
+  or `src/proxy.ts`.
+
+**Data model (additive only, `src/lib/db.ts`)**: `wht_records` — id, `taxpayer_profile_id` (FK,
+denormalized), `tax_year_id` (FK, NOT NULL), `transaction_id` (FK, nullable), `payer_name` (NOT
+NULL), `payer_tax_id` (nullable, no format assumption — the payer's identifier shape is not a
+confirmed fact, unlike the taxpayer's own 13-digit ID), `certificate_number` / `certificate_date`
+(both nullable), `gross_amount` / `withheld_amount` (REAL baht — matches `transactions.amount`'s
+existing convention, not `bank_statement_transactions`' satang convention, which was adopted there
+for an unrelated, specific reconciliation-precision reason), `note`, `created_at`/`updated_at`. Zero
+changes to any existing table/column.
+
+**DAL** (`src/lib/whtRecords.ts`): create/list(filterable by taxpayer/tax year/transaction)/read/update
+— no delete. `assertTaxYearOpen()` gates both create and update on the linked tax year's status.
+`withheldAmount <= grossAmount` is enforced as a basic arithmetic sanity guard (withholding cannot
+exceed its own base) — explicitly **not** a WHT-rate legal assertion; no rate is computed or checked
+anywhere. `taxpayerProfileId`/`taxYearId` are immutable post-create (never accepted by
+`updateWhtRecord()`).
+
+**API** (all under the already-protected `/api/tax/` prefix — no `src/proxy.ts` change needed):
+`GET/POST /api/tax/wht-records` (list with `taxpayerProfileId`/`taxYearId`/`transactionId` filters;
+create), `GET/PATCH /api/tax/wht-records/[id]` (GET returns full `payerTaxId`; PATCH returns the
+masked DTO, same STEP B.6/STEP 93 reasoning; taxpayerProfileId/taxYearId never accepted on PATCH).
+List responses mask `payerTaxId` to its last 4 characters (`payerTaxIdMasked`), same convention as
+`taxpayerIdMasked`/`accountNumberMasked`.
+
+**Validation verified live**: required `payerName`; `grossAmount`/`withheldAmount` must be positive
+finite numbers with `withheld <= gross`; `taxYearId` must reference an existing tax year;
+`transactionId`, if given, must reference an existing transaction; `certificateDate`, if given, must
+be a valid date; duplicate `(taxpayerProfileId, certificateNumber)` rejected via the DB unique
+constraint; create/update against a non-OPEN tax year rejected `409` in both directions.
+
+**Migration safety**: additive `CREATE TABLE IF NOT EXISTS` only, applied via the existing module-load
+pattern. Verified via direct read-only SQLite inspection that all pre-existing table counts were
+identical before and after: `products=5, orders=3, order_items=3, customers=2, transactions=6,
+transaction_attachments=4, bank_accounts=0, bank_statements=0`. Order #1 and transaction #69 (used
+read-only as the linked-transaction test case) both confirmed byte-for-byte unchanged before and
+after.
+
+**Live testing** (local dev server on this machine, a separate process from the production
+`next start` instance — this session never ran `next start` or touched
+`scripts/start-production.ps1`; production's previously-recorded PID 6200 was not queried for or
+targeted by any action here):
+1. Unauthenticated `GET /api/tax/wht-records` → `401`; authenticated → `200` — `PASS`.
+2. Created prerequisite taxpayer profile + OPEN tax year via the existing STEP 93 API (test rows,
+   IDs captured immediately) — `PASS`.
+3. Create WHT record (no transaction link, with certificate number/date) — `PASS`.
+4. Validation: missing `payerName`, invalid `grossAmount`, `withheldAmount > grossAmount`,
+   non-existent `taxYearId`, non-existent `transactionId`, invalid `certificateDate`, duplicate
+   `certificateNumber` for the same taxpayer — all correctly rejected with the right status code —
+   `PASS`.
+5. Create WHT record linked to a real, pre-existing income transaction (id 69, read-only FK check
+   only — the row was never written to) — `PASS`.
+6. List filtered by `taxYearId` and by `transactionId` — `PASS`.
+7. Read by id — full `payerTaxId` present; non-existent id → `404` — `PASS`.
+8. Update — amount corrected, masked response, `updatedAt` bumped — `PASS`.
+9. Authorization on the detail sub-route (`401` unauth, `200` authed) — `PASS`.
+10. Tax-year lock-gating: transitioned the test tax year to `FINALIZED`, then confirmed **both**
+    creating a new WHT record against it and updating an existing one under it were rejected `409`
+    — `PASS`.
+11. Existing business/financial table counts, Order #1, and transaction #69 all confirmed unchanged
+    after every step above — `PASS`.
+
+**Test-data cleanup**: no DELETE endpoint exists for `wht_records` (nor for `taxpayer_profiles`/
+`tax_years`, per their own established precedent) — same "cleanup not possible via app API"
+condition as STEP 93. Per the user-approved STEP 93 precedent, cleaned up via direct, scoped SQL
+`DELETE` statements targeting the exact test row IDs only (`wht_records` ids 1-2, child-first, then
+`tax_years` id 2, then `taxpayer_profiles` id 2), each re-verified against its expected field values
+immediately before deletion. No broad `DELETE`, no `TRUNCATE`, no delete-by-name-alone, no other
+table touched. Post-cleanup verification: all three tables returned to `0` rows, the exact test ids
+confirmed gone, every pre-existing business/financial table count unchanged, Order #1 and
+transaction #69 both byte-for-byte unchanged, and the live API confirmed all three list endpoints
+empty again.
+
+**Build/type/lint**:
+1. `pnpm exec tsc --noEmit` → **PASSED** (zero errors).
+2. `pnpm run lint` → same 48 pre-existing problems as STEP 93's run, all in files this STEP never
+   touched (confirmed via grep that zero lint output references `wht`/`taxYears`/`taxpayerProfile`/
+   `api/tax`). No unrelated fix attempted.
+3. `pnpm run build` → **PASSED**, `✓ Compiled successfully`, both new routes
+   (`/api/tax/wht-records`, `/api/tax/wht-records/[id]`) listed as dynamic (`ƒ`).
+
+**Production safety**: no production process started, stopped, or restarted — only a local `next
+dev` instance on this machine (PID 9080, distinct from STEP 92's recorded production PID 6200) was
+started for testing and has been stopped. This session did not run `next start` or
+`scripts/start-production.ps1` at any point. (Note: PID 6200 was not found running on this machine
+at the time of this check — this session took no action against it in either direction; its current
+absence predates and is unrelated to this STEP's work.)
+
+**Known limitations recorded**: (1) WHT evidence has no attachment path for a record with no
+`transaction_id` link — future evidence-architecture work, not solved here. (2) No delete/no
+tax-year-reassignment path if the wrong `taxYearId` is picked at create time — correctable only via
+other fields while still OPEN. (3) `payerTaxId` has no format validation (payer identity shape is
+not a confirmed fact). (4) No WHT credit/calculation logic exists yet — this STEP only stores raw
+facts.
+
+**Git diff summary**: `src/lib/db.ts` (+184 lines, additive schema only) plus 3 new files
+(`src/lib/whtRecords.ts`, `src/app/api/tax/wht-records/route.ts` + `[id]/route.ts`) plus this
+PROJECT_STATUS.md entry. Confirmed zero diff on `src/proxy.ts`, `src/lib/transactions.ts`,
+`src/lib/transactionAttachments.ts`, `package.json`, and `pnpm-lock.yaml`.
+
+**WHT FOUNDATION: PASS**
+
+---
+
+## STEP 96 — TAX-YEAR DATA IMMUTABILITY / TRANSACTION AUDIT TRAIL
+
+Date: 2026-09-06
+
+**Context**: STEP 95's audit found that a FINALIZED/LOCKED `tax_years` row protected only
+`wht_records` (STEP 94) — `transactions` and `transaction_attachments` (the actual source of any
+filing figure) remained freely editable/deletable with zero audit trail, and no snapshot/version/
+hash mechanism existed anywhere. STEP 96 closes this gap as a foundation, before any tax calculation
+or filing package work begins.
+
+**AUDIT (Phase 1)** — re-read `src/lib/db.ts`, `src/lib/transactions.ts` (full), `src/lib/
+transactionAttachments.ts` (full), all `transactions`/`attachments` API routes, `taxpayerProfile.ts`,
+`taxYears.ts`, `whtRecords.ts`, `src/lib/orders.ts`, `src/lib/reconciliation.ts`, `src/lib/auth.ts`,
+`src/proxy.ts`. Findings: `transactions` has full CREATE/UPDATE/hard-DELETE with zero tax-year
+awareness; `transaction_attachments` has CREATE/hard-DELETE only (no UPDATE function exists at all);
+no `tax_year_id` column exists on `transactions` (confirmed — only STEP 94's WHT files reference
+`taxYearId` anywhere in `src/`); no audit log exists for any of this (only `bank_reconciliation_audit`,
+scoped to an unrelated domain); `src/lib/auth.ts`'s session token encodes only `{exp}` — no
+username/user id at all, confirming a single shared admin credential with no per-user identity;
+no soft delete, no version/snapshot, no hash/integrity mechanism anywhere relevant to tax data.
+Orders/order_items were confirmed to have **no delete function at all** and were not named in
+STEP 95's gap list — explicitly out of this STEP's scope.
+
+**DESIGN (Phase 2)**:
+- **Mapping layer, not a `tax_year_id` column on `transactions`** — new `tax_year_transaction_links`
+  table (at most one link per transaction, UNIQUE) instead of altering `transactions`' schema. Zero
+  backfill: the link table starts empty; every existing transaction is completely unaffected until
+  explicitly opted into a tax year. This was a deliberate choice over the column approach, specifically
+  so every existing query against `transactions` (including the AI assistant's tools and
+  `taxSummary.ts`/`profitSummary.ts`) remains byte-for-byte untouched.
+- **Append-only `tax_audit_log`** — `entity_type`/`entity_id` (polymorphic reference across
+  `transaction` | `transaction_attachment` | `wht_record` | `taxpayer_profile` | `tax_year` |
+  `tax_year_transaction_link`), `action` (`CREATE`/`UPDATE`/`DELETE`), `actor` (fixed literal
+  `"admin"` — explicitly NOT a per-user identity, documented the same way as `bank_reconciliation_
+  matches.confirmed_by`), `occurred_at`, `before_data`/`after_data` (JSON), and a **SHA-256 hash
+  chain** (`prev_hash`/`row_hash`, Node's built-in `crypto` — zero new dependency). No UPDATE/DELETE
+  function is ever written for this table (same convention as `bank_reconciliation_audit`).
+- **Design choice D (audit trail + hash)** was selected over a full snapshot table — a per-mutation
+  JSON snapshot + hash chain, explicitly NOT a Filing Package snapshot (deferred, per instructions).
+- **Lock scope**: `transactions`, `transaction_attachments`, `wht_records` (already STEP 94-gated).
+  Orders excluded — no delete path, not named as a gap.
+- **Actor identity**: single fixed literal, per the audit's finding that no real per-user identity
+  exists in this codebase's auth model.
+
+**SCHEMA (additive only, `src/lib/db.ts`, +~140 lines)**: `tax_year_transaction_links` (`id`,
+`transaction_id` UNIQUE, `tax_year_id`, timestamps) and `tax_audit_log` (as above). Zero columns
+added to `transactions`, `transaction_attachments`, `orders`, `order_items`, `customers`, `products`.
+
+**DAL**:
+- `src/lib/taxAuditLog.ts` (new) — `recordAuditEvent()` (called from within the same
+  `db.transaction()` as the mutation it documents — atomic, so a rolled-back mutation never leaves a
+  false-success audit row), `listAuditEvents()`, `verifyChainIntegrity()` (re-derives every row's
+  hash and confirms the chain — no update/delete function anywhere in this file).
+- `src/lib/taxYearTransactionLinks.ts` (new) — `assertTransactionMutable()` (the single guard reused
+  by both `transactions.ts` and `transactionAttachments.ts`: an unlinked transaction is always
+  mutable, identical to pre-STEP-96 behavior; a linked one only while its tax year is `OPEN`),
+  `linkTransactionToTaxYear()`, `unlinkTransactionFromTaxYear()` — both themselves blocked unless the
+  relevant tax year is `OPEN`, closing the "unlink to bypass the lock" escape hatch.
+- `src/lib/transactions.ts` — surgical edits only (no existing validation/business logic changed):
+  `createTransaction()`/`updateTransaction()`/`deleteTransaction()` now record an audit event atomic
+  with their own `db.transaction()`; `updateTransaction()`/`deleteTransaction()` additionally call
+  `assertTransactionMutable()` as the first statement inside that same transaction, before any write.
+- `src/lib/transactionAttachments.ts` — `insertTransactionAttachment()`/`deleteTransactionAttachment()`
+  gained the same guard + audit recording (wrapped in `db.transaction()`); the cascade helper
+  `deleteAllAttachmentsForTransaction()` (called only from an already-guarded `deleteTransaction()`)
+  records an audit event per deleted row without re-checking the guard (redundant, not safer).
+- `src/lib/whtRecords.ts` / `src/lib/taxpayerProfile.ts` / `src/lib/taxYears.ts` — existing
+  create/update functions wrapped in `db.transaction()` (where not already) with audit recording
+  added; STEP 94's `assertTaxYearOpen()` pre-check on WHT mutations is completely unchanged (no
+  regression).
+
+**API** (all under the already-protected `/api/tax/` prefix — no `src/proxy.ts` change needed):
+`GET/POST /api/tax/years/[id]/transactions` (list links / create-or-reassign a link),
+`DELETE /api/tax/years/[id]/transactions/[transactionId]` (unlink), `GET /api/tax/audit-log`
+(read-only — no POST/PATCH/DELETE defined anywhere for it). Existing `/api/transactions/[id]`,
+`/api/transactions/[id]/attachments`, and `.../attachments/[attachmentId]` routes gained
+`TAX_YEAR_NOT_OPEN` → `409` error mapping.
+
+**Bug found and fixed during Phase 6 testing**: the attachment-upload route wrote the file to disk
+*before* calling `insertTransactionAttachment()` — the DAL-level guard correctly rejected the DB
+write, but the file had already been written, leaving an orphaned file with no database record on
+every rejected upload. Fixed by adding an early `assertTransactionMutable()` check in
+`src/app/api/transactions/[id]/attachments/route.ts` *before* any file I/O, in addition to (not
+instead of) the DAL-level check, which remains the authoritative enforcement. Verified fixed with a
+second live test (locked tax year, attempted upload, confirmed zero bytes written to disk).
+
+**Live testing** (local dev server on this machine — PID 13536, confirmed distinct from STEP 92's
+recorded production PID 6200, which this session never queried, started, stopped, or restarted):
+1. Unauthenticated access to all new routes → `401`; authenticated → `200` — PASS.
+2–3. Transaction CREATE/UPDATE while unlinked (identical to pre-STEP-96 behavior) — PASS, with
+   correct audit CREATE/UPDATE events recorded (verified via `GET /api/tax/audit-log`).
+4. Link a transaction to an OPEN tax year, mutate it again (still allowed) — PASS.
+5. Link attempt against a non-existent tax year — `404` — PASS.
+6. Unlink from an OPEN year, delete the now-unlinked transaction entirely — full cleanup via real
+   API, zero leftover data — PASS.
+7. Upload + delete an attachment on a transaction linked to an OPEN year — PASS, both audited.
+8. Finalized a second tax year with a linked transaction, an attachment, and a WHT record still
+   attached: verified **every** mutation path rejected `409` — transaction update, transaction
+   delete, new attachment upload, existing attachment delete, unlink attempt, WHT update, WHT create
+   against that year — PASS on all seven, **zero regression** on STEP 94's WHT lock behavior.
+9. Confirmed each rejection left the underlying data **byte-unchanged** (re-read directly from the
+   DB) and produced **no audit event** for the rejected attempt (audit log showed only the original
+   CREATE for each entity) — PASS.
+10. Transitioned FINALIZED → LOCKED and re-confirmed rejection still holds (terminal state) — PASS.
+11. Attempted `PATCH`/`DELETE`/`POST` on `/api/tax/audit-log` — all three `405 Method Not Allowed`,
+    confirming no mutation path exists — PASS.
+12. Hash-chain integrity: ran `verifyChainIntegrity()` via a throwaway `tsx` script (removed after
+    use) — valid across all 17 rows spanning every entity type in one unified chronological chain.
+    **Negative test**: directly tampered with one row's `after_data` via raw SQL — `verifyChainIntegrity()`
+    correctly reported `valid: false` at exactly that row id; reverted the tamper, chain valid again —
+    PASS (proves the mechanism actually detects tampering, not just that it passes when untouched).
+13. All pre-existing business/financial table counts (`products`, `orders`, `order_items`,
+    `customers`, `transactions`, `transaction_attachments`, `bank_accounts`, `bank_statements`,
+    `bank_statement_transactions`, `bank_reconciliation_matches`, `bank_reconciliation_audit`)
+    confirmed unchanged before/after the entire test session — PASS.
+14. Order #1 confirmed byte-for-byte unchanged throughout — PASS.
+
+**Test-data cleanup**: reversible test data (an unlinked-then-deleted transaction and its attachment)
+was fully cleaned via real application APIs — no direct SQL needed for those. The deliberately
+**locked** test tax year and everything linked to it (a transaction, an attachment, a WHT record, a
+link row, plus the taxpayer profile and second OPEN tax year, neither of which has a delete endpoint
+by STEP 93/94's own design) cannot be reversed through any application API — this is the lock
+working as intended, not a bug, and is the same situation already encountered and approved (direct-SQL,
+exact-ID, re-verified-before-delete) in STEP 93 and STEP 94. Cleaned up the same way: child-first,
+each row re-verified against its expected content immediately before deletion, no broad `DELETE`, no
+`TRUNCATE`, no delete-by-name/date. The orphaned evidence file from the pre-fix bug was also removed.
+**`tax_audit_log` rows from this test session were deliberately NOT deleted** — 22 rows remain,
+documenting exactly what this test session did. Deleting them would contradict the append-only
+guarantee this STEP exists to provide; this is compliance with the design, not a cleanup omission.
+Post-cleanup, every table listed in Phase 9 was re-verified back to its exact pre-test count.
+
+**Build/type/lint**:
+1. `pnpm exec tsc --noEmit` → PASSED (zero errors), both before and after the orphaned-file fix.
+2. `pnpm run lint` → same 48 pre-existing problems as STEP 93/94/95's runs, confirmed via grep that
+   zero lint output references any STEP 96 file. No unrelated fix attempted.
+3. `pnpm run build` → PASSED, all new routes listed as dynamic (`ƒ`) in the route manifest.
+
+**Production safety**: no production process started, stopped, or restarted. Only a local `next dev`
+instance (PID 13536, then a brief re-check instance) was used for testing and has been stopped.
+Production's PID 6200 (STEP 92) was not queried, started, or targeted by any action in this session;
+it was not found running on this machine at the time of this STEP's check — this predates and is
+unrelated to this STEP's work (no start/restart command of any kind was issued here).
+
+**Known limitations recorded**: (1) orders/order_items remain entirely outside this lock (by design
+— no delete path, not named as a gap); (2) actor attribution is a single fixed literal, not a
+per-user identity, since the underlying session token carries no username; (3) linking a transaction
+to a tax year is fully manual/opt-in — nothing prompts or requires it, so a transaction can remain
+permanently unlinked (and therefore unlocked) indefinitely unless a future STEP adds that workflow;
+(4) `tax_audit_log` has no automatic pruning/retention policy yet (append-only growth, unbounded).
+
+**Git diff summary**: `src/lib/db.ts` (+~140 lines, additive schema only); modified
+`src/lib/transactions.ts`, `src/lib/transactionAttachments.ts`,
+`src/app/api/transactions/[id]/route.ts`,
+`src/app/api/transactions/[id]/attachments/route.ts`,
+`src/app/api/transactions/[id]/attachments/[attachmentId]/route.ts` (all surgical, additive edits —
+no existing validation/business logic removed or changed); new
+`src/lib/taxAuditLog.ts`, `src/lib/taxYearTransactionLinks.ts`,
+`src/app/api/tax/years/[id]/transactions/route.ts` + `[transactionId]/route.ts`,
+`src/app/api/tax/audit-log/route.ts`; plus continued edits to `src/lib/whtRecords.ts`,
+`src/lib/taxpayerProfile.ts`, `src/lib/taxYears.ts` (still-uncommitted STEP 93/94 files, now with
+audit recording added). Confirmed zero diff on `src/proxy.ts`, `src/lib/orders.ts`,
+`src/lib/customers.ts`, `package.json`, and `pnpm-lock.yaml`.
+
+**TAX-YEAR DATA IMMUTABILITY / TRANSACTION AUDIT TRAIL: PASS**
+
+---
+
+## STEP 100 — TAX DOCUMENT RECOVERY FOUNDATION: PERIOD ENTITY + STANDALONE DOCUMENT STORE
+
+Date: 2026-09-06
+
+**Context**: closes Blockers 1–3 from the STEP 99 audit — no standalone document store existed (a
+document required a transaction to exist first), no month/period entity or gap-state vocabulary
+existed, and no persisted human-review state existed for any extracted/uploaded evidence. Explicitly
+excludes (per approved scope): TikTok/Facebook document import, OCR/AI extraction, tax calculation,
+WHT-applicability decisions, gross/net determination, VAT-registration conclusions, filing/submission
+logic, ZIP handling (deferred — no zip-slip/decompression-bomb security layer exists yet).
+
+**Schema (additive only, `src/lib/db.ts`)**: three new tables.
+- `tax_periods` — a month within a `tax_years` row (STEP 93), created on demand (no backfill),
+  `status` (`OPEN/PROCESSING/NEEDS_REVIEW/VERIFIED/CLOSED`, `CLOSED` terminal), unique on
+  `(tax_year_id, period_month)`.
+- `tax_documents` — the standalone evidence store. `taxpayer_profile_id` required (denormalized, same
+  precedent as `wht_records`); `tax_period_id` and `transaction_id` both **nullable** — a document can
+  exist and be uploaded before either is known, and linked to one or both later. `original_filename`
+  preserved (fixes the STEP 99 finding that `transaction_attachments` discards it). `file_hash`
+  (SHA-256) with a `(taxpayer_profile_id, file_hash)` unique index, same convention as
+  `bank_statements.source_file_hash`. `document_type`/`source` nullable free TEXT (TS-enum once
+  populated, `src/lib/taxDocumentTypes.ts`) — classification is optional, not a mandatory gate.
+  `document_date`/`statement_period_from`/`statement_period_to` kept as separate, independent fields
+  per the STEP 99 finding that a document's issue date, covered period, and assigned tax period must
+  never collapse into one field. `review_status`
+  (`UPLOADED/PROCESSING/EXTRACTED/NEEDS_REVIEW/CONFIRMED/REJECTED/DUPLICATE/FAILED`, `CONFIRMED`
+  terminal) — no AI/OCR code exists anywhere in this STEP, so only an explicit human-initiated API
+  call can ever reach `CONFIRMED`. No delete function (matching `taxpayer_profiles`/`tax_years`/
+  `wht_records` precedent).
+- `tax_period_evidence_status` — the gap-state vocabulary
+  (`FOUND/MISSING/EXPECTED_BUT_MISSING/NOT_APPLICABLE/UNKNOWN/NEEDS_REVIEW`) per
+  `(tax_period_id, document_type)`, deliberately separate from `tax_documents` itself (a document row
+  represents an actual file; this table represents a human judgment, including the judgment that
+  something is explicitly `MISSING`). Defaults to `UNKNOWN`, never `FOUND`/`MISSING` — only a human
+  call ever sets a judgment; nothing here infers a status from whether a `tax_documents` row exists.
+
+**Zero changes** to `transactions`, `transaction_attachments`, `orders`, `order_items`, `customers`,
+`products`, or reconciliation (`bank_statements`/`bank_reconciliation_matches`/`_audit` — confirmed
+not needed for this STEP's scope, none touched).
+
+**DAL**: `src/lib/taxDocumentTypes.ts` (shared classification vocabulary, no DB access — same "STEP
+19 constants file" precedent as `transactions.ts`), `src/lib/taxPeriods.ts`, `src/lib/taxDocuments.ts`,
+`src/lib/taxPeriodEvidenceStatus.ts`. Every create/update path records an audit event via the existing
+`src/lib/taxAuditLog.ts` (its `TaxAuditEntityType` union extended with `tax_period`/`tax_document`/
+`tax_period_evidence_status` — a TS-only addition, no `tax_audit_log` schema change, since
+`entity_type` was already generic TEXT).
+
+**API** (all under the already-protected `/api/tax/` prefix): `GET/POST /api/tax/periods`,
+`GET /api/tax/periods/[id]`, `PATCH /api/tax/periods/[id]/status`,
+`GET/PUT /api/tax/periods/[id]/evidence-status`, `GET/POST /api/tax/documents` (POST is a multipart
+upload — extension allowlist + MIME cross-check + magic-byte verification, extending the existing
+hardened pattern from `transactionAttachments`/`ai-extract` to also cover PDF/CSV/XLSX; `.zip` is
+explicitly rejected, deferred per scope), `GET/PATCH /api/tax/documents/[id]`,
+`PATCH /api/tax/documents/[id]/review-status`. **`src/proxy.ts` change (necessary, reported)**: added
+`/generated/tax-documents/` to `isProtectedGeneratedFile()` and its matcher — required for basic
+privacy of the new evidence store, same pattern as every prior protected-file prefix.
+
+**Bug found and fixed during Phase 6 testing (same class as STEP 96's finding)**: the upload route
+wrote the file to disk *before* the DAL's duplicate-hash check ran, so a rejected duplicate upload
+still left an orphaned file with no database record. Fixed by adding `getTaxDocumentByHash()` and
+checking it in the route *before* any file I/O; the DAL-level unique constraint remains the
+authoritative, race-free backstop. Verified fixed with a second live test (upload, re-upload
+identical file, confirmed exactly one file remained on disk).
+
+**Live testing** (local dev server, two separate instances — PIDs 13492 and 7664, both distinct from
+STEP 92's recorded production PID 6200, neither touched):
+1. Unauthenticated access to every new route (`periods`, `periods/[id]`, `.../status`,
+   `.../evidence-status`, `documents`, `documents/[id]`, `.../review-status`) → `401`; authenticated →
+   `200` — PASS on all seven.
+2. Period create/duplicate-rejected/invalid-month-rejected/nonexistent-tax-year-rejected/list — PASS.
+3. Period status: full `OPEN→PROCESSING→CLOSED` walk, same-status rejected, invalid value rejected,
+   `CLOSED` terminal (further change rejected `409`) — PASS.
+4. Evidence-status: valid upsert (create then update, single row confirmed via list, not duplicated),
+   invalid document type rejected, invalid status value rejected — PASS.
+5. Document upload with **no** period/transaction link (image and CSV, exercising both the
+   magic-byte and text-heuristic validation paths) — original filename preserved correctly in both
+   cases — PASS.
+6. Exact-duplicate upload correctly rejected `409`, **zero bytes written to disk** (post-fix) — PASS.
+7. `.zip` extension explicitly rejected; a text file renamed `.png` correctly rejected by magic-byte
+   mismatch — PASS.
+8. Document later linked to a real, pre-existing income transaction (id 69, read-only FK check only
+   — never written to) and a tax period via `PATCH` — PASS, confirming the core "evidence before
+   transaction" requirement.
+9. Linking to a non-existent period/transaction correctly rejected `404` — PASS.
+10. `unlinkedOnly=true` filter correctly returned only the still-unlinked document — PASS.
+11. Full review-status lifecycle walked end-to-end:
+    `UPLOADED→PROCESSING→EXTRACTED→NEEDS_REVIEW→CONFIRMED`; **once `CONFIRMED`, both the
+    review-status endpoint and the generic update endpoint correctly rejected further changes**
+    (`409`) — PASS, confirming the "AI may propose, only a human confirms, confirmation is not
+    casually reversible" rule.
+12. Audit log confirmed real entries for all three new entity types (`tax_period`, `tax_document`,
+    `tax_period_evidence_status`) across CREATE/UPDATE actions — PASS.
+13. All pre-existing business/financial table counts, Order #1, and transaction #69 confirmed
+    byte-for-byte unchanged throughout both testing passes — PASS.
+
+**Test-data cleanup**: no delete endpoint exists for any of the three new entities (by design, matching
+`taxpayer_profiles`/`tax_years`/`wht_records` precedent) — same "cleanup not possible via app API"
+situation as every prior STEP in this series. Cleaned up via the same user-approved direct-SQL,
+exact-ID, re-verified-before-delete protocol (child-first: `tax_documents` → `tax_period_evidence_status`
+→ `tax_periods` → `tax_years` → `taxpayer_profiles`), plus removal of the physical uploaded files
+(including the one orphaned file from the pre-fix duplicate-upload bug). Post-cleanup, every table
+returned to its exact pre-test count; `tax_audit_log` rows from testing were **not** deleted
+(append-only, by design — now 37 total, up from 22 before this STEP).
+
+**Build/type/lint**: `tsc --noEmit` — PASSED (zero errors, both before and after the orphaned-file
+fix). `pnpm run build` — PASSED, all 7 new routes listed as dynamic (`ƒ`). `pnpm run lint` — same 48
+pre-existing problems as every prior STEP's run, confirmed via grep that zero lint output references
+any STEP 100 file.
+
+**Data safety**: zero changes to `transactions`/`transaction_attachments`/`orders`/`order_items`/
+`customers`/`products`/reconciliation tables at any point; Order #1 and transaction #69 unchanged;
+no production process started, stopped, or restarted (only two local `next dev` instances on this
+machine, both stopped); no schema change beyond the three new additive tables; no delete endpoints
+added; no new dependency (`package.json`/`pnpm-lock.yaml` confirmed zero diff); confirmed zero diff on
+all unrelated modules (Video Studio, Voice Studio, Content Studio, Social, `orders.ts`, `customers.ts`).
+
+**Known limitations recorded**: (1) ZIP upload is not supported — deferred until the STEP 99 audit's
+zip-slip/decompression-bomb security design is actually built; (2) no AI/OCR extraction exists yet —
+`review_status` can only be moved by explicit API calls today; (3) linking a document to a period/
+transaction has no lock-awareness of that period's or the linked transaction's own tax-year lock
+(STEP 96) — a document can be linked/relinked regardless of lock state, since documents don't yet feed
+into any calculation; (4) exact-file-hash dedup does not catch a logically-identical document
+re-exported with different bytes (same documented limitation as `wht_records`/`bank_statements`).
+
+**Git diff summary**: `src/lib/db.ts` (additive schema only), `src/proxy.ts` (new protected prefix,
+minimal); new `src/lib/taxDocumentTypes.ts`, `src/lib/taxPeriods.ts`, `src/lib/taxDocuments.ts`,
+`src/lib/taxPeriodEvidenceStatus.ts`, `src/app/api/tax/periods/**`, `src/app/api/tax/documents/**`;
+continued edits to `src/lib/taxAuditLog.ts` (entity-type union extended). Confirmed zero diff on
+`package.json`, `pnpm-lock.yaml`, `src/lib/orders.ts`, `src/lib/customers.ts`, and every
+Video/Voice/Content Studio and Social file.
+
+**TAX DOCUMENT RECOVERY FOUNDATION: PASS**
+
+---
+
+## STEP 101-103 — AUDITS (DOCUMENT COMPLETENESS / MULTI-ROW / FACT EXTRACTION), AUDIT ONLY
+
+STEP 101 (Sections P-AE), STEP 102 (implementation), and STEP 103 (Fact Extraction Storage audit)
+were carried out as read-only audits and one additive implementation, per their own instructions.
+STEP 101 and 103 were explicitly AUDIT ONLY and made no file changes (confirmed via `git status`/
+`git diff` at the start and end of each). STEP 102 implemented `tax_document_rows` (multi-row/event
+storage under `tax_documents`) additively in `src/lib/db.ts`, plus `src/lib/taxDocumentRows.ts` and
+two new API routes under `/api/tax/documents/[id]/rows*` — verified via an isolated scratch-DB test
+harness (23/23 checks passed), `tsc --noEmit`, and `next build`. No entry was added to this file for
+101/102/103 individually per their own instructions at the time; this note exists only so a reader
+of this file understands the numbering gap before STEP 104 below. Full audit/implementation reports
+for STEP 101-103 exist in the conversation history, not duplicated here.
+
+---
+
+## STEP 104 — FACT EXTRACTION STORAGE ARCHITECTURE (SCHEMA + DAL + API)
+
+Implements the Fact layer designed and gated by the STEP 103 audit, on top of STEP 102's
+`tax_document_rows`. Two new, wholly additive tables — `extraction_runs` and `extracted_facts` —
+plus their DAL (`src/lib/extractionRuns.ts`, `src/lib/extractedFacts.ts`) and 8 new API routes under
+`/api/tax/extraction-runs*`, `/api/tax/documents/[id]/facts`, `/api/tax/documents/[id]/rows/[rowId]/facts`,
+and `/api/tax/facts/*`. Zero changes to `transactions`, `orders`, `order_items`,
+`bank_statement_transactions`, `transaction_attachments`, `tax_documents`, `tax_document_rows`,
+`tax_periods`, or `tax_period_evidence_status` semantics — fully additive, matching this schema's
+established convention (`CREATE TABLE IF NOT EXISTS`, no migration framework).
+
+**Decision gates resolved (see STEP 104's own conversation report for full rationale):**
+- **Bank-statement routing**: `bank_statements`/`bank_statement_transactions` remain the sole
+  authoritative bank-source pipeline — no fact/row duplicates a bank statement row; a fact may only
+  reference bank evidence via a free-text pointer, never a structural join.
+- **Fact key vocabulary**: `fact_key` is free TEXT, format-validated only (namespaced,
+  lowercase/underscore/dot) — deliberately not a closed enum, so a new platform field never
+  requires a schema/code change.
+- **Extraction run from the start**: `extraction_runs` shipped in this same migration (not
+  deferred) — every fact, including manual entry, belongs to exactly one run.
+- **Masking policy**: facts never copy whole documents/raw row text (only a short
+  `source_field_label` pointer); run error metadata is bounded, human-safe text only; all new routes
+  sit behind the existing `proxy.ts` `/api/tax/` session gate (no new route added to the matcher —
+  the existing prefix rule already covers all 8).
+- **CLOSED-period guard**: required zero changes to `tax_documents.ts`/`taxPeriodEvidenceStatus.ts`
+  — each new DAL file defines its own `assertDocumentPeriodMutable()`, the same duplicated-per-file
+  pattern STEP 102 already established for `tax_document_rows`.
+
+**Design highlights**: `review_status` on facts is `EXTRACTED → NEEDS_REVIEW → CONFIRMED` (terminal)
+`/ REJECTED` (terminal) — CONFIRMED means only "accepted as an accurate transcription," never a tax
+conclusion. Correction is structural only (`superseded_by_fact_id`) — a fact's value fields, even a
+CONFIRMED fact's, are never rewritten in place; a correction always creates a new fact and links the
+old one forward. Money is `INTEGER` satang only (no float), sign-meaningful, zero allowed.
+Idempotency: `UNIQUE(extraction_run_id, tax_document_row_id, fact_key, occurrence_index)` at the DB
+level, plus an application-level check inside the same transaction for the nullable-row
+(document-level fact) case, where SQLite's NULL-distinctness would otherwise not catch a duplicate.
+No code path anywhere creates or mutates `transactions`/`wht_records`/VAT status.
+
+**Testing**: isolated, throwaway scratch SQLite DB (never `data/thai-amulet.db`), using the actual
+compiled DAL code via `tsx` with `process.chdir()` before any import — 40/43 checks PASS, 3 correctly
+marked NOT EXERCISABLE (auth — proxy-layer, not DAL; sensitive-value masking — a policy decision, no
+function to unit-test; "Order #1 unchanged" — N/A, isolated DB never touches real data). 0 failures.
+Test harness and scratch DB deleted after the run — zero permanent test data, zero real DB mutations.
+
+**Build/type**: `tsc --noEmit` — PASSED (zero errors). `next build` — PASSED, all 8 new routes
+listed as dynamic (`ƒ`) alongside every pre-existing route, unchanged.
+
+**Safety**: real DB mutations = 0; production untouched, not restarted; no dependency change
+(`package.json`/lockfile diff empty); no `.env`/config change; no migration file (additive
+`CREATE TABLE IF NOT EXISTS`, consistent with this project's non-migration convention); no
+permanent/fake tax evidence created; existing business data (transactions, tax_documents,
+tax_document_rows counts) confirmed byte-for-byte unchanged; no commit; no push.
+
+**Remaining blockers (carried forward, unaffected by this STEP)**: no deterministic parser or
+AI/OCR adapter exists yet (out of scope by instruction); `tax_documents`/`tax_period_evidence_status`
+still lack their own CLOSED-period guard (STEP 101 finding, still open — the new Fact/Row layers each
+have their own guard, which is sufficient for them); no Issuer/Counterparty/Supplier entity; VAT
+verification-tier concept still not built; STEP 97.1's tax-calculation/legal blockers remain fully
+in force and untouched.
+
+**STEP 104 IMPLEMENTATION: PASS**
+
+---
+
+## STEP 105 — SOURCE/ISSUER/COUNTERPARTY ENTITY, AUDIT ONLY
+
+Audit-only, per its own instructions — made no file changes (confirmed via `git status`/`git diff`
+at start and end). Designed (not built) a Party+Role model for Document Issuer/Counterparty/Payer/
+Payee/Supplier, concluding: a separate `parties` table is required (the existing `customers` table
+is a shipping-recipient shape, not reusable); tax-ID-like identifiers must separate raw source value
+from a normalized candidate, never assuming a 13-digit Thai format; no auto-merge/fuzzy-matching;
+document-party linking should be a role-association join table (not built yet); `wht_records`/VAT
+status must never be auto-derived from party data. Full report in conversation history, not
+duplicated here.
+
+---
+
+## STEP 106 — PARTIES MASTER DATA + MINIMAL DAL
+
+Implements the master-data layer designed and gated by the STEP 105 audit. Two new, wholly additive
+tables — `parties` and `party_identifiers` — plus their DAL (`src/lib/parties.ts`,
+`src/lib/partyIdentifiers.ts`). No API route, no document-party linking, no party-role table, no
+merge/auto-match, no identity confirmation, no OCR/AI/parser, no additional Fact extraction, and no
+tax/WHT/VAT calculation — exactly per its approved scope. Zero changes to `taxpayer_profiles`,
+`tax_documents`, `tax_document_rows`, `extraction_runs`, `extracted_facts`, `transactions`,
+`transaction_attachments`, `bank_accounts`, `bank_statements`, `bank_statement_transactions`,
+`wht_records`, or `customers`.
+
+**Design decisions (see STEP 106's own conversation report for full rationale):**
+- **Identifier storage**: a separate `party_identifiers` child table, not columns on `parties` — a
+  party can accumulate multiple identifier observations over time that must each be preserved
+  independently, never overwritten.
+- **Tax-ID policy**: extends `wht_records.payer_tax_id`'s existing "no format assumption" policy —
+  `identifier_value_raw` is never format-validated regardless of claimed type (does NOT reuse
+  `taxpayer_profiles.taxpayer_id`'s strict `^\d{13}$` regex); a digits-only normalized candidate is
+  computed only for the two Thai tax-ID types, length never enforced.
+- **Tenant/taxpayer boundary**: `parties` is global master data, no `taxpayer_profile_id` FK — matches
+  `customers`/`bank_accounts`/`products`' own existing unscoped convention; a real boundary check
+  belongs at the future document-party-link layer, not on the party master record.
+- **CLOSED-period guard**: none — no document-party linking exists yet, so no tax-period context
+  applies to a party master-data mutation.
+- **`display_name` is deliberately NOT unique** — names collide, and the same entity can appear
+  under different names across documents.
+
+**Privacy**: `party_identifiers` audit events snapshot a MASKED representation of
+`identifier_value_raw`/`identifier_value_normalized` (last 4 characters visible, rest starred) —
+deliberately tighter than the pre-existing, still-unverified precedent on `taxpayer_profiles`/
+`wht_records` audit snapshots (flagged, not retrofixed — out of scope). Thrown errors never echo
+raw input values. `parties`' own fields (display_name/legal_name/country/note) are not
+sensitive enough to warrant masking and are snapshotted in full, consistent with existing
+convention.
+
+**Testing**: isolated, throwaway scratch SQLite DB (never `data/thai-amulet.db`), same `tsx` +
+`process.chdir()` harness pattern as STEP 102/104 — 41/42 checks PASS, 1 correctly marked NOT
+EXERCISABLE (concurrency/idempotency across separate connections — this is a single-process,
+synchronous better-sqlite3 app with no such scenario to exercise; the DB-level unique indexes are
+the race-free mechanism instead, same precedent as STEP 102/104). 0 failures. Verified zero
+side-effects on existing `transactions`/`wht_records`/`taxpayer_profiles.vat_registered`/`customers`/
+`tax_documents`/`extracted_facts` row counts and content throughout. Test harness and scratch DB
+deleted after the run.
+
+**Build/type**: `tsc --noEmit` — PASSED (zero errors). `next build` — PASSED; confirmed via route
+listing (grepped for "party"/"parties") that ZERO new API routes were added, matching STEP 106's
+explicit no-API scope.
+
+**Safety**: real DB mutations = 0; production untouched, no process started/stopped/restarted; no
+dependency change; no `.env`/config change; no migration file (additive `CREATE TABLE IF NOT
+EXISTS`); no permanent test data; existing business data (transactions, WHT records, taxpayer VAT
+flag, customers, tax documents, extracted facts) confirmed unchanged; no commit; no push.
+
+**Remaining blockers**: no document-party linking yet (deliberately deferred — STEP 105's own next
+safe step); no identity-confirmation/merge mechanism (deliberately deferred, Phase 4); pre-existing
+STEP 101 CLOSED-guard gap on `tax_documents`/`tax_period_evidence_status` unaffected; pre-existing
+cross-taxpayer auth boundary gap (STEP 105 Section S) remains latent, inherited unchanged.
+
+**STEP 106 IMPLEMENTATION: PASS**
+
+---
+
+## STEP 107 — DOCUMENT-PARTY LINKING, AUDIT ONLY
+
+Audit-only, per its own instructions — made no file changes (confirmed via `git status`/`git diff`
+at start and end). Designed (not built) `tax_document_parties(id, tax_document_id NOT NULL,
+tax_document_row_id nullable, party_id NOT NULL, role NOT NULL, status DEFAULT 'ACTIVE', note,
+created_at, updated_at)`: role vocabulary `ISSUER|COUNTERPARTY|PAYER|PAYEE|SUPPLIER|CUSTOMER|
+WITHHOLDING_AGENT|OTHER` (deliberately excluding PLATFORM/BANK, which belong to `parties.party_type`
+instead); duplicate strategy reuses the exact DB-index-plus-app-level-check pattern already proven
+by `extracted_facts` (STEP 104); CLOSED-period guard reuses `assertDocumentPeriodMutable()`
+verbatim; unlink must be a soft `status` change only, never a hard delete. Verdict: READY, no
+architecture blocker. Full report in conversation history, not duplicated here.
+
+---
+
+## STEP 108 — DOCUMENT-PARTY LINKING (SCHEMA + DAL)
+
+Implements the mapping layer designed and gated by the STEP 107 audit. One new, wholly additive
+table — `tax_document_parties` — plus its DAL (`src/lib/taxDocumentParties.ts`). No API route, no
+auto-match, no merge, no OCR/AI, no tax/WHT/VAT calculation, no transaction creation — exactly per
+its approved scope. Zero changes to `tax_documents`, `tax_document_rows`, `extraction_runs`,
+`extracted_facts`, `tax_periods`, `tax_years`, `parties`, `party_identifiers`, `transactions`,
+`transaction_attachments`, `wht_records`, or `customers`.
+
+**Design**: every field except `status`/`note` is immutable by construction (no UPDATE statement
+anywhere touches `tax_document_id`/`tax_document_row_id`/`party_id`/`role`) — this is what closes
+every bypass vector the STEP 107 audit warned about, structurally rather than via a runtime check
+alone. `linkPartyToDocument()` enforces, in order: document exists, period mutable
+(`assertDocumentPeriodMutable()`, the same duplicated-per-file guard used by `tax_document_rows`/
+`extraction_runs`/`extracted_facts`), party exists, row exists AND belongs to the same document
+(`ROW_DOCUMENT_MISMATCH` otherwise — the identical check `createExtractedFact()` already performs),
+role is a valid explicit value. Duplicate detection: DB-level `UNIQUE(tax_document_id,
+tax_document_row_id, party_id, role)` catches row-level duplicates; an application-level check
+inside the same transaction catches document-level (`row_id IS NULL`) duplicates, since SQLite
+treats NULLs as distinct in a unique index — identical two-layer pattern to `extracted_facts`
+(STEP 104). `unlinkDocumentParty()` only ever flips `status: ACTIVE → UNLINKED` (terminal) — no
+delete function exists anywhere in this file; a correction is expressed by unlinking the old row and
+creating a new, correct link, never by rewriting identity fields in place. `tax_years.LOCKED` is
+deliberately NOT checked here, matching the identical precedent already set by
+`tax_document_rows`/`extraction_runs`/`extracted_facts` (only `tax_periods.CLOSED` gates this
+table).
+
+**Testing**: isolated, throwaway scratch SQLite DB (never `data/thai-amulet.db`), same `tsx` +
+`process.chdir()` harness pattern as STEP 102/104/106 — 32/32 checks PASS, 0 FAIL, 0 NOT
+EXERCISABLE. Verified byte-for-byte unchanged: the linked `tax_documents` row, its
+`tax_document_rows`, the linked `parties` row, `customers` (count and content), and
+`taxpayer_profiles` (full row); verified `transactions` count unchanged (no auto-create). Confirmed
+`tax_years.LOCKED` does not block linking by itself (by design) while `tax_periods.CLOSED` does.
+Confirmed unlinked rows remain fully readable/listed (historical, not deleted) and cannot be
+further mutated (`LINK_ALREADY_UNLINKED`). Test harness and scratch DB deleted after the run.
+
+**Build**: `tsc --noEmit` — PASSED (zero errors). `next build` — run TWICE from a freshly deleted
+`.next` cache (not a stale-cache artifact) — PASSED both times; confirmed via grep of the full route
+listing that zero "party"/"document-parties" routes exist, matching STEP 108's explicit no-API
+scope.
+
+**Safety**: real DB mutations = 0; production untouched, no process started/stopped/restarted, PID
+6200 not touched; no dependency change (`package.json`/lockfile diff empty); no `.env`/config
+change; no migration file (additive `CREATE TABLE IF NOT EXISTS`); existing business data
+(transactions, customers, taxpayer_profiles, tax_documents, tax_document_rows, parties) confirmed
+unchanged; no commit; no push.
+
+**Remaining blockers**: no API exists yet for document-party linking (deliberately out of scope);
+identity-confirmation/merge mechanism still deferred (STEP 105/106 Phase 4); pre-existing STEP 101
+CLOSED-guard gap on `tax_documents`/`tax_period_evidence_status` unaffected; pre-existing
+cross-taxpayer auth boundary gap (STEP 105 Section S) remains latent — flagged as a requirement for
+whichever future STEP builds the API, not a blocker for this schema+DAL-only STEP.
+
+**STEP 108 IMPLEMENTATION: PASS**
+
+---
+
+## STEP 109 — DOCUMENT-PARTY LINKING API, AUDIT ONLY
+
+Audit-only, per its own instructions — made no file changes (confirmed via `git status`/`git diff`
+at start and end). Approved the API contract: `GET/POST /api/tax/documents/[id]/parties`,
+`GET/PATCH/DELETE /api/tax/document-parties/[id]`, optional `GET /api/tax/document-parties?partyId=`
+— all thin wrappers over the STEP 108 DAL, zero `proxy.ts` change needed (existing `/api/tax/`
+blanket rule already covers all three paths). Read `src/lib/auth.ts` in full: confirmed the session
+token payload is exactly `{exp}` — no taxpayer/user identity at all — so cross-taxpayer/IDOR access
+is rated **YELLOW** (a pre-existing, systemic characteristic already shipped identically on five
+other GET-by-id routes since STEP 100, not worsened by this feature, out of scope to fix without a
+forbidden new auth mechanism). Data exposure rated GREEN (the DAL never references
+`party_identifiers`, so no tax-ID-class data can leak through this feature regardless of response
+shape). Mutation safety rated GREEN (CLOSED-period guard and audit trail are enforced structurally
+inside the DAL; the API has no alternative path to bypass either). Verdict: READY, no blockers. Full
+report in conversation history, not duplicated here.
+
+---
+
+## STEP 110 — DOCUMENT-PARTY LINKING API (IMPLEMENTATION)
+
+Implements the API designed and approved by the STEP 109 audit. Three new route files — thin
+wrappers only, zero raw SQL, zero business logic re-implemented outside the STEP 108 DAL:
+
+- `src/app/api/tax/documents/[id]/parties/route.ts` — GET (`listLinksForDocument`), POST
+  (`linkPartyToDocument`)
+- `src/app/api/tax/document-parties/[id]/route.ts` — GET (`getDocumentPartyLinkById`), PATCH
+  (`updateLinkNote`, note-only), DELETE (`unlinkDocumentParty`, soft `status → UNLINKED` only — no
+  hard-delete function exists anywhere to call instead)
+- `src/app/api/tax/document-parties/route.ts` — GET `?partyId=` (`listLinksForParty`), mirroring
+  `extraction-runs`'s own required-query-param GET convention exactly (STEP 104 precedent)
+
+No schema change, no DAL change, no `proxy.ts` change, no `auth.ts` change — `src/lib/db.ts`,
+`src/lib/taxAuditLog.ts`, and `src/lib/taxDocumentParties.ts` are byte-for-byte unchanged from
+STEP 108's end-state (confirmed via `git diff --stat`). PATCH accepts only `note`; every other
+field on a link is immutable by construction in the DAL, not merely by API-layer discretion. Error
+mapping follows the exact, pre-existing project convention (404 not-found, 400
+validation/mismatch, 409 duplicate/conflict/closed/terminal, 500 unexpected) traced from real
+route files, not invented.
+
+**Testing**: isolated, throwaway scratch SQLite DB (never `data/thai-amulet.db`), same `tsx` +
+`process.chdir()` pattern as STEP 102/104/106/108 — but this time invoking the actual exported
+route-handler functions (`GET`/`POST`/`PATCH`/`DELETE`) directly with plain Request-like objects,
+not re-testing the DAL alone. 43/50 checks PASS, 0 FAIL, 7 correctly marked NOT EXERCISABLE
+(5× "unauthenticated" — auth is enforced entirely by `proxy.ts` before any route handler runs, and
+`proxy.ts` was not modified this STEP, so this is verified statically rather than exercised;
+"no unexpected routes" — verified via this STEP's own `next build` route listing instead; "no raw
+SQL in API" — verified by static inspection of the three route files instead). Verified
+byte-for-byte unchanged throughout: the linked `tax_documents` row, its `tax_document_rows`, the
+linked `parties` row, `customers`, `wht_records` count, and `taxpayer_profiles` (full row).
+Confirmed the API cannot bypass the CLOSED-period guard (409) or the UNLINKED-terminal guard
+(409), confirmed no hard delete occurs (unlinked rows remain fully readable), confirmed GET never
+writes an audit event, and confirmed no `party_identifiers`-shaped field ever appears in a
+response. Test harness and scratch DB deleted after the run.
+
+**Build**: `tsc --noEmit` — PASSED (zero errors). `next build` — run from a freshly deleted
+`.next` cache THREE times (not a stale-cache artifact) — PASSED every time; confirmed via route
+listing that exactly the three intended paths were added
+(`/api/tax/documents/[id]/parties`, `/api/tax/document-parties`,
+`/api/tax/document-parties/[id]`) and nothing else.
+
+**Security** (re-confirmed, unchanged from STEP 109's ratings): Auth = GREEN; IDOR/Cross-taxpayer =
+YELLOW (pre-existing, not addressed per this STEP's explicit instruction not to touch
+`proxy.ts`/`auth.ts` or invent new auth); Data exposure = GREEN; Mutation safety = GREEN.
+
+**Safety**: real DB mutations = 0; production untouched, PID 6200 not touched, no restart; `src/proxy.ts`
+and `src/lib/auth.ts` confirmed completely untouched this turn (diffs identical to their
+pre-existing state); no dependency change; no `.env`/config change; no schema/DAL change beyond
+STEP 108's own; existing business data (transactions, WHT records, taxpayer profile, customers,
+tax documents, tax document rows, parties) confirmed unchanged; no commit; no push.
+
+**Remaining blockers**: cross-taxpayer/IDOR gap remains latent (YELLOW, pre-existing, explicitly
+out of scope for this STEP); no identity-confirmation/merge mechanism (deferred, STEP 105/106);
+no `parties`-search API (deliberately not built); pre-existing STEP 101 CLOSED-guard gap on
+`tax_documents`/`tax_period_evidence_status` unaffected.
+
+**STEP 110 IMPLEMENTATION: PASS**
+
 ---
 
 ## STEP 47G-21 — PRODUCT MEDIA RUNTIME FILE SERVING FIX
@@ -6503,6 +7411,108 @@ cause was production Next.js's static `public/` file serving being bound at buil
 product-media files created by uploads after the process started were never served. The runtime
 API serving approach resolves this permanently — future uploads do not require a production
 restart to become visible.
+
+---
+
+## STEP 111 — BANK STATEMENT PDF IMPORT: SA1500_V1 TRUSTED LAYOUT (QA VALIDATION — NOT YET APPLIED TO THIS REPO)
+
+Date: 2026-09-09
+
+**Scope and status, stated plainly up front**: this STEP records the outcome of QA validation
+performed in a separate, isolated QA worktree (`C:\Users\maxim\thai-amulet-ai-qa-e7`, its own
+`localhost:3100`, its own copy of the database) — **not** in this main repository, and **not** in
+production. The `SA1500_V1` layout described below exists today only in that QA worktree's copy of
+`src/lib/bankStatementPdfRows.ts` / `src/lib/bankStatementPdfLayouts.ts` /
+`src/app/api/bank-statements/route.ts`. **No source file in this repository was changed by this
+STEP** — porting the validated change into this repo's own copies of those files is a separate,
+not-yet-authorized next step. Production `localhost:3000` was never accessed, deployed to, or
+restarted as part of this work.
+
+**Background**: the real SA1500 statement PDF (`_private\bank-statements\
+STM_SA1500_01JUN26_06SEP26.pdf`) was uploaded and structurally parsed in the QA worktree, producing
+319 extracted rows. That QA run established that the then-current generic trusted layout
+(`GENERIC_DATE_DESC_DEBIT_CREDIT_BALANCE_V1`) did not match this bank's real structure, and — via a
+multi-step structural audit conducted with the account holder, using only non-sensitive structural
+placeholders, never real transaction content — established the confirmed structure used to design
+`SA1500_V1` below. Bank statement **#716 was never read, confirmed, imported, or deleted** at any
+point in this process; it remains untouched.
+
+**`SA1500_V1` layout, as validated in the QA worktree**:
+
+- **Date format**: `DD-MM-YY`, Christian Era (CE) — a fixed, documented two-digit-year century
+  policy (`YY -> 20YY`), never a heuristic.
+- **Physical transaction structure**: `DATE | EFFECTIVE_DATE | EFFECTIVE_TIME | DESCRIPTION |
+  WITHDRAWAL_OR_DEPOSIT | BALANCE | CHANNEL | DETAILS`. One physical amount column — not separate
+  debit/credit columns.
+- **Direction mapping**: resolved from an exact, closed-set match on the leading token of
+  `DESCRIPTION` — never fuzzy/substring matching, never inferred from free description text.
+  `รับโอนเงิน` → CREDIT; `ชำระเงิน` → DEBIT; `โอนเงิน` → DEBIT. Any unrecognized or ambiguous token
+  fails closed as invalid, via the existing, unmodified `amount_with_direction` handling already in
+  `bankStatementCsv.ts`.
+- **Continuation**: 1-2 continuation lines are supported by the existing (unmodified)
+  continuation-line engine.
+- **Repeated headers and page-number footers**: both handled by the trusted layout's own patterns.
+- **`CHANNEL`/`DETAILS`**: discard-only — no `CanonicalStatementRow` field exists for either, so
+  neither is imported into the canonical financial transaction fields.
+- **`GENERIC` PDF layout behavior and the CSV importer are both unchanged** by this work.
+
+**Files involved (in the QA worktree only — none modified in this repo)**:
+`src/lib/bankStatementPdfRows.ts`, `src/lib/bankStatementPdfLayouts.ts`,
+`src/app/api/bank-statements/route.ts`. Tests: `src/lib/__tests__/bankStatementPdfRows.test.ts`,
+`src/lib/__tests__/bankStatementPdfLayouts.test.ts`, `src/lib/__tests__/pdfFixtures.ts` (new
+synthetic Unicode PDF fixture builder, test-only), `src/lib/__tests__/sa1500V1E2E.test.ts` (new
+isolated end-to-end test, using an entirely synthetic in-memory PDF and a freshly-created throwaway
+QA bank account — never the real PDF, never statement #716).
+
+**Test results (QA worktree)**: `bankStatementPdf.test.ts` + `bankStatementPdfRows.test.ts` +
+`bankStatementPdfLayouts.test.ts` + `sa1500V1E2E.test.ts` + `bank-statements/route.test.ts` — 69/69
+PASS. `bank-statements/[id]/route.test.ts` — 16/16 PASS. `bank-statements/[id]/confirm/
+route.test.ts` — 15/15 PASS. **Total: 100/100 PASS, 0 failures.** TypeScript (`tsc --noEmit`):
+PASS, 0 errors. ESLint scoped to the changed files: PASS. Full-project ESLint in the QA worktree
+separately shows pre-existing errors/warnings in unrelated files (video-studio/voice-studio pages,
+`_backup/`, several `any`-typed routes, standalone `.cjs` scripts) — not attributable to
+`SA1500_V1`.
+
+**SA1500_V1 E2E result (QA worktree)**: upload → `PREVIEW_READY` → confirm
+(`layoutId: "SA1500_V1"`) → `IMPORTED`, `imported: 3`. All 3 persisted transactions verified correct
+— dates, credit/debit direction, amounts, and balances all matched expected values exactly, against
+a synthetic fixture. Cleanup left no residue in the throwaway QA account.
+
+**Explicitly not true, and not claimed by this entry**: statement #716 was not deleted, imported, or
+confirmed at any point. No production deployment or production restart occurred. This repository's
+own working tree was not committed as part of this work (this STEP's write to `PROJECT_STATUS.md`
+is itself uncommitted, same as the surrounding pre-existing uncommitted state above). The separate QA
+worktree is not a Git repository and was not committed either. No commit hash exists for the
+`SA1500_V1` change, because it has not been committed anywhere — it exists only as uncommitted files
+in the separate QA worktree.
+
+**STEP 111 STATUS: PASS for QA validation of `SA1500_V1` against a synthetic fixture. NOT YET
+applied to this repository's source, NOT deployed to production. Porting the validated change from
+the QA worktree into this repo (and committing it) is a distinct, future, not-yet-authorized step.**
+
+---
+
+## STEP 112 — SA1500_V1 TRANSFERRED TO MAIN, COMMITTED, AND PUSHED
+
+Date: 2026-09-09
+
+Supersedes STEP 111's "not yet applied" status. SA1500_V1 (bank-specific PDF statement layout)
+has been transferred from the QA worktree into this repository's source and pushed to origin.
+
+- Automated tests: 43/43 PASS (bankStatementPdfRows.test.ts, bankStatementPdfLayouts.test.ts,
+  sa1500V1E2E.test.ts).
+- TypeScript (`tsc --noEmit`): PASS. Production build (`pnpm build`): PASS.
+- Commit `463288fa23a6e8cf72f5050af167c2328ea0ef1d` — pushed to `origin/master`.
+- Browser smoke test: BLOCKED — chrome-devtools-mcp/playwright MCP unavailable this session, not
+  performed, not passed.
+- API-level smoke test (QA server, port 3100): auth gating confirmed correct (401/redirect on all
+  SA1500_V1 routes without a session); authenticated upload/confirm flow could not be exercised
+  over HTTP (no credentials used/sought, per instruction). QA server since stopped; production
+  (port 3000, PID 5520) untouched throughout.
+- Statement #716 and the real production PDF were not used at any point in this work.
+
+**STEP 112 STATUS: SA1500_V1 code is now in MAIN's source and on origin/master. Live
+authenticated/browser verification remains outstanding.**
 
 ---
 

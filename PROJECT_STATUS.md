@@ -7516,6 +7516,86 @@ authenticated/browser verification remains outstanding.**
 
 ---
 
+## STEP 113 — PROJECT STATE AUDIT (READ-ONLY)
+
+Date: 2026-09-09
+
+Read-only audit of repository and working-tree state, performed before any further changes were
+made. Confirmed the state matched what STEP 112 had left behind — no unexpected changes were found
+in the repository or working tree as a result of this audit. No files were modified, staged,
+committed, or pushed as part of this STEP.
+
+**STEP 113 STATUS: PASS — no unexpected changes found.**
+
+---
+
+## STEP 114 — AUDIT AND COMMIT: BANK STATEMENTS PDF-IMPORT BASELINE
+
+Date: 2026-09-09
+
+Audited the pre-existing, still-uncommitted Bank Statements PDF-import baseline (the STEP E.1–E.7
+feature code that `SA1500_V1` depends on at runtime — the actual API routes, `bankStatementPdf.ts`,
+`bankStatements.ts`, and related DB schema additions) to confirm exactly which files belonged to
+this feature, as distinct from unrelated pre-existing backup/other-feature files. Following that
+audit, committed the confirmed baseline (19 files) and pushed it to `origin/master`.
+
+- Commit: `e96a66281444c44fbc25b53bfe2253228d321119`.
+- Pushed to `origin/master`; confirmed `HEAD == origin/master` after the push.
+- This baseline is a dependency that `SA1500_V1` (STEP 112) requires in order to function — without
+  it, the bank-statements API routes and supporting library code did not yet exist in this
+  repository's committed history.
+
+**STEP 114 STATUS: PASS — baseline committed and pushed; HEAD in sync with origin/master.**
+
+---
+
+## STEP 115 — API-LEVEL SMOKE-TEST READINESS AUDIT
+
+Date: 2026-09-09
+
+Read-only audit of readiness for an API-level smoke test of the SA1500_V1 routes following the
+STEP 114 baseline commit. This STEP was a readiness audit only — no smoke test was executed as
+part of STEP 115 itself.
+
+**STEP 115 STATUS: PASS — readiness audit only, no test executed.**
+
+---
+
+## STEP 116 — QA SERVER API-LEVEL SMOKE TEST
+
+Date: 2026-09-09
+
+Started the QA dev server on port 3100 and executed an API-level smoke test of the SA1500_V1
+bank-statements routes.
+
+- Unauthenticated auth gating confirmed correct: 401/redirect returned on all SA1500_V1 routes
+  without a session.
+- The authenticated upload/confirm flow was not tested over HTTP in this STEP.
+- No credentials were used or sought at any point.
+- The QA server was stopped after the test completed.
+- Production (port 3000, PID 5520) was untouched throughout.
+
+**STEP 116 STATUS: PASS for unauthenticated auth-gating checks. Authenticated flow remains
+untested over HTTP.**
+
+---
+
+## STEP 117 — BROWSER MCP CONNECTIVITY RE-CHECK
+
+Date: 2026-09-09
+
+Re-checked availability of browser automation MCP tooling for a browser-based smoke test of
+SA1500_V1.
+
+- `chrome-devtools-mcp`: `CONNECT_TIMEOUT`.
+- `playwright` MCP: `CONNECT_TIMEOUT`.
+- Browser smoke test remains BLOCKED — not performed, not passed. No claim is made that a browser
+  smoke test has passed.
+
+**STEP 117 STATUS: BLOCKED (environment) — browser smoke test not performed.**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

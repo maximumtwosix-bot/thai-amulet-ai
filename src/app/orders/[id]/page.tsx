@@ -589,6 +589,101 @@ export default function OrderDetailPage() {
     }
   }
 
+  // STEP 141 — same narrow exception to STEP 38's page-level "no mutation" boundary as STEP 135/139
+  // above, for the actual platform commission/settlement fee the shop was really charged
+  // (PLATFORM_COMMISSION expense, linked via orderId). Deliberately different gating from the
+  // SHIPPING/RETURNED_PARCEL blocks above: per approved scope, multiple commission rows per order
+  // are allowed (no duplicate guard, client or server) and terminal orders are explicitly allowed
+  // too (no terminal-order guard, client or server) — a legitimate commission/settlement/adjustment
+  // can arrive after the order is already completed/cancelled. This action is therefore always
+  // available once the order has loaded, never hidden by an existing-entry or terminal-status check.
+  const [recordingPlatformCommission, setRecordingPlatformCommission] = useState(false);
+  const [platformCommissionAmountInput, setPlatformCommissionAmountInput] = useState("");
+  const [platformCommissionDateInput, setPlatformCommissionDateInput] = useState("");
+  const [savingPlatformCommission, setSavingPlatformCommission] = useState(false);
+  const [platformCommissionError, setPlatformCommissionError] = useState("");
+
+  function startRecordPlatformCommission() {
+    setPlatformCommissionAmountInput("");
+    setPlatformCommissionDateInput(todayDateString());
+    setPlatformCommissionError("");
+    setRecordingPlatformCommission(true);
+  }
+
+  function cancelRecordPlatformCommission() {
+    setRecordingPlatformCommission(false);
+    setPlatformCommissionAmountInput("");
+    setPlatformCommissionDateInput("");
+    setPlatformCommissionError("");
+  }
+
+  async function savePlatformCommissionExpense() {
+    if (savingPlatformCommission || !order) return;
+
+    setPlatformCommissionError("");
+
+    const amount = Number(platformCommissionAmountInput);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setPlatformCommissionError("กรุณาระบุจำนวนเงินให้ถูกต้อง (มากกว่า 0)");
+      return;
+    }
+
+    if (!platformCommissionDateInput) {
+      setPlatformCommissionError("กรุณาระบุวันที่");
+      return;
+    }
+
+    setSavingPlatformCommission(true);
+
+    try {
+      const response = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transactionType: "expense",
+          amount,
+          transactionDate: platformCommissionDateInput,
+          category: "PLATFORM_COMMISSION",
+          orderId: order.id,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกค่าคอมมิชชันแพลตฟอร์มได้");
+      }
+
+      // Same refetch-the-authoritative-list approach as saveShippingExpense()/
+      // saveReturnedParcelExpense() above, for the same reason (createTransaction()'s return value
+      // never has linkedOrderStatus populated).
+      const newTransactionId = data.data.id as number;
+
+      const listResponse = await fetch(`/api/transactions?orderId=${orderId}`, {
+        cache: "no-store",
+      });
+      const listData = await listResponse.json();
+
+      if (listResponse.ok && listData?.success) {
+        setOrderTransactions(listData.data);
+      }
+
+      setAttachments((current) => ({
+        ...current,
+        [newTransactionId]: { loaded: true, hasAttachment: false, fileUrl: null },
+      }));
+
+      cancelRecordPlatformCommission();
+    } catch (err) {
+      setPlatformCommissionError(
+        err instanceof Error ? err.message : "ไม่สามารถบันทึกค่าคอมมิชชันแพลตฟอร์มได้"
+      );
+    } finally {
+      setSavingPlatformCommission(false);
+    }
+  }
+
   // STEP 55 — order channel (sales channel) correction, approved 2026-09-02. Independent of the
   // STEP 53/54 state above: PATCHes the dedicated /api/orders/[id]/channel route
   // (src/lib/orders.ts updateOrderChannel()). Restricted to CHANNEL_OPTIONS (the 7 valid
@@ -1132,6 +1227,11 @@ export default function OrderDetailPage() {
   const actualShippingExpense = sumByCategory("SHIPPING");
   const returnShippingExpense = sumByCategory("RETURNED_PARCEL");
   const codFee = sumByCategory("COD_FEE");
+  // STEP 141 — sum of ALL linked PLATFORM_COMMISSION expense rows, not just one. Unlike SHIPPING/
+  // RETURNED_PARCEL above, multiple commission rows per order are an approved, expected case (a
+  // legitimate settlement/adjustment can arrive after an earlier one), so this is a running total,
+  // not "the one entry" — sumByCategory() already sums every match, no change needed there.
+  const platformCommissionTotal = sumByCategory("PLATFORM_COMMISSION");
 
   const totalIncome = (orderTransactions ?? [])
     .filter((t) => t.transactionType === "income")
@@ -2019,6 +2119,106 @@ export default function OrderDetailPage() {
                   )}
                 </div>
               )}
+            </section>
+
+            {/* STEP 141 — order-linked platform commission. Deliberately its OWN section, separate
+                from "🚚 สรุปค่าจัดส่ง" above — a platform commission/settlement fee is not a shipping
+                cost, and folding it into that section would misrepresent that section's own stated
+                purpose. Per approved scope: multiple entries per order are allowed (the total below
+                is a running SUM, not "the one entry"), and the action is available on terminal
+                orders too — neither is hidden/blocked here or server-side. */}
+            <section className="mt-6 rounded-2xl border bg-white shadow-sm">
+              <div className="border-b p-5">
+                <h2 className="text-lg font-semibold text-slate-900">
+                  💼 ค่าคอมมิชชันแพลตฟอร์ม
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  ค่าคอมมิชชัน/ค่าธรรมเนียมการตัดจ่ายจริงจากแพลตฟอร์มสำหรับออเดอร์นี้ อาจมีได้มากกว่า 1
+                  รายการ (เช่น รอบตัดจ่ายเพิ่มเติมหลังออเดอร์ปิดแล้ว) — ตัวเลขด้านล่างคือยอดรวมทุกรายการ
+                </p>
+              </div>
+
+              <div className="p-5">
+                <div className="rounded-xl border bg-slate-50 p-4">
+                  <p className="text-xs text-slate-500">ค่าคอมมิชชันแพลตฟอร์ม (รวมทุกรายการ)</p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">
+                    {transactionsLoading
+                      ? "..."
+                      : platformCommissionTotal === null
+                        ? "N/A"
+                        : formatCurrency(platformCommissionTotal)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="border-t p-5">
+                {recordingPlatformCommission ? (
+                  <div className="max-w-sm">
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      บันทึกค่าคอมมิชชันแพลตฟอร์ม
+                    </h3>
+
+                    <div className="mt-3 grid gap-3">
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-slate-500">
+                          จำนวนเงิน (บาท) *
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={platformCommissionAmountInput}
+                          onChange={(e) => setPlatformCommissionAmountInput(e.target.value)}
+                          className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-slate-500">
+                          วันที่ *
+                        </label>
+                        <input
+                          type="date"
+                          value={platformCommissionDateInput}
+                          onChange={(e) => setPlatformCommissionDateInput(e.target.value)}
+                          className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        />
+                      </div>
+                    </div>
+
+                    {platformCommissionError && (
+                      <p className="mt-2 text-xs text-red-600">{platformCommissionError}</p>
+                    )}
+
+                    <div className="mt-3 flex gap-3">
+                      <button
+                        type="button"
+                        onClick={savePlatformCommissionExpense}
+                        disabled={savingPlatformCommission}
+                        className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                      >
+                        {savingPlatformCommission ? "กำลังบันทึก..." : "บันทึก"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelRecordPlatformCommission}
+                        disabled={savingPlatformCommission}
+                        className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        ยกเลิก
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={startRecordPlatformCommission}
+                    className="text-xs font-medium text-amber-700 hover:underline"
+                  >
+                    ➕ บันทึกค่าคอมมิชชันแพลตฟอร์ม
+                  </button>
+                )}
+              </div>
             </section>
 
             {/* STEP 49 — order fulfillment tracking (carrier / tracking number / delivery status /

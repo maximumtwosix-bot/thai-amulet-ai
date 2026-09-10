@@ -33,6 +33,46 @@ export interface SaleStockInput {
 
 export type SaleStockResult = StockAdjustmentResult;
 
+export interface ReturnStockInput {
+  productId: number;
+  quantity: number;
+  orderId: number;
+  note?: string | null;
+}
+
+export type ReturnStockResult = StockAdjustmentResult;
+
+// STEP 137 — symmetric counterpart to decreaseStockForSale() below, used only when an order
+// transitions to "cancelled" (src/lib/orders.ts updateOrderStatus()) to restore the exact quantity
+// that transition's own order originally deducted at creation. movement_type "return" was already
+// part of StockMovementType above (never previously written by anything) — no new type added.
+export function increaseStockForCancellation(
+  input: ReturnStockInput
+): ReturnStockResult {
+  const { productId, quantity, orderId, note = null } = input;
+
+  if (!Number.isInteger(productId) || productId <= 0) {
+    throw new Error("Invalid product ID");
+  }
+
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    throw new Error("quantity must be a positive integer");
+  }
+
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    throw new Error("Invalid order ID");
+  }
+
+  return adjustProductStock({
+    productId,
+    quantityChange: quantity,
+    note,
+    referenceType: "order",
+    referenceId: orderId,
+    movementType: "return",
+  });
+}
+
 export function decreaseStockForSale(
   input: SaleStockInput
 ): SaleStockResult {

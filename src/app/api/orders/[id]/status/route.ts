@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateOrderStatus } from "@/lib/orders";
 
-// STEP 32 — order status workflow. The only mutation endpoint for orders.status; everything else
-// about an order (items, totals, stock, the STEP 31 income transaction) is immutable after
-// creation. Already covered by the existing src/proxy.ts rule
+// STEP 32 — order status workflow. The only mutation endpoint for orders.status; items, totals,
+// and the STEP 31 income transaction remain immutable after creation. STEP 137 — the one exception
+// is stock: cancelling an order now restores the stock that order's own creation deducted (see
+// updateOrderStatus() in src/lib/orders.ts) — everything else about this endpoint is unchanged.
+// Already covered by the existing src/proxy.ts rule
 // (pathname === "/api/orders" || pathname.startsWith("/api/orders/")) — no proxy.ts change needed,
 // same as STEP 31's new /api/orders/[id] field and STEP 29's /api/transactions/ai-extract.
 

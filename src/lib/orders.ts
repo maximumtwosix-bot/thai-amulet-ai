@@ -1,5 +1,5 @@
 ﻿import db from "./db";
-import { decreaseStockForSale } from "./inventory";
+import { decreaseStockForSale, increaseStockForCancellation } from "./inventory";
 import {
   createTransaction,
   isValidPaymentMethod,
@@ -261,10 +261,14 @@ export function createOrder(
 }
 
 // STEP 32 — order status workflow. Approved scope: this function ONLY ever writes orders.status.
-// It never touches transactions, inventory_movements, products.stock, or customers — not even for
-// the "cancelled" target status. Reversing the STEP 31 automatic income transaction, restoring
-// stock, or creating a refund transaction on cancellation are all explicitly out of scope for this
-// STEP (approved 2026-09-01) and are not implemented here.
+// It never touches transactions or customers — not even for the "cancelled" target status.
+// Reversing the STEP 31 automatic income transaction or creating a refund transaction on
+// cancellation remain explicitly out of scope (approved 2026-09-01) and are not implemented here.
+//
+// STEP 137 — the one exception: cancellation now restores the stock this order's own creation
+// deducted (see the "cancelled" branch below). This was the specific inventory-drift gap the STEP
+// 136 audit flagged — every other STEP 32 boundary above (transactions, customers, every
+// non-cancellation transition) is unchanged.
 export interface OrderStatusUpdateResult {
   id: number;
   orderNumber: string;
@@ -280,33 +284,71 @@ export function updateOrderStatus(orderId: number, nextStatus: string): OrderSta
     throw new Error("INVALID_STATUS");
   }
 
-  const existing = db
-    .prepare("SELECT id, order_number, status FROM orders WHERE id = ?")
-    .get(orderId) as { id: number; order_number: string; status: string } | undefined;
+  const run = db.transaction(() => {
+    const existing = db
+      .prepare("SELECT id, order_number, status FROM orders WHERE id = ?")
+      .get(orderId) as { id: number; order_number: string; status: string } | undefined;
 
-  if (!existing) {
-    throw new Error("ORDER_NOT_FOUND");
-  }
+    if (!existing) {
+      throw new Error("ORDER_NOT_FOUND");
+    }
 
-  // existing.status should always be a recognized OrderStatus in practice (createOrder() only ever
-  // writes 'pending', and this function is the only other writer, itself gated by
-  // isValidOrderStatus() above) — but re-checked defensively rather than trusting the DB value
-  // blindly, so an unrecognized stored value fails closed as an invalid transition instead of
-  // throwing an uncontrolled TypeScript/runtime error.
-  if (
-    !isValidOrderStatus(existing.status) ||
-    !isValidOrderStatusTransition(existing.status, nextStatus)
-  ) {
-    throw new Error("INVALID_STATUS_TRANSITION");
-  }
+    // existing.status should always be a recognized OrderStatus in practice (createOrder() only
+    // ever writes 'pending', and this function is the only other writer, itself gated by
+    // isValidOrderStatus() above) — but re-checked defensively rather than trusting the DB value
+    // blindly, so an unrecognized stored value fails closed as an invalid transition instead of
+    // throwing an uncontrolled TypeScript/runtime error.
+    if (
+      !isValidOrderStatus(existing.status) ||
+      !isValidOrderStatusTransition(existing.status, nextStatus)
+    ) {
+      throw new Error("INVALID_STATUS_TRANSITION");
+    }
 
-  // Repeating the exact same status is also rejected here — every status's transition list
-  // (src/lib/orderStatus.ts) intentionally excludes itself as a valid target, so a duplicate/
-  // replayed PATCH request for a status the order has already reached fails the check above with
-  // INVALID_STATUS_TRANSITION rather than silently no-op-succeeding or double-applying anything.
-  db.prepare("UPDATE orders SET status = ? WHERE id = ?").run(nextStatus, orderId);
+    // Repeating the exact same status is also rejected here — every status's transition list
+    // (src/lib/orderStatus.ts) intentionally excludes itself as a valid target, so a duplicate/
+    // replayed PATCH request for a status the order has already reached fails the check above with
+    // INVALID_STATUS_TRANSITION rather than silently no-op-succeeding or double-applying anything.
+    // "cancelled" itself has an empty transition list (terminal), so a second cancel attempt on an
+    // already-cancelled order fails here too — before the restore branch below ever runs, which is
+    // this fix's primary idempotency guarantee.
+    db.prepare("UPDATE orders SET status = ? WHERE id = ?").run(nextStatus, orderId);
 
-  return { id: existing.id, orderNumber: existing.order_number, status: nextStatus };
+    // STEP 137 — restore stock only on the cancellation transition. The defensive existence check
+    // below is belt-and-suspenders on top of the transition-guard idempotency above: it makes this
+    // safe even if a future change to ORDER_STATUS_TRANSITIONS ever allowed re-entering "cancelled"
+    // (it does not today), by refusing to restore twice for the same order regardless.
+    if (nextStatus === "cancelled") {
+      const alreadyRestored = db
+        .prepare(
+          `
+          SELECT id FROM inventory_movements
+          WHERE reference_type = 'order' AND reference_id = ? AND movement_type = 'return'
+          LIMIT 1
+          `
+        )
+        .get(orderId);
+
+      if (!alreadyRestored) {
+        const items = db
+          .prepare("SELECT product_id, quantity FROM order_items WHERE order_id = ?")
+          .all(orderId) as Array<{ product_id: number; quantity: number }>;
+
+        for (const item of items) {
+          increaseStockForCancellation({
+            productId: item.product_id,
+            quantity: item.quantity,
+            orderId,
+            note: `Order ${existing.order_number} cancelled — stock restored`,
+          });
+        }
+      }
+    }
+
+    return { id: existing.id, orderNumber: existing.order_number, status: nextStatus };
+  });
+
+  return run();
 }
 
 // STEP 53 — price-only correction for existing order_items. Approved scope (2026-09-02): edits

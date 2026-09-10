@@ -46,6 +46,29 @@ function errorToResponse(error: unknown) {
     );
   }
 
+  // STEP 135 — order-linked shipping-expense narrow exception (src/lib/transactions.ts
+  // createTransaction()). Both only ever thrown when transactionType === "expense" && category ===
+  // "SHIPPING" && orderId is set — see that function's guards.
+  if (message === "DUPLICATE_ORDER_SHIPPING_EXPENSE") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "ออเดอร์นี้มีรายการค่าขนส่งที่บันทึกไว้แล้ว ไม่สามารถบันทึกค่าขนส่งซ้ำสำหรับออเดอร์เดียวกันได้",
+      },
+      { status: 409 }
+    );
+  }
+
+  if (message === "ORDER_TERMINAL_STATUS") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "ออเดอร์นี้อยู่ในสถานะสิ้นสุดแล้ว ไม่สามารถบันทึกค่าขนส่งได้",
+      },
+      { status: 409 }
+    );
+  }
+
   // STEP 139 — order-linked returned-parcel-expense narrow exception (src/lib/transactions.ts
   // createTransaction()). Both only ever thrown when transactionType === "expense" && category ===
   // "RETURNED_PARCEL" && orderId is set — see that function's guards. Distinct codes/messages from

@@ -24,6 +24,7 @@ export type ExpenseCategory =
   | "FACEBOOK_ADS"
   | "FUEL"
   | "PLATFORM_FEE"
+  | "PLATFORM_COMMISSION"
   | "OTHER";
 
 export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
@@ -35,6 +36,7 @@ export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
   "FACEBOOK_ADS",
   "FUEL",
   "PLATFORM_FEE",
+  "PLATFORM_COMMISSION",
   "OTHER",
 ];
 
@@ -113,7 +115,7 @@ import {
   deleteAllAttachmentsForTransaction,
   type TransactionAttachment,
 } from "./transactionAttachments";
-import { type OrderStatus } from "./orderStatus";
+import { type OrderStatus, isValidOrderStatus, getAllowedNextStatuses } from "./orderStatus";
 import { assertTransactionMutable } from "./taxYearTransactionLinks";
 import { recordAuditEvent } from "./taxAuditLog";
 
@@ -249,6 +251,40 @@ function assertNoDuplicateOrderIncome(orderId: number, excludeTransactionId?: nu
   }
 }
 
+// STEP 135 — narrow mutation exception for recording the actual carrier shipping cost from Order
+// Detail. Both guards below are scoped strictly to transactionType === "expense" && category ===
+// "SHIPPING" && orderId set (checked by the one call site in createTransaction() below) — no other
+// expense category or unlinked transaction is affected, per the approved narrow-exception scope
+// (STEP 38's page-level "no mutation" boundary is otherwise left untouched).
+
+// At most one SHIPPING expense per order — mirrors assertNoDuplicateOrderIncome() above exactly,
+// just for transaction_type = 'expense' AND category = 'SHIPPING' instead of 'income'.
+function assertNoDuplicateOrderShippingExpense(orderId: number): void {
+  const existingShipping = db
+    .prepare(
+      "SELECT id FROM transactions WHERE order_id = ? AND transaction_type = 'expense' AND category = 'SHIPPING' LIMIT 1"
+    )
+    .get(orderId);
+
+  if (existingShipping) {
+    throw new Error("DUPLICATE_ORDER_SHIPPING_EXPENSE");
+  }
+}
+
+// Terminal orders (completed/cancelled — src/lib/orderStatus.ts's ORDER_STATUS_TRANSITIONS) cannot
+// have a shipping expense recorded against them, same terminal-status rule already enforced
+// independently by updateOrderShippingAndDiscount()/updateOrderChannel()/etc. in src/lib/orders.ts
+// for their own order-mutating actions.
+function assertOrderNotTerminalForShippingExpense(orderId: number): void {
+  const order = db.prepare("SELECT status FROM orders WHERE id = ?").get(orderId) as
+    | { status: string }
+    | undefined;
+
+  if (order && isValidOrderStatus(order.status) && getAllowedNextStatuses(order.status).length === 0) {
+    throw new Error("ORDER_TERMINAL_STATUS");
+  }
+}
+
 // STEP 139 — narrow mutation exception for recording the actual returned-parcel/COD fee the shop
 // was really charged, from Order Detail. Mirrors STEP 135's SHIPPING guards exactly, just scoped to
 // transactionType === "expense" && category === "RETURNED_PARCEL" && orderId set (checked by the
@@ -360,6 +396,19 @@ export function createTransaction(input: CreateTransactionInput): TransactionRow
   const insert = db.transaction(() => {
     if (input.transactionType === "income" && orderId !== null) {
       assertNoDuplicateOrderIncome(orderId);
+    }
+
+    // STEP 135 — narrow exception, scoped strictly to expense/SHIPPING/order-linked (see the two
+    // guard functions above). Checked inside this same db.transaction() so the duplicate check and
+    // the insert below are atomic against each other, same as the STEP 34 income guard above —
+    // better-sqlite3 serializes all synchronous transactions against this one connection, so no
+    // concurrent request can observe a "no existing SHIPPING expense" state between this check and
+    // the insert committing. This does NOT protect against a second, independent DB connection to
+    // the same file (this codebase uses a single shared connection throughout, per src/lib/db.ts) —
+    // documented limitation, no schema-level UNIQUE constraint added in this STEP.
+    if (input.transactionType === "expense" && input.category === "SHIPPING" && orderId !== null) {
+      assertOrderNotTerminalForShippingExpense(orderId);
+      assertNoDuplicateOrderShippingExpense(orderId);
     }
 
     // STEP 139 — narrow exception, scoped strictly to expense/RETURNED_PARCEL/order-linked (see the

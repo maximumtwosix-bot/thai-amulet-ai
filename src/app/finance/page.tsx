@@ -23,6 +23,7 @@ type ExpenseCategory =
   | "FACEBOOK_ADS"
   | "FUEL"
   | "PLATFORM_FEE"
+  | "PLATFORM_COMMISSION"
   | "OTHER";
 
 const EXPENSE_CATEGORIES: ExpenseCategory[] = [
@@ -34,6 +35,7 @@ const EXPENSE_CATEGORIES: ExpenseCategory[] = [
   "FACEBOOK_ADS",
   "FUEL",
   "PLATFORM_FEE",
+  "PLATFORM_COMMISSION",
   "OTHER",
 ];
 
@@ -172,6 +174,7 @@ const expenseCategoryLabels: Record<ExpenseCategory, string> = {
   FACEBOOK_ADS: "ค่าโฆษณา Facebook / Meta",
   FUEL: "ค่าน้ำมัน",
   PLATFORM_FEE: "ค่าธรรมเนียมแพลตฟอร์ม",
+  PLATFORM_COMMISSION: "ค่าคอมมิชชันแพลตฟอร์ม",
   OTHER: "อื่นๆ",
 };
 

@@ -135,6 +135,12 @@ function formatCurrency(value: number) {
   return `฿${value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// STEP 135 — same "YYYY-MM-DD" default-to-today convention already used by src/app/finance/page.tsx's
+// todayDateString() for its own transaction-create form.
+function todayDateString(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 // STEP 55 — sales channel options, values match src/lib/transactions.ts's SALES_CHANNELS exactly
 // (isValidSalesChannel()), duplicated locally the same way src/app/orders/new/page.tsx's
 // CHANNEL_OPTIONS already is — importing transactions.ts here would pull in ./db (better-sqlite3)
@@ -494,6 +500,104 @@ export default function OrderDetailPage() {
       );
     } finally {
       setSavingSummary(false);
+    }
+  }
+
+  // STEP 135 — narrow exception to STEP 38's page-level "no mutation" boundary: lets the operator
+  // record the actual carrier shipping cost paid for this order as a SHIPPING expense transaction
+  // linked via orderId. Deliberately independent of the STEP 54 shippingFeeInput/summary state
+  // above — this never reads or writes order.shipping_fee, per approved scope (the two figures stay
+  // completely separate, exactly as the "🚚 สรุปค่าจัดส่ง" cards below already display them). At most
+  // one SHIPPING expense per order and the terminal-order block are both enforced server-side in
+  // src/lib/transactions.ts createTransaction() — this client state only mirrors that for UX
+  // (hiding/disabling the action), it is never the actual gate.
+  const [recordingShipping, setRecordingShipping] = useState(false);
+  const [shippingAmountInput, setShippingAmountInput] = useState("");
+  const [shippingDateInput, setShippingDateInput] = useState("");
+  const [savingShipping, setSavingShipping] = useState(false);
+  const [shippingError, setShippingError] = useState("");
+
+  function startRecordShipping() {
+    setShippingAmountInput("");
+    setShippingDateInput(todayDateString());
+    setShippingError("");
+    setRecordingShipping(true);
+  }
+
+  function cancelRecordShipping() {
+    setRecordingShipping(false);
+    setShippingAmountInput("");
+    setShippingDateInput("");
+    setShippingError("");
+  }
+
+  async function saveShippingExpense() {
+    if (savingShipping || !order) return;
+
+    setShippingError("");
+
+    const amount = Number(shippingAmountInput);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setShippingError("กรุณาระบุจำนวนเงินให้ถูกต้อง (มากกว่า 0)");
+      return;
+    }
+
+    if (!shippingDateInput) {
+      setShippingError("กรุณาระบุวันที่");
+      return;
+    }
+
+    setSavingShipping(true);
+
+    try {
+      const response = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transactionType: "expense",
+          amount,
+          transactionDate: shippingDateInput,
+          category: "SHIPPING",
+          orderId: order.id,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกค่าขนส่งได้");
+      }
+
+      // Refetch the authoritative list (same GET the initial-load effect already uses) rather than
+      // hand-constructing a row from the POST response — createTransaction()'s return value never
+      // has linkedOrderStatus populated (see TransactionRow's own comment in transactions.ts), while
+      // listTransactions() does; refetching keeps this row identical in shape to every other one
+      // already rendered here.
+      const newTransactionId = data.data.id as number;
+
+      const listResponse = await fetch(`/api/transactions?orderId=${orderId}`, {
+        cache: "no-store",
+      });
+      const listData = await listResponse.json();
+
+      if (listResponse.ok && listData?.success) {
+        setOrderTransactions(listData.data);
+      }
+
+      // A brand-new transaction cannot have an attachment yet — this is a known fact, not a guess,
+      // so it's safe to set directly without a network call (avoids an indefinite "กำลังตรวจสอบ
+      // หลักฐาน..." for this one row until the next full page load).
+      setAttachments((current) => ({
+        ...current,
+        [newTransactionId]: { loaded: true, hasAttachment: false, fileUrl: null },
+      }));
+
+      cancelRecordShipping();
+    } catch (err) {
+      setShippingError(err instanceof Error ? err.message : "ไม่สามารถบันทึกค่าขนส่งได้");
+    } finally {
+      setSavingShipping(false);
     }
   }
 
@@ -2041,6 +2145,84 @@ export default function OrderDetailPage() {
                   </p>
                 </div>
               </div>
+
+              {/* STEP 135 — narrow exception to STEP 38's "no mutation" boundary above: lets the
+                  operator record the actual carrier shipping cost as a SHIPPING expense linked to
+                  this order. Hidden once one already exists (at most one allowed — server-enforced
+                  in createTransaction()) or once the order is terminal (also server-enforced
+                  independently there), matching every other mutating action on this page. */}
+              {!transactionsLoading && actualShippingExpense === null && (
+                <div className="border-t p-5">
+                  {getAllowedNextStatuses(order.status).length === 0 ? (
+                    <p className="text-xs text-slate-400">
+                      ออเดอร์นี้สิ้นสุดแล้ว — ไม่สามารถบันทึกค่าขนส่งได้
+                    </p>
+                  ) : recordingShipping ? (
+                    <div className="max-w-sm">
+                      <h3 className="text-sm font-semibold text-slate-900">บันทึกค่าขนส่ง</h3>
+
+                      <div className="mt-3 grid gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                            จำนวนเงิน (บาท) *
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={shippingAmountInput}
+                            onChange={(e) => setShippingAmountInput(e.target.value)}
+                            className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                            วันที่ *
+                          </label>
+                          <input
+                            type="date"
+                            value={shippingDateInput}
+                            onChange={(e) => setShippingDateInput(e.target.value)}
+                            className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                          />
+                        </div>
+                      </div>
+
+                      {shippingError && (
+                        <p className="mt-2 text-xs text-red-600">{shippingError}</p>
+                      )}
+
+                      <div className="mt-3 flex gap-3">
+                        <button
+                          type="button"
+                          onClick={saveShippingExpense}
+                          disabled={savingShipping}
+                          className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                        >
+                          {savingShipping ? "กำลังบันทึก..." : "บันทึก"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelRecordShipping}
+                          disabled={savingShipping}
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          ยกเลิก
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={startRecordShipping}
+                      className="text-xs font-medium text-amber-700 hover:underline"
+                    >
+                      ➕ บันทึกค่าขนส่ง
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* STEP 139 — same narrow exception as STEP 135 above, for the actual returned-parcel/
                   COD fee the shop was really charged (RETURNED_PARCEL expense linked to this order).

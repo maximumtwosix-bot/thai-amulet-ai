@@ -225,12 +225,81 @@ test("6. PDF with no text layer fails safely at confirm-time re-derivation with 
   assert.equal(txns.length, 0);
 });
 
-test("7. unrecognized/INVALID row from preview causes a PREVIEW_MISMATCH, not a partial import", async () => {
+test("7. unrecognized/INVALID row from preview -> zero valid rows -> ZERO_VALID_ROWS_TO_IMPORT, never IMPORTED", async () => {
   // The PREVIEW (STEP E.5, client-supplied layout) sees this line as unparseable -> 1 invalid row,
-  // 0 valid. At confirm, the trusted registry layout is used instead (this STEP's fix) — for THIS
-  // line it also fails to match (no debit/credit/balance at all), so counts still agree (0 valid,
-  // 1 invalid) and confirm proceeds — importing zero transactions, never a guessed one.
+  // 0 valid. At confirm, the trusted registry layout is used instead — for THIS line it also fails
+  // to match (no debit/credit/balance at all), so counts still agree (0 valid, 1 invalid) and the
+  // fresh re-parse also yields zero importable rows. STEP 2's guard must now reject this instead of
+  // silently marking the statement IMPORTED with nothing in it.
   const pdf = buildTextPdf(["03/01/2025 ยอดคงเหลือไม่ถูกต้อง"]);
+  const statementId = await uploadPdf(pdf);
+
+  const { req, ctx } = confirmRequest(statementId, { layoutId: TRUSTED_LAYOUT_ID });
+  const res = await confirmPost(req, ctx);
+  const body = await res.json();
+
+  assert.equal(res.status, 409);
+  assert.equal(body.success, false);
+  assert.equal(body.error, "ไม่มีรายการที่ถูกต้องสำหรับนำเข้าในไฟล์นี้ ไม่สามารถยืนยันการนำเข้าได้");
+
+  const txns = listBankStatementTransactions(statementId);
+  assert.equal(txns.length, 0, "an INVALID row must never be imported as a transaction");
+  const statement = getBankStatementById(statementId);
+  assert.equal(statement?.status, "FAILED", "statement must not be left as IMPORTED with zero rows");
+});
+
+test("8. ambiguous row (ill-formed) -> zero valid rows -> ZERO_VALID_ROWS_TO_IMPORT, never IMPORTED", async () => {
+  const pdf = buildTextPdf(["07/01/2025 ค่าอะไรบางอย่างที่ไม่มีตัวเลขเลย"]);
+  const statementId = await uploadPdf(pdf);
+
+  const { req, ctx } = confirmRequest(statementId, { layoutId: TRUSTED_LAYOUT_ID });
+  const res = await confirmPost(req, ctx);
+  const body = await res.json();
+
+  assert.equal(res.status, 409);
+  assert.equal(body.error, "ไม่มีรายการที่ถูกต้องสำหรับนำเข้าในไฟล์นี้ ไม่สามารถยืนยันการนำเข้าได้");
+  assert.equal(listBankStatementTransactions(statementId).length, 0);
+  assert.equal(getBankStatementById(statementId)?.status, "FAILED");
+});
+
+test("9. debit+credit both populated -> zero valid rows -> ZERO_VALID_ROWS_TO_IMPORT, never IMPORTED", async () => {
+  // At upload/preview this line is invalid under BOTH layouts (client's and the trusted registry's)
+  // for the same reason, so preview/confirm counts agree — but the fresh re-parse still yields zero
+  // importable rows, so STEP 2's guard rejects the confirm instead of proceeding to import zero rows.
+  const pdf = buildTextPdf(["08/01/2025 รายการทดสอบ 100.00 200.00 49,700.00"]);
+  const statementId = await uploadPdf(pdf);
+
+  const { req, ctx } = confirmRequest(statementId, { layoutId: TRUSTED_LAYOUT_ID });
+  const res = await confirmPost(req, ctx);
+  const body = await res.json();
+
+  assert.equal(res.status, 409);
+  assert.equal(body.error, "ไม่มีรายการที่ถูกต้องสำหรับนำเข้าในไฟล์นี้ ไม่สามารถยืนยันการนำเข้าได้");
+  assert.equal(listBankStatementTransactions(statementId).length, 0);
+  assert.equal(getBankStatementById(statementId)?.status, "FAILED");
+});
+
+test("16. STEP 2 — CSV confirm with zero valid rows also fails with ZERO_VALID_ROWS_TO_IMPORT, never IMPORTED", async () => {
+  // A CSV whose only data row is fatally malformed for the declared mapping (amount is not
+  // numeric) never reaches "valid" classification -> rowsToImport stays empty in the CSV branch too.
+  const statementId = await uploadCsv("date,description,amount\n2025-01-01,Test,not-a-number\n");
+
+  const { req, ctx } = confirmRequest(statementId, {});
+  const res = await confirmPost(req, ctx);
+  const body = await res.json();
+
+  assert.equal(res.status, 409);
+  assert.equal(body.success, false);
+  assert.equal(body.error, "ไม่มีรายการที่ถูกต้องสำหรับนำเข้าในไฟล์นี้ ไม่สามารถยืนยันการนำเข้าได้");
+
+  const txns = listBankStatementTransactions(statementId);
+  assert.equal(txns.length, 0);
+  const statement = getBankStatementById(statementId);
+  assert.equal(statement?.status, "FAILED", "CSV statement must not be left as IMPORTED with zero rows");
+});
+
+test("17. STEP 2 regression guard — a statement with at least one valid row still imports normally (PDF)", async () => {
+  const pdf = buildTextPdf(["14/01/2025 ค่าสินค้า step2 regression 250.00 - 49,750.00"]);
   const statementId = await uploadPdf(pdf);
 
   const { req, ctx } = confirmRequest(statementId, { layoutId: TRUSTED_LAYOUT_ID });
@@ -239,38 +308,8 @@ test("7. unrecognized/INVALID row from preview causes a PREVIEW_MISMATCH, not a 
 
   assert.equal(res.status, 200);
   assert.equal(body.data.status, "IMPORTED");
-  assert.equal(body.data.imported, 0);
-
-  const txns = listBankStatementTransactions(statementId);
-  assert.equal(txns.length, 0, "an INVALID row must never be imported as a transaction");
-});
-
-test("8. ambiguous row (ill-formed) never becomes a guessed transaction", async () => {
-  const pdf = buildTextPdf(["07/01/2025 ค่าอะไรบางอย่างที่ไม่มีตัวเลขเลย"]);
-  const statementId = await uploadPdf(pdf);
-
-  const { req, ctx } = confirmRequest(statementId, { layoutId: TRUSTED_LAYOUT_ID });
-  const res = await confirmPost(req, ctx);
-  const body = await res.json();
-
-  assert.equal(body.data.imported, 0);
-  assert.equal(listBankStatementTransactions(statementId).length, 0);
-});
-
-test("9. debit+credit both populated triggers the existing INVALID_DEBIT_CREDIT_COMBINATION behavior", async () => {
-  // At upload/preview this line is invalid under BOTH layouts (client's and the trusted registry's)
-  // for the same reason, so preview/confirm counts agree and confirm proceeds to import zero rows —
-  // proving the reused bankStatementCsv.ts validation (never modified) still rejects this exact
-  // case for PDF-derived rows the same way it always has for CSV.
-  const pdf = buildTextPdf(["08/01/2025 รายการทดสอบ 100.00 200.00 49,700.00"]);
-  const statementId = await uploadPdf(pdf);
-
-  const { req, ctx } = confirmRequest(statementId, { layoutId: TRUSTED_LAYOUT_ID });
-  const res = await confirmPost(req, ctx);
-  const body = await res.json();
-
-  assert.equal(body.data.imported, 0);
-  assert.equal(listBankStatementTransactions(statementId).length, 0);
+  assert.equal(body.data.imported, 1);
+  assert.equal(listBankStatementTransactions(statementId).length, 1);
 });
 
 test("10. duplicate/idempotency — confirming twice never double-imports", async () => {

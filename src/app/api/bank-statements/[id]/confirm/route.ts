@@ -66,6 +66,9 @@ function errorToResponse(error: unknown) {
     // persists a shape-valid mapping at creation time) — handled defensively, not assumed impossible.
     MAPPING_NOT_PERSISTED:
       "ไม่พบข้อมูลการตั้งค่าคอลัมน์ของ Bank Statement นี้ ไม่สามารถยืนยันการนำเข้าได้ กรุณาอัปโหลดใหม่",
+    // STEP 2 (zero-valid-row guard) — see the two rowsToImport.length === 0 checks above.
+    ZERO_VALID_ROWS_TO_IMPORT:
+      "ไม่มีรายการที่ถูกต้องสำหรับนำเข้าในไฟล์นี้ ไม่สามารถยืนยันการนำเข้าได้",
   };
   if (message in conflict) {
     return NextResponse.json({ success: false, error: conflict[message] }, { status: 409 });
@@ -310,6 +313,20 @@ async function handlePdfStatementConfirm(request: NextRequest, id: number, state
       rowsToImport.push({ rowNumber: row.rowNumber, canonical: row.canonical, raw: row.raw });
     }
 
+    // STEP 2 (zero-valid-row guard) — a statement whose fresh re-parse yields zero importable rows
+    // must never transition to IMPORTED: that status implies "real transactions now exist for this
+    // statement", which would be false (bank_statement_transactions would stay empty while the UI's
+    // Reconciliation picker treats IMPORTED as "ready"). Checked here, before the commit transaction
+    // even opens — mirrors the FILE_HASH_MISMATCH/PREVIEW_MISMATCH guards above (statement is still
+    // PREVIEW_READY at this point, so this direct updateBankStatementStatus() call is safe, same
+    // pattern as those).
+    if (rowsToImport.length === 0) {
+      updateBankStatementStatus(id, "FAILED", {
+        errorSummary: "ไม่มีรายการที่ถูกต้องสำหรับนำเข้าในไฟล์นี้",
+      });
+      throw new Error("ZERO_VALID_ROWS_TO_IMPORT");
+    }
+
     // Atomic, all-or-nothing commit — the exact same guard/transaction shape as the CSV path below.
     const commit = db.transaction(() => {
       const guardResult = db
@@ -536,6 +553,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
       }
 
       rowsToImport.push({ rowNumber: row.rowNumber, canonical: row.canonical, raw: row.raw });
+    }
+
+    // STEP 2 (zero-valid-row guard) — same rule and placement as the PDF branch above: never
+    // transition to IMPORTED when there is nothing importable, checked before the commit transaction
+    // opens (statement is still PREVIEW_READY here, matching FILE_HASH_MISMATCH/PREVIEW_MISMATCH's
+    // own direct updateBankStatementStatus() pattern above).
+    if (rowsToImport.length === 0) {
+      updateBankStatementStatus(id, "FAILED", {
+        errorSummary: "ไม่มีรายการที่ถูกต้องสำหรับนำเข้าในไฟล์นี้",
+      });
+      throw new Error("ZERO_VALID_ROWS_TO_IMPORT");
     }
 
     // Atomic, all-or-nothing commit. The FIRST statement inside this transaction is a

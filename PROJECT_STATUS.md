@@ -7596,6 +7596,176 @@ SA1500_V1.
 
 ---
 
+## STEP 133 — PLATFORM_COMMISSION EXPENSE CATEGORY
+
+Date: 2026-09-10
+
+Added `PLATFORM_COMMISSION` to the `ExpenseCategory` type/array in `src/lib/transactions.ts` and its
+Finance-page label ("ค่าคอมมิชชันแพลตฟอร์ม") in `src/app/finance/page.tsx`. Category only — no
+business logic of its own at this STEP (that came later, STEP 141).
+
+**STEP 133 STATUS: PASS.**
+
+---
+
+## STEP 135 — MANUAL SHIPPING EXPENSE ACTION (ORDER DETAIL)
+
+Date: 2026-09-10
+
+**Goal**: let the operator record the actual carrier shipping cost paid for an order, as a
+`SHIPPING` expense transaction linked via `order_id`, from Order Detail — reusing the existing
+`POST /api/transactions` route (no new route).
+
+**Business rules approved and implemented**:
+- Actual carrier shipping cost is the authoritative expense; `orders.shipping_fee` (the
+  customer-facing fee) remains completely independent — neither reads nor writes the other.
+- At most one `SHIPPING` expense per order (`assertNoDuplicateOrderShippingExpense()` — 409
+  `DUPLICATE_ORDER_SHIPPING_EXPENSE`).
+- Terminal orders (completed/cancelled) are blocked from creating a `SHIPPING` expense
+  (`assertOrderNotTerminalForShippingExpense()` — 409 `ORDER_TERMINAL_STATUS`), enforced server-side
+  in `src/lib/transactions.ts` `createTransaction()`, mirrored client-side in
+  `src/app/orders/[id]/page.tsx` (action hidden once one exists or the order is terminal).
+
+**STEP 135 STATUS: PASS.**
+
+---
+
+## STEP 135 TEST — SHIPPING EXPENSE E2E COVERAGE
+
+Date: 2026-09-10
+
+`src/lib/__tests__/shippingExpenseActionE2E.test.ts` — isolated synthetic coverage: create+link,
+duplicate rejected (409), terminal order rejected (409), unrelated category/order unaffected,
+`orders.shipping_fee` independence, isolation/cleanup check. 7/7 passing.
+
+**STEP 135 TEST STATUS: PASS.**
+
+---
+
+## STEP 137 — RESTORE INVENTORY ON ORDER CANCELLATION
+
+Date: 2026-09-10 · Commit `466d585` (pushed)
+
+**Root cause**: `updateOrderStatus()` (STEP 32) deliberately never touched inventory for any
+transition, including "cancelled" — every cancelled order permanently under-counted stock with no
+automatic correction.
+
+**Fix**: `src/lib/inventory.ts` gained `increaseStockForCancellation()` (symmetric counterpart to
+the existing `decreaseStockForSale()`, using the already-defined but previously-unused `"return"`
+movement type — no schema change). `src/lib/orders.ts` `updateOrderStatus()` now wraps its logic in
+`db.transaction()` and, only on the `"cancelled"` transition, restores each order item's originally
+deducted quantity. Idempotent by construction (`"cancelled"` has no outgoing transitions, so a
+second cancel attempt is rejected before the restore branch runs) plus a defensive
+existence-check against `inventory_movements`.
+
+New test: `src/lib/__tests__/orderCancellationStockRestoreE2E.test.ts` — 6/6 passing (deduct-on-
+create, restore-exactly-once-on-cancel, repeated-cancel rejected with no double-restore, unrelated
+product unaffected, invalid non-cancellation transition never restores).
+
+**STEP 137 STATUS: PASS.**
+
+---
+
+## STEP 139 — MANUAL RETURNED_PARCEL EXPENSE ACTION (ORDER DETAIL)
+
+Date: 2026-09-10 · Commit `2a504f5` (pushed)
+
+**Goal**: let the operator record the actual returned-parcel/COD fee the shop was really charged,
+as a `RETURNED_PARCEL` expense linked via `order_id`, mirroring STEP 135's SHIPPING pattern exactly
+(reused `POST /api/transactions`, no new route).
+
+**Business rules approved and implemented**:
+- Actual returned-parcel/COD fee is the authoritative expense, manual entry only (never automated
+  from `delivery_status`).
+- At most one `RETURNED_PARCEL` expense per order (`assertNoDuplicateOrderReturnedParcelExpense()` —
+  409 `DUPLICATE_ORDER_RETURNED_PARCEL_EXPENSE`).
+- Terminal orders are blocked (`assertOrderNotTerminalForReturnedParcelExpense()` — 409
+  `ORDER_TERMINAL_STATUS_RETURNED_PARCEL`, a distinct code from STEP 135's, since the mapped message
+  is category-specific).
+- Independent of both `orders.shipping_fee` and the STEP 135 SHIPPING guard/cap.
+
+New test: `src/lib/__tests__/returnedParcelExpenseActionE2E.test.ts` — 8/8 passing.
+
+**STEP 139 STATUS: PASS.**
+
+---
+
+## STEP 141 — MANUAL PLATFORM_COMMISSION ORDER ACTION (ORDER DETAIL)
+
+Date: 2026-09-10 · Commit `6f3d0af` (pushed)
+
+**Goal**: let the operator record the actual platform commission/settlement fee charged, as a
+`PLATFORM_COMMISSION` expense linked via `order_id`, reusing `POST /api/transactions` — no new
+route, and (per approved decision) **no new server-side guard at all**.
+
+**Business rules approved and implemented — deliberately the opposite of STEP 135/139's caps**:
+1. Actual platform commission charged is the authoritative P&L expense (falls into
+   `profitSummary.ts`'s existing generic `operatingExpenses` bucket — unchanged).
+2. **Multiple `PLATFORM_COMMISSION` rows per order are explicitly allowed** — no duplicate-per-order
+   guard was added, because a real order can legitimately accrue more than one commission/settlement
+   /adjustment event.
+3. **Terminal orders (completed/cancelled) are explicitly allowed** to receive a
+   `PLATFORM_COMMISSION` entry — no terminal-order guard was added, because a legitimate
+   settlement/adjustment can arrive after the order has already closed.
+4. Independent of `orders.shipping_fee`.
+5. No estimated/forecast transaction of any kind is created anywhere — only actual, manually-entered
+   charges.
+
+Order Detail gained its own "💼 ค่าคอมมิชชันแพลตฟอร์ม" section (deliberately separate from the
+"🚚 สรุปค่าจัดส่ง" shipping section) showing a running SUM of all commission rows for the order (not
+"the one entry"), with the record action always available — never hidden by an existing-entry or
+terminal-status check, matching the approved rules above.
+
+New test: `src/lib/__tests__/platformCommissionExpenseActionE2E.test.ts` — 7/7 passing, including
+confirming a second commission row on the same order succeeds (201), a terminal order accepts one
+(201), and two rows on one order are each counted exactly once in `getProfitSummary()`'s
+`operatingExpenses`/`netProfit` delta (no double-counting, no under-counting).
+
+**STEP 141 STATUS: PASS.**
+
+---
+
+## STEP 133–141 — COMMIT/PUSH RECORD AND FINAL VERIFICATION
+
+Date: 2026-09-10
+
+Because STEP 133/135 were implemented before STEP 137/139/141 but committed *after* them (their
+commit required manually separating interleaved hunks in shared files — `src/lib/transactions.ts`,
+`src/app/api/transactions/route.ts`, `src/app/orders/[id]/page.tsx` — via `git apply --cached` and
+`git add -p`, verified clean at each step before committing), the git commit order does not match
+implementation order. Final commit history for this batch, oldest to newest:
+
+1. `466d585` — `fix(orders): restore inventory on cancellation` (STEP 137)
+2. `2a504f5` — `feat(finance): add returned parcel expense action` (STEP 139)
+3. `6f3d0af` — `feat(finance): add platform commission order action` (STEP 141)
+4. `5d278df` — `feat(finance): add shipping expense and platform commission support` (STEP 133 +
+   STEP 135 implementation)
+5. `12103c9` — `test(finance): add shipping expense action coverage` (STEP 135 test)
+
+All five pushed to `origin/master`; `HEAD` confirmed identical to `origin/master` after each push.
+
+**Final full-suite verification** (all 16 test files across the project, each run individually per
+this codebase's own per-file convention — no aggregating `npm test` script exists):
+- **177/177 tests passing, 0 failures, 0 skipped**, spanning bank-statement/PDF/SA1500 coverage,
+  reconciliation, cost/profit verification, and all three new order-linked expense actions
+  (shipping, returned-parcel, platform-commission) plus the STEP 137 inventory-restore test.
+- `npx tsc --noEmit` → **exit 0**.
+- `git status --short` → **clean** (no modified/untracked files from the test run itself).
+- Production (port 3000, PID 5012) confirmed **unchanged** throughout every STEP in this batch —
+  never restarted, never touched.
+- No new untracked files were left behind by any test run.
+
+Separately, the 39 pre-existing `*.step*-backup-*` files (STEPs 26–50, predating this session) were
+audited and deleted after explicit approval, along with 2 of 4 audited `.env*` backup files
+(`.env.example.step21-tierpricing-backup-*`, `.env.example.step28-backup-*`); the two real `.env`
+secret-bearing backups (`.env.step22-pricing-backup-*`, `.env.step23-pricing-backup-*`) were deleted
+only after a separate, explicit, scoped authorization — no secret value was ever read, printed, or
+exposed during any of that cleanup.
+
+**STEP 133–141 STATUS: PASS — all committed, all pushed, all tests green, production untouched.**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

@@ -497,6 +497,98 @@ export default function OrderDetailPage() {
     }
   }
 
+  // STEP 139 — same narrow exception to STEP 38's page-level "no mutation" boundary as STEP 135
+  // above, for the actual returned-parcel/COD fee the shop was really charged (RETURNED_PARCEL
+  // expense, linked via orderId). Fully independent state/handlers from the STEP 135 shipping block
+  // above — never reads or writes order.shipping_fee either. At most one RETURNED_PARCEL expense per
+  // order and the terminal-order block are both enforced server-side in
+  // src/lib/transactions.ts createTransaction() — this client state only mirrors that for UX.
+  const [recordingReturnedParcel, setRecordingReturnedParcel] = useState(false);
+  const [returnedParcelAmountInput, setReturnedParcelAmountInput] = useState("");
+  const [returnedParcelDateInput, setReturnedParcelDateInput] = useState("");
+  const [savingReturnedParcel, setSavingReturnedParcel] = useState(false);
+  const [returnedParcelError, setReturnedParcelError] = useState("");
+
+  function startRecordReturnedParcel() {
+    setReturnedParcelAmountInput("");
+    setReturnedParcelDateInput(todayDateString());
+    setReturnedParcelError("");
+    setRecordingReturnedParcel(true);
+  }
+
+  function cancelRecordReturnedParcel() {
+    setRecordingReturnedParcel(false);
+    setReturnedParcelAmountInput("");
+    setReturnedParcelDateInput("");
+    setReturnedParcelError("");
+  }
+
+  async function saveReturnedParcelExpense() {
+    if (savingReturnedParcel || !order) return;
+
+    setReturnedParcelError("");
+
+    const amount = Number(returnedParcelAmountInput);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setReturnedParcelError("กรุณาระบุจำนวนเงินให้ถูกต้อง (มากกว่า 0)");
+      return;
+    }
+
+    if (!returnedParcelDateInput) {
+      setReturnedParcelError("กรุณาระบุวันที่");
+      return;
+    }
+
+    setSavingReturnedParcel(true);
+
+    try {
+      const response = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transactionType: "expense",
+          amount,
+          transactionDate: returnedParcelDateInput,
+          category: "RETURNED_PARCEL",
+          orderId: order.id,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถบันทึกค่าพัสดุตีกลับได้");
+      }
+
+      // Same refetch-the-authoritative-list approach as saveShippingExpense() above, for the same
+      // reason (createTransaction()'s return value never has linkedOrderStatus populated).
+      const newTransactionId = data.data.id as number;
+
+      const listResponse = await fetch(`/api/transactions?orderId=${orderId}`, {
+        cache: "no-store",
+      });
+      const listData = await listResponse.json();
+
+      if (listResponse.ok && listData?.success) {
+        setOrderTransactions(listData.data);
+      }
+
+      setAttachments((current) => ({
+        ...current,
+        [newTransactionId]: { loaded: true, hasAttachment: false, fileUrl: null },
+      }));
+
+      cancelRecordReturnedParcel();
+    } catch (err) {
+      setReturnedParcelError(
+        err instanceof Error ? err.message : "ไม่สามารถบันทึกค่าพัสดุตีกลับได้"
+      );
+    } finally {
+      setSavingReturnedParcel(false);
+    }
+  }
+
   // STEP 55 — order channel (sales channel) correction, approved 2026-09-02. Independent of the
   // STEP 53/54 state above: PATCHes the dedicated /api/orders/[id]/channel route
   // (src/lib/orders.ts updateOrderChannel()). Restricted to CHANNEL_OPTIONS (the 7 valid
@@ -1849,6 +1941,84 @@ export default function OrderDetailPage() {
                   </p>
                 </div>
               </div>
+
+              {/* STEP 139 — same narrow exception as STEP 135 above, for the actual returned-parcel/
+                  COD fee the shop was really charged (RETURNED_PARCEL expense linked to this order).
+                  Hidden once one already exists (at most one allowed — server-enforced in
+                  createTransaction()) or once the order is terminal (also server-enforced
+                  independently there), matching every other mutating action on this page. */}
+              {!transactionsLoading && returnShippingExpense === null && (
+                <div className="border-t p-5">
+                  {getAllowedNextStatuses(order.status).length === 0 ? (
+                    <p className="text-xs text-slate-400">
+                      ออเดอร์นี้สิ้นสุดแล้ว — ไม่สามารถบันทึกค่าพัสดุตีกลับได้
+                    </p>
+                  ) : recordingReturnedParcel ? (
+                    <div className="max-w-sm">
+                      <h3 className="text-sm font-semibold text-slate-900">บันทึกค่าพัสดุตีกลับ</h3>
+
+                      <div className="mt-3 grid gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                            จำนวนเงิน (บาท) *
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={returnedParcelAmountInput}
+                            onChange={(e) => setReturnedParcelAmountInput(e.target.value)}
+                            className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                            วันที่ *
+                          </label>
+                          <input
+                            type="date"
+                            value={returnedParcelDateInput}
+                            onChange={(e) => setReturnedParcelDateInput(e.target.value)}
+                            className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                          />
+                        </div>
+                      </div>
+
+                      {returnedParcelError && (
+                        <p className="mt-2 text-xs text-red-600">{returnedParcelError}</p>
+                      )}
+
+                      <div className="mt-3 flex gap-3">
+                        <button
+                          type="button"
+                          onClick={saveReturnedParcelExpense}
+                          disabled={savingReturnedParcel}
+                          className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                        >
+                          {savingReturnedParcel ? "กำลังบันทึก..." : "บันทึก"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelRecordReturnedParcel}
+                          disabled={savingReturnedParcel}
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          ยกเลิก
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={startRecordReturnedParcel}
+                      className="text-xs font-medium text-amber-700 hover:underline"
+                    >
+                      ➕ บันทึกค่าพัสดุตีกลับ
+                    </button>
+                  )}
+                </div>
+              )}
             </section>
 
             {/* STEP 49 — order fulfillment tracking (carrier / tracking number / delivery status /

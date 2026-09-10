@@ -46,6 +46,30 @@ function errorToResponse(error: unknown) {
     );
   }
 
+  // STEP 139 — order-linked returned-parcel-expense narrow exception (src/lib/transactions.ts
+  // createTransaction()). Both only ever thrown when transactionType === "expense" && category ===
+  // "RETURNED_PARCEL" && orderId is set — see that function's guards. Distinct codes/messages from
+  // STEP 135's SHIPPING mappings above, which are untouched.
+  if (message === "DUPLICATE_ORDER_RETURNED_PARCEL_EXPENSE") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "ออเดอร์นี้มีรายการค่าพัสดุตีกลับที่บันทึกไว้แล้ว ไม่สามารถบันทึกซ้ำสำหรับออเดอร์เดียวกันได้",
+      },
+      { status: 409 }
+    );
+  }
+
+  if (message === "ORDER_TERMINAL_STATUS_RETURNED_PARCEL") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "ออเดอร์นี้อยู่ในสถานะสิ้นสุดแล้ว ไม่สามารถบันทึกค่าพัสดุตีกลับได้",
+      },
+      { status: 409 }
+    );
+  }
+
   console.error("Transactions API error:", error);
 
   return NextResponse.json(

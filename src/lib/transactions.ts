@@ -249,6 +249,40 @@ function assertNoDuplicateOrderIncome(orderId: number, excludeTransactionId?: nu
   }
 }
 
+// STEP 139 — narrow mutation exception for recording the actual returned-parcel/COD fee the shop
+// was really charged, from Order Detail. Mirrors STEP 135's SHIPPING guards exactly, just scoped to
+// transactionType === "expense" && category === "RETURNED_PARCEL" && orderId set (checked by the
+// one call site in createTransaction() below) — no other expense category is affected, and the
+// STEP 135 SHIPPING guards above are completely untouched.
+
+// At most one RETURNED_PARCEL expense per order — mirrors assertNoDuplicateOrderShippingExpense()
+// above exactly, just for category = 'RETURNED_PARCEL' instead of 'SHIPPING'.
+function assertNoDuplicateOrderReturnedParcelExpense(orderId: number): void {
+  const existingReturnedParcel = db
+    .prepare(
+      "SELECT id FROM transactions WHERE order_id = ? AND transaction_type = 'expense' AND category = 'RETURNED_PARCEL' LIMIT 1"
+    )
+    .get(orderId);
+
+  if (existingReturnedParcel) {
+    throw new Error("DUPLICATE_ORDER_RETURNED_PARCEL_EXPENSE");
+  }
+}
+
+// Terminal orders (completed/cancelled) cannot have a returned-parcel expense recorded against
+// them — mirrors assertOrderNotTerminalForShippingExpense() above exactly. A distinct error code
+// (ORDER_TERMINAL_STATUS_RETURNED_PARCEL) is used rather than reusing STEP 135's
+// ORDER_TERMINAL_STATUS, since that code's mapped API message is SHIPPING-specific text.
+function assertOrderNotTerminalForReturnedParcelExpense(orderId: number): void {
+  const order = db.prepare("SELECT status FROM orders WHERE id = ?").get(orderId) as
+    | { status: string }
+    | undefined;
+
+  if (order && isValidOrderStatus(order.status) && getAllowedNextStatuses(order.status).length === 0) {
+    throw new Error("ORDER_TERMINAL_STATUS_RETURNED_PARCEL");
+  }
+}
+
 function isValidDateString(value: string): boolean {
   return typeof value === "string" && value.trim() !== "" && !Number.isNaN(Date.parse(value));
 }
@@ -326,6 +360,16 @@ export function createTransaction(input: CreateTransactionInput): TransactionRow
   const insert = db.transaction(() => {
     if (input.transactionType === "income" && orderId !== null) {
       assertNoDuplicateOrderIncome(orderId);
+    }
+
+    // STEP 139 — narrow exception, scoped strictly to expense/RETURNED_PARCEL/order-linked (see the
+    // two guard functions above). Same atomicity reasoning as the STEP 135 SHIPPING guard above —
+    // checked inside this same db.transaction() so the duplicate check and the insert below are
+    // atomic against each other; same single-shared-connection limitation, no schema-level UNIQUE
+    // constraint added.
+    if (input.transactionType === "expense" && input.category === "RETURNED_PARCEL" && orderId !== null) {
+      assertOrderNotTerminalForReturnedParcelExpense(orderId);
+      assertNoDuplicateOrderReturnedParcelExpense(orderId);
     }
 
     const result = db

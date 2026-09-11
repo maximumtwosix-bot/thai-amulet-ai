@@ -7766,6 +7766,81 @@ exposed during any of that cleanup.
 
 ---
 
+## STEP 4C — PRODUCTION BANK STATEMENT CONFIRM / SA1500_V2 — RESOLVED / PASS
+
+Date: 2026-09-11
+
+**Goal**: diagnose and resolve why `POST /api/bank-statements/525/confirm` returned
+`401 Unauthorized` in production despite a successful `200` login, and separately why it then
+returned `400 "ไม่รู้จักรูปแบบ PDF (layoutId) ที่ระบุ"` for `layoutId: "SA1500_V2"` — then verify a
+real, successful confirm against the live production endpoint using statement 525's real PDF.
+
+**1. Production rebuild**
+- New `BUILD_ID`: `INuhcsamCK5H50PvkMp-X`
+- `next build` completed successfully.
+- Compiled production server bundle confirmed to contain `SA1500_V2` (verified via grep of
+  `.next/server/` chunks, matching the exact chunk the confirm route's loader references).
+
+**2. Production restart**
+- Windows service: `ThaiAmuletAI`
+- Final status: Running
+- Old PID: `5728` → New PID: `13444`
+- New process started 2026-09-11 17:45:13 — after the 17:16 production build, confirming it is
+  serving the new build.
+
+**3. Production health**
+- `GET /api/health` → `HTTP 200`
+
+**4. Statement 525 — live confirm**
+- PDF: `STM_SA1500_01JUN26_06SEP26.pdf`
+- Layout: `SA1500_V2`
+- Confirmed through the LIVE production `/api/bank-statements/525/confirm` endpoint.
+- Real PDF password entered locally by the operator at a masked prompt — never persisted, logged,
+  or exposed to the assistant at any point.
+
+**5. Final database result**
+- `status` = `IMPORTED`
+- `row_count_total` = 216, `row_count_valid` = 209, `row_count_invalid` = 7,
+  `row_count_duplicate` = 0
+- `error_summary` = `null`
+- `bank_statement_transactions` count for statement 525 = 209 (matches the API response's
+  `imported: 209` exactly)
+- Duplicate fingerprint groups: none found
+
+**6. Authentication finding**
+The original `401 Unauthorized` was caused by the diagnostic scratchpad script's own HTTP
+cookie/session handling — Windows PowerShell 5.1's `Invoke-WebRequest`/
+`System.Net.CookieContainer` failing to deliver a `Secure`-flagged `taa_session` cookie over
+`http://localhost`, and then (after switching to an explicit `-Headers` Cookie) `Invoke-WebRequest`
+still managing cookies internally on a per-call basis in a way that could override/drop a
+manually-set `Cookie` header. This was **not** an application auth defect: `src/proxy.ts`,
+`src/lib/auth.ts`, and `src/app/api/auth/login/route.ts` were audited repeatedly during this STEP
+and found unchanged and correct throughout. The working fix was switching the confirm request to a
+raw `System.Net.HttpWebRequest` with an explicitly-set `Cookie: taa_session=<token>` header
+(bypassing `Invoke-WebRequest`'s cookie machinery entirely), which then successfully reached
+production business logic.
+
+**7. Build-staleness finding**
+The production process running before this STEP was serving a `.next` build compiled at
+2026-09-10 20:48 — before commit `42e5c2a` ("fix bank statement PDF import validation and
+SA1500 V2", 2026-09-10 23:50:14) added the `SA1500_V2` layout entry to
+`src/lib/bankStatementPdfLayouts.ts`. The running compiled bundle genuinely had no `SA1500_V2`
+registered, so it correctly (for its own stale code) returned `400 "ไม่รู้จักรูปแบบ PDF (layoutId)
+ที่ระบุ"`, even though current source on disk was already correct. A `next build` followed by an
+elevated `ThaiAmuletAI` service restart resolved this; the live production route subsequently
+accepted `SA1500_V2`.
+
+**8. Cleanup**
+- Temporary diagnostic files `step4c_confirm_525.ps1` and `step4c_result.json` (external session
+  scratchpad, never part of this repo) were deleted after the test completed.
+- `_step4b_repair_statement_525.js` (the STEP 4B one-time statement-525 status repair script)
+  remains intentionally untracked and untouched in the repo root — not deleted, not modified, not
+  staged, not committed.
+
+**STEP 4C STATUS: PASS / RESOLVED / COMPLETE.**
+
+---
+
 ## 20. RECOVERY IN A NEW CHAT
 
 If this chat reaches its limit:

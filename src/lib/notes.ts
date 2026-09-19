@@ -190,3 +190,19 @@ export async function deleteFolder(id: string): Promise<boolean> {
 
   return true;
 }
+
+// ชื่อโฟลเดอร์เก็บรูปภาพ ("คลังรูปภาพโปรเจกต์") มาจากผู้ใช้เอง ใช้ร่วมกันโดย
+// src/app/api/notes/upload/route.ts (เขียนไฟล์) และ src/app/api/notes/images/route.ts (อ่านรายชื่อ
+// ไฟล์) — export จากที่นี่ที่เดียวเพื่อไม่ให้ตรรกะ sanitize เพี้ยนไปคนละแบบระหว่างสองฝั่ง ซึ่งจะทำให้
+// อัปโหลดเข้าโฟลเดอร์หนึ่งแต่คลังรูปภาพหาไม่เจอ ตัดอักขระที่ใช้เป็น path separator/path traversal ออก
+// ทั้งหมด (เหลือได้แค่ 1 ระดับโฟลเดอร์เสมอ) แต่ยังรองรับภาษาไทย/ตัวอักษร unicode อื่นๆ ตามปกติ
+export function sanitizeUploadFolderName(raw: string | null): string {
+  if (!raw) return "";
+
+  return raw
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\.\./g, "")
+    .slice(0, 100)
+    .trim();
+}

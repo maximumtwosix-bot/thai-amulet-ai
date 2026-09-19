@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { sanitizeUploadFolderName } from "@/lib/notes";
 
 export const runtime = "nodejs";
 
@@ -83,31 +84,14 @@ function detectImageSignatureType(buffer: Buffer): ImageSignatureType | null {
   return null;
 }
 
-// ชื่อโฟลเดอร์มาจากผู้ใช้เอง (ช่อง "ชื่อโฟลเดอร์สำหรับโปรเจกต์" ใน Modal แทรกรูปภาพ) ใช้จัดกลุ่มไฟล์ให้
-// เป็นระเบียบตามที่ตั้งชื่อไว้เท่านั้น ไม่ใช่ตัวระบุสิทธิ์การเข้าถึง — เส้นทาง /api/notes/upload เองก็ถูก
-// proxy คุมด้วย session cookie อยู่แล้วเหมือนทุก endpoint ของสมุดโน้ต — ตัดอักขระที่ใช้เป็น path
-// separator หรือ path traversal ออกทั้งหมด (เหลือได้แค่ 1 ระดับโฟลเดอร์เสมอ ป้องกัน ../ หรือสร้าง
-// โฟลเดอร์ซ้อนนอกเจตนา) แต่ยังรองรับภาษาไทย/ตัวอักษร unicode อื่นๆ ในชื่อโฟลเดอร์ได้ตามปกติ
-function sanitizeFolderName(raw: string | null): string {
-  if (!raw) return "notes-unfiled";
-
-  const cleaned = raw
-    .trim()
-    .replace(/[\\/:*?"<>|]/g, "")
-    .replace(/\.\./g, "")
-    .slice(0, 100)
-    .trim();
-
-  return cleaned || "notes-unfiled";
-}
-
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const file = formData.get("file");
-    const folder = sanitizeFolderName(
-      typeof formData.get("folder") === "string" ? (formData.get("folder") as string) : null
-    );
+    const folder =
+      sanitizeUploadFolderName(
+        typeof formData.get("folder") === "string" ? (formData.get("folder") as string) : null
+      ) || "notes-unfiled";
 
     if (!(file instanceof File)) {
       return NextResponse.json({ success: false, error: "กรุณาเลือกไฟล์รูปภาพ" }, { status: 400 });

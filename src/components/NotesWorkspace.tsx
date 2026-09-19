@@ -10,6 +10,7 @@ import { ResizableImage } from "@/components/tiptap/ResizableImage";
 import {
   BoldIcon,
   FolderIcon,
+  GalleryIcon,
   HighlighterIcon,
   ImageIcon,
   ItalicIcon,
@@ -20,6 +21,12 @@ import {
   QuoteIcon,
   XIcon,
 } from "@/components/icons";
+
+type GalleryImage = {
+  name: string;
+  url: string;
+  uploadedAt: string;
+};
 
 // Content Workspace ("สมุดโน้ต") — Rich Text note-taking + a flat folder tree, persisted to a local
 // JSON file (data/notes.json) via /api/notes (src/lib/notes.ts does the actual file I/O). Never
@@ -105,6 +112,13 @@ export default function NotesWorkspace() {
   const [showImageModal, setShowImageModal] = useState(false);
   const [imageFolderName, setImageFolderName] = useState("");
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+
+  // คลังรูปภาพโปรเจกต์ (Asset Manager) — แสดงในโมดัลเดียวกับตัวอัปโหลด เพราะทั้งสองผูกกับ
+  // "ชื่อโฟลเดอร์" ตัวเดียวกัน (imageFolderName ด้านบน) อยู่แล้ว
+  const [galleryImages, setGalleryImages] = useState<GalleryImage[]>([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const [galleryError, setGalleryError] = useState("");
+  const [copiedImageUrl, setCopiedImageUrl] = useState<string | null>(null);
 
   // Tabbed pagination — `pages` holds every page's HTML for the currently open note; the editor
   // itself only ever holds ONE page's content at a time (`pages[activePageIndex]`). Switching pages
@@ -307,19 +321,53 @@ export default function NotesWorkspace() {
     }
   }
 
-  // เปิด Modal แทรกรูปภาพ — เติมชื่อโฟลเดอร์เริ่มต้นจากชื่อโน้ตปัจจุบัน (ผู้ใช้แก้ไขได้ก่อนเลือกไฟล์จริง)
+  // โหลดคลังรูปภาพของโฟลเดอร์ที่ระบุ — ไม่ throw ออกไปให้ caller ต้อง try/catch เอง เก็บ error ไว้ใน
+  // galleryError ให้ UI แสดงเองแทน
+  async function loadGalleryImages(folder: string) {
+    const trimmed = folder.trim();
+
+    if (!trimmed) {
+      setGalleryImages([]);
+      return;
+    }
+
+    setGalleryLoading(true);
+    setGalleryError("");
+
+    try {
+      const response = await fetch(`/api/notes/images?folder=${encodeURIComponent(trimmed)}`, {
+        cache: "no-store",
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "ไม่สามารถโหลดคลังรูปภาพได้");
+      }
+
+      setGalleryImages(Array.isArray(data.images) ? data.images : []);
+    } catch (err) {
+      setGalleryError(err instanceof Error ? err.message : "ไม่สามารถโหลดคลังรูปภาพได้");
+    } finally {
+      setGalleryLoading(false);
+    }
+  }
+
+  // เปิด Modal คลังรูปภาพ/แทรกรูปภาพ — เติมชื่อโฟลเดอร์เริ่มต้นจากชื่อโน้ตปัจจุบัน (ผู้ใช้แก้ไขได้) แล้ว
+  // โหลดคลังรูปภาพของโฟลเดอร์นั้นมาแสดงทันที
   function openImageModal() {
     if (!editor || !selectedNoteId) return;
 
-    setImageFolderName(noteNameInput.trim() || selectedNoteId);
+    const defaultFolder = noteNameInput.trim() || selectedNoteId;
+    setImageFolderName(defaultFolder);
     setImageError("");
     setShowImageModal(true);
+    loadGalleryImages(defaultFolder);
   }
 
-  // อัปโหลดรูปผ่าน /api/notes/upload (เก็บไฟล์จริงลง public/uploads/[imageFolderName]/) แล้วแทรก URL
-  // ที่ได้กลับเข้า editor ทันทีด้วย setImage
-  async function uploadImage(file: File | undefined) {
-    if (!file || !selectedNoteId || !editor) return;
+  // อัปโหลดได้หลายรูปพร้อมกัน (input มี multiple) — ยิงทุกไฟล์ไปที่ /api/notes/upload พร้อมกันด้วย
+  // Promise.all แล้วค่อยแทรก URL ที่ได้ทั้งหมดเข้า editor ทีละรูปตามลำดับไฟล์ที่เลือก
+  async function uploadImages(files: FileList | null) {
+    if (!files || files.length === 0 || !selectedNoteId || !editor) return;
 
     const folder = imageFolderName.trim();
 
@@ -332,27 +380,53 @@ export default function NotesWorkspace() {
     setImageError("");
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("folder", folder);
+      const urls = await Promise.all(
+        Array.from(files).map(async (file) => {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("folder", folder);
 
-      const response = await fetch("/api/notes/upload", {
-        method: "POST",
-        body: formData,
+          const response = await fetch("/api/notes/upload", {
+            method: "POST",
+            body: formData,
+          });
+
+          const data = await response.json();
+
+          if (!response.ok || !data?.success) {
+            throw new Error(data?.error || `ไม่สามารถอัปโหลด ${file.name} ได้`);
+          }
+
+          return data.url as string;
+        })
+      );
+
+      urls.forEach((url) => {
+        editor.chain().focus().setImage({ src: url }).run();
       });
 
-      const data = await response.json();
-
-      if (!response.ok || !data?.success) {
-        throw new Error(data?.error || "ไม่สามารถอัปโหลดรูปภาพได้");
-      }
-
-      editor.chain().focus().setImage({ src: data.url }).run();
-      setShowImageModal(false);
+      await loadGalleryImages(folder);
     } catch (err) {
       setImageError(err instanceof Error ? err.message : "ไม่สามารถอัปโหลดรูปภาพได้");
     } finally {
       setUploadingImage(false);
+    }
+  }
+
+  function insertGalleryImage(url: string) {
+    if (!editor) return;
+    editor.chain().focus().setImage({ src: url }).run();
+  }
+
+  async function copyImageUrl(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedImageUrl(url);
+      setTimeout(() => {
+        setCopiedImageUrl((current) => (current === url ? null : current));
+      }, 1500);
+    } catch {
+      setGalleryError("ไม่สามารถคัดลอกลิงก์ได้ (คลิปบอร์ดถูกบล็อกโดยเบราว์เซอร์)");
     }
   }
 
@@ -793,15 +867,24 @@ export default function NotesWorkspace() {
                 >
                   <ImageIcon className="h-4 w-4" />
                 </ToolbarButton>
+                <ToolbarButton
+                  active={false}
+                  disabled={!editor}
+                  onClick={openImageModal}
+                  title="คลังรูปภาพโปรเจกต์"
+                >
+                  <GalleryIcon className="h-4 w-4" />
+                </ToolbarButton>
                 <input
                   ref={imageInputRef}
                   type="file"
                   accept="image/*"
+                  multiple
                   className="hidden"
                   onChange={(e) => {
                     const input = e.target;
-                    const file = input.files?.[0];
-                    uploadImage(file).finally(() => {
+                    const files = input.files;
+                    uploadImages(files).finally(() => {
                       input.value = "";
                     });
                   }}
@@ -857,7 +940,8 @@ export default function NotesWorkspace() {
         </section>
       </div>
 
-      {/* Modal แทรกรูปภาพ — ให้ตั้งชื่อโฟลเดอร์ก่อนเปิด File Picker จริง (public/uploads/[ชื่อโฟลเดอร์]/) */}
+      {/* Modal คลังรูปภาพโปรเจกต์ (Asset Manager) — รวมทั้งอัปโหลด (multi-file) และคลังรูปภาพที่เคย
+          อัปโหลดไว้แล้วในโฟลเดอร์เดียวกัน เพราะทั้งสองผูกกับ "ชื่อโฟลเดอร์" เดียวกันอยู่แล้ว */}
       {showImageModal && (
         <div
           role="presentation"
@@ -867,12 +951,12 @@ export default function NotesWorkspace() {
           <div
             role="dialog"
             aria-modal="true"
-            aria-label="แทรกรูปภาพ"
+            aria-label="คลังรูปภาพโปรเจกต์"
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm rounded-2xl border border-amber-500/20 bg-neutral-900/90 backdrop-blur-lg shadow-[0_0_40px_rgba(245,158,11,0.15)] p-5"
+            className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl border border-amber-500/20 bg-neutral-900/90 backdrop-blur-lg shadow-[0_0_40px_rgba(245,158,11,0.15)] p-5"
           >
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-white">แทรกรูปภาพ</h3>
+              <h3 className="text-sm font-semibold text-white">คลังรูปภาพโปรเจกต์</h3>
               <button
                 type="button"
                 onClick={() => setShowImageModal(false)}
@@ -886,13 +970,24 @@ export default function NotesWorkspace() {
             <label className="mb-1 block text-xs font-medium text-neutral-400">
               ชื่อโฟลเดอร์สำหรับโปรเจกต์
             </label>
-            <input
-              type="text"
-              value={imageFolderName}
-              onChange={(e) => setImageFolderName(e.target.value)}
-              placeholder="เช่น product-launch"
-              className="w-full rounded-lg border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
-            />
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={imageFolderName}
+                onChange={(e) => setImageFolderName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && loadGalleryImages(imageFolderName)}
+                placeholder="เช่น product-launch"
+                className="flex-1 rounded-lg border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
+              />
+              <button
+                type="button"
+                onClick={() => loadGalleryImages(imageFolderName)}
+                disabled={!imageFolderName.trim() || galleryLoading}
+                className="shrink-0 rounded-lg border border-amber-500/30 px-3 py-2 text-xs font-medium text-amber-400 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                โหลด
+              </button>
+            </div>
             <p className="mt-1 text-[11px] text-neutral-600">
               ไฟล์จะถูกเก็บไว้ที่ public/uploads/{imageFolderName.trim() || "..."}/
             </p>
@@ -906,8 +1001,70 @@ export default function NotesWorkspace() {
               className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 px-4 py-2 text-sm font-medium text-black shadow-[0_0_15px_rgba(245,158,11,0.4)] hover:from-amber-400 hover:to-amber-300 disabled:opacity-50"
             >
               <ImageIcon className="h-4 w-4" />
-              {uploadingImage ? "กำลังอัปโหลด..." : "เลือกไฟล์"}
+              {uploadingImage ? "กำลังอัปโหลด..." : "เลือกไฟล์ (อัปโหลดได้หลายรูป)"}
             </button>
+
+            <div className="mt-5 flex min-h-0 flex-1 flex-col border-t border-neutral-800 pt-4">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-medium text-neutral-400">คลังรูปภาพในโฟลเดอร์นี้</p>
+                <button
+                  type="button"
+                  onClick={() => loadGalleryImages(imageFolderName)}
+                  className="text-xs font-medium text-amber-500 hover:underline"
+                >
+                  รีเฟรช
+                </button>
+              </div>
+
+              {galleryError && <p className="mb-2 text-xs text-red-400">{galleryError}</p>}
+
+              {galleryLoading ? (
+                <p className="p-4 text-center text-xs text-neutral-500">กำลังโหลด...</p>
+              ) : galleryImages.length === 0 ? (
+                <p className="p-4 text-center text-xs text-neutral-500">
+                  ยังไม่มีรูปภาพในโฟลเดอร์นี้
+                </p>
+              ) : (
+                <div className="grid grid-cols-3 gap-2 overflow-y-auto">
+                  {galleryImages.map((image) => (
+                    <div
+                      key={image.name}
+                      className="group relative aspect-square overflow-hidden rounded-lg border border-amber-500/20 bg-black"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={image.url} alt={image.name} className="h-full w-full object-cover" />
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/80 p-1 opacity-0 transition-opacity group-hover:opacity-100">
+                        <button
+                          type="button"
+                          onClick={() => insertGalleryImage(image.url)}
+                          title="แทรกลงโน้ต"
+                          className="w-full rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-1 text-[10px] font-medium text-amber-400 hover:bg-amber-500/20"
+                        >
+                          แทรกลงโน้ต
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => copyImageUrl(image.url)}
+                          title="คัดลอกลิงก์"
+                          className="w-full rounded-md border border-neutral-700 px-1.5 py-1 text-[10px] font-medium text-neutral-300 hover:bg-neutral-800"
+                        >
+                          {copiedImageUrl === image.url ? "คัดลอกแล้ว ✓" : "คัดลอกลิงก์"}
+                        </button>
+                        <a
+                          href={image.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="เปิดรูปภาพ"
+                          className="w-full rounded-md border border-neutral-700 px-1.5 py-1 text-center text-[10px] font-medium text-neutral-300 hover:bg-neutral-800"
+                        >
+                          เปิดรูปภาพ
+                        </a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

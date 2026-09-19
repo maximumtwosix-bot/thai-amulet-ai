@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import LogoutButton from "@/components/LogoutButton";
+import BackLink from "@/components/BackLink";
 
 // STEP 23 — Low-stock panel. Local type + level helper (not imported from any lib) — this page has
 // no server-only imports today and stays that way, consistent with the client-bundle-safety
@@ -141,72 +142,67 @@ export default function InventoryPage() {
     .reduce((sum, item) => sum + Math.abs(item.quantity_change), 0);
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-7xl">
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">
+            <h1 className="text-2xl font-bold text-white">
               ประวัติสต็อก
             </h1>
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm text-neutral-500">
               ตรวจสอบการเพิ่มและลดจำนวนสินค้าทั้งหมด
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <a
-              href="/products"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              ← กลับไปจัดการสินค้า
-            </a>
+            <BackLink href="/products" label="กลับไปจัดการสินค้า" />
             <LogoutButton />
           </div>
         </div>
 
         <div className="mb-6 grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">รายการเคลื่อนไหว</p>
-            <p className="mt-2 text-3xl font-bold text-slate-900">
+          <div className="rounded-2xl border bg-neutral-900 p-5 shadow-sm">
+            <p className="text-sm text-neutral-500">รายการเคลื่อนไหว</p>
+            <p className="mt-2 text-3xl font-bold text-white">
               {totalMovements.toLocaleString()}
             </p>
           </div>
 
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">เพิ่มสต็อก</p>
-            <p className="mt-2 text-3xl font-bold text-emerald-600">
+          <div className="rounded-2xl border bg-neutral-900 p-5 shadow-sm">
+            <p className="text-sm text-neutral-500">เพิ่มสต็อก</p>
+            <p className="mt-2 text-3xl font-bold text-emerald-400">
               +{totalIncrease.toLocaleString()}
             </p>
           </div>
 
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">ลดสต็อก</p>
-            <p className="mt-2 text-3xl font-bold text-red-600">
+          <div className="rounded-2xl border bg-neutral-900 p-5 shadow-sm">
+            <p className="text-sm text-neutral-500">ลดสต็อก</p>
+            <p className="mt-2 text-3xl font-bold text-red-400">
               -{totalDecrease.toLocaleString()}
             </p>
           </div>
         </div>
 
         {/* STEP 23 — Low-stock panel, independent of the movement history below */}
-        <section className="mb-6 rounded-2xl border bg-white shadow-sm">
+        <section className="mb-6 rounded-2xl border bg-neutral-900 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">⚠️ สินค้าใกล้หมด / หมดสต็อก</h2>
-              <p className="mt-1 text-sm text-slate-500">
+              <h2 className="text-lg font-semibold text-white">⚠️ สินค้าใกล้หมด / หมดสต็อก</h2>
+              <p className="mt-1 text-sm text-neutral-500">
                 สินค้าที่จำนวนคงเหลือน้อยกว่าหรือเท่ากับเกณฑ์ที่ตั้งไว้
               </p>
             </div>
 
             <button
               onClick={() => setShowAllProducts((current) => !current)}
-              className="rounded-xl border px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              className="rounded-xl border px-3 py-1.5 text-sm font-medium text-neutral-300 hover:bg-neutral-800"
             >
               {showAllProducts ? "แสดงเฉพาะสินค้าใกล้หมด/หมด" : "แสดงสินค้าทั้งหมด"}
             </button>
           </div>
 
           {productsLoading ? (
-            <div className="p-10 text-center text-sm text-slate-500">กำลังโหลดข้อมูลสินค้า...</div>
+            <div className="p-10 text-center text-sm text-neutral-500">กำลังโหลดข้อมูลสินค้า...</div>
           ) : (
             (() => {
               const rows = showAllProducts
@@ -215,7 +211,7 @@ export default function InventoryPage() {
 
               if (rows.length === 0) {
                 return (
-                  <div className="p-10 text-center text-sm text-slate-500">
+                  <div className="p-10 text-center text-sm text-neutral-500">
                     {showAllProducts ? "ยังไม่มีสินค้าในระบบ" : "ไม่มีสินค้าใกล้หมดหรือหมดสต็อกในขณะนี้ 🎉"}
                   </div>
                 );
@@ -224,7 +220,7 @@ export default function InventoryPage() {
               return (
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[600px] text-left text-sm">
-                    <thead className="bg-slate-50 text-slate-600">
+                    <thead className="bg-black text-neutral-400">
                       <tr>
                         <th className="p-4">สินค้า</th>
                         <th className="p-4">คงเหลือ</th>
@@ -237,23 +233,23 @@ export default function InventoryPage() {
                         const level = getStockLevel(product);
 
                         return (
-                          <tr key={product.id} className="border-t hover:bg-slate-50">
-                            <td className="p-4 font-medium text-slate-900">{product.name}</td>
-                            <td className="p-4 tabular-nums text-slate-700">{product.stock}</td>
-                            <td className="p-4 tabular-nums text-slate-500">
+                          <tr key={product.id} className="border-t hover:bg-black">
+                            <td className="p-4 font-medium text-white">{product.name}</td>
+                            <td className="p-4 tabular-nums text-neutral-300">{product.stock}</td>
+                            <td className="p-4 tabular-nums text-neutral-500">
                               {product.low_stock_threshold}
                             </td>
                             <td className="p-4">
                               {level === "ok" ? (
-                                <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+                                <span className="rounded-full bg-emerald-950/40 px-3 py-1 text-xs font-medium text-emerald-400">
                                   ปกติ
                                 </span>
                               ) : level === "low" ? (
-                                <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                                <span className="rounded-full bg-amber-950/40 px-3 py-1 text-xs font-medium text-amber-400">
                                   ⚠️ ใกล้หมด
                                 </span>
                               ) : (
-                                <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700">
+                                <span className="rounded-full bg-red-950/40 px-3 py-1 text-xs font-medium text-red-400">
                                   หมด
                                 </span>
                               )}
@@ -269,13 +265,13 @@ export default function InventoryPage() {
           )}
         </section>
 
-        <section className="rounded-2xl border bg-white shadow-sm">
+        <section className="rounded-2xl border bg-neutral-900 shadow-sm">
           <div className="flex flex-col gap-4 border-b p-5 md:flex-row md:items-end md:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">
+              <h2 className="text-lg font-semibold text-white">
                 Inventory Movement
               </h2>
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="mt-1 text-sm text-neutral-500">
                 รายการล่าสุดเรียงจากใหม่ไปเก่า
               </p>
             </div>
@@ -304,7 +300,7 @@ export default function InventoryPage() {
                   loadMovements("");
                 }}
                 disabled={loading}
-                className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                className="rounded-xl border px-4 py-2.5 text-sm font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
               >
                 ทั้งหมด
               </button>
@@ -312,23 +308,23 @@ export default function InventoryPage() {
           </div>
 
           {error && (
-            <div className="m-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <div className="m-5 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
               {error}
             </div>
           )}
 
           {loading ? (
-            <div className="p-10 text-center text-sm text-slate-500">
+            <div className="p-10 text-center text-sm text-neutral-500">
               กำลังโหลดประวัติสต็อก...
             </div>
           ) : movements.length === 0 ? (
-            <div className="p-10 text-center text-sm text-slate-500">
+            <div className="p-10 text-center text-sm text-neutral-500">
               ยังไม่มีประวัติการเคลื่อนไหวสต็อก
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px] text-left text-sm">
-                <thead className="bg-slate-50 text-slate-600">
+                <thead className="bg-black text-neutral-400">
                   <tr>
                     <th className="p-4">วันที่</th>
                     <th className="p-4">สินค้า</th>
@@ -344,48 +340,48 @@ export default function InventoryPage() {
                   {movements.map((item) => (
                     <tr
                       key={item.id}
-                      className="border-t hover:bg-slate-50"
+                      className="border-t hover:bg-black"
                     >
-                      <td className="p-4 whitespace-nowrap text-slate-500">
+                      <td className="p-4 whitespace-nowrap text-neutral-500">
                         {formatDate(item.created_at)}
                       </td>
 
                       <td className="p-4">
-                        <div className="font-semibold text-slate-900">
+                        <div className="font-semibold text-white">
                           {item.product_name}
                         </div>
-                        <div className="mt-1 text-xs text-slate-400">
+                        <div className="mt-1 text-xs text-neutral-500">
                           Product ID: {item.product_id}
                         </div>
                       </td>
 
                       <td className="p-4">
                         {item.quantity_change > 0 ? (
-                          <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
+                          <span className="rounded-full bg-emerald-950/40 px-3 py-1 font-semibold text-emerald-400">
                             +{item.quantity_change.toLocaleString()}
                           </span>
                         ) : (
-                          <span className="rounded-full bg-red-50 px-3 py-1 font-semibold text-red-700">
+                          <span className="rounded-full bg-red-950/40 px-3 py-1 font-semibold text-red-400">
                             {item.quantity_change.toLocaleString()}
                           </span>
                         )}
                       </td>
 
-                      <td className="p-4 font-medium text-slate-700">
+                      <td className="p-4 font-medium text-neutral-300">
                         {item.quantity_before.toLocaleString()}
                       </td>
 
-                      <td className="p-4 font-semibold text-slate-900">
+                      <td className="p-4 font-semibold text-white">
                         {item.quantity_after.toLocaleString()}
                       </td>
 
                       <td className="p-4">
-                        <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                        <span className="rounded-full bg-amber-950/40 px-3 py-1 text-xs font-medium text-amber-400">
                           {item.movement_type}
                         </span>
                       </td>
 
-                      <td className="max-w-xs p-4 text-slate-600">
+                      <td className="max-w-xs p-4 text-neutral-400">
                         {item.note || "-"}
                       </td>
                     </tr>

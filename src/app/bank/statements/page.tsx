@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import BackLink from "@/components/BackLink";
 
 // STEP C.5 — Client Component; duplicates plain response-shape types locally rather than importing
 // src/lib/* (which import ./db → better-sqlite3), matching the exact convention already established
@@ -73,13 +74,13 @@ const statusLabels: Record<string, string> = {
 };
 
 const statusBadgeClass: Record<string, string> = {
-  UPLOADED: "bg-slate-100 text-slate-600",
-  VALIDATING: "bg-slate-100 text-slate-600",
-  PREVIEW_READY: "bg-amber-50 text-amber-700",
-  IMPORTING: "bg-slate-100 text-slate-600",
-  IMPORTED: "bg-emerald-50 text-emerald-700",
-  FAILED: "bg-red-50 text-red-700",
-  CANCELLED: "bg-slate-100 text-slate-600",
+  UPLOADED: "bg-neutral-800 text-neutral-400",
+  VALIDATING: "bg-neutral-800 text-neutral-400",
+  PREVIEW_READY: "bg-amber-950/40 text-amber-400",
+  IMPORTING: "bg-neutral-800 text-neutral-400",
+  IMPORTED: "bg-emerald-950/40 text-emerald-400",
+  FAILED: "bg-red-950/40 text-red-400",
+  CANCELLED: "bg-neutral-800 text-neutral-400",
 };
 
 // STEP C.5 §19 — must not crash on an unexpected status value.
@@ -87,7 +88,7 @@ function statusLabel(status: string): string {
   return statusLabels[status] ?? status;
 }
 function statusBadge(status: string): string {
-  return statusBadgeClass[status] ?? "bg-slate-100 text-slate-600";
+  return statusBadgeClass[status] ?? "bg-neutral-800 text-neutral-400";
 }
 
 type ApiResponse<T = unknown> = {
@@ -493,39 +494,34 @@ export default function BankStatementsPage() {
   const fileKind = detectFileKind(file);
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-5xl">
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">📄 นำเข้า Bank Statement</h1>
-            <p className="mt-1 text-sm text-slate-500">
+            <h1 className="text-2xl font-bold text-white">📄 นำเข้า Bank Statement</h1>
+            <p className="mt-1 text-sm text-neutral-500">
               อัปโหลดไฟล์ CSV หรือ PDF จากธนาคาร ตรวจสอบตัวอย่างก่อนยืนยันนำเข้าจริง
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/bank"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              ← กลับหน้าบัญชีธนาคาร
-            </Link>
+            <BackLink href="/bank" label="กลับหน้าบัญชีธนาคาร" />
             <LogoutButton />
           </div>
         </div>
 
         {/* ===== Statement Import section ===== */}
-        <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">➕ นำเข้า Statement ใหม่</h2>
+        <section className="mb-6 rounded-2xl border bg-neutral-900 p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-white">➕ นำเข้า Statement ใหม่</h2>
 
           {accountsLoading ? (
-            <div className="mt-4 p-6 text-center text-sm text-slate-500">กำลังโหลดรายการบัญชี...</div>
+            <div className="mt-4 p-6 text-center text-sm text-neutral-500">กำลังโหลดรายการบัญชี...</div>
           ) : accountsError ? (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
               {accountsError}
             </div>
           ) : accounts.length === 0 ? (
-            <div className="mt-4 flex flex-col items-center gap-3 p-6 text-center text-sm text-slate-500">
+            <div className="mt-4 flex flex-col items-center gap-3 p-6 text-center text-sm text-neutral-500">
               <p>ยังไม่มีบัญชีธนาคารที่พร้อมใช้งาน</p>
               <Link
                 href="/bank"
@@ -537,7 +533,7 @@ export default function BankStatementsPage() {
           ) : (
             <div className="mt-4 space-y-4">
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500">บัญชีธนาคาร *</label>
+                <label className="mb-1 block text-xs font-medium text-neutral-500">บัญชีธนาคาร *</label>
                 <select
                   value={selectedAccountId}
                   onChange={(e) =>
@@ -556,7 +552,7 @@ export default function BankStatementsPage() {
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500">ไฟล์ Statement *</label>
+                <label className="mb-1 block text-xs font-medium text-neutral-500">ไฟล์ Statement *</label>
                 <input
                   type="file"
                   accept=".csv,.pdf"
@@ -566,10 +562,10 @@ export default function BankStatementsPage() {
                 {/* STEP E.7 — supported file types shown explicitly; extension check here is a
                     display hint only, matching this STEP's explicit instruction — the server's own
                     magic-byte/extension validation remains the real authority regardless. */}
-                <p className="mt-1 text-xs text-slate-400">รองรับไฟล์ประเภท: CSV (.csv) และ PDF (.pdf)</p>
-                {file && <p className="mt-1 text-xs text-slate-500">เลือกไฟล์: {file.name}</p>}
+                <p className="mt-1 text-xs text-neutral-500">รองรับไฟล์ประเภท: CSV (.csv) และ PDF (.pdf)</p>
+                {file && <p className="mt-1 text-xs text-neutral-500">เลือกไฟล์: {file.name}</p>}
                 {fileKind === "unsupported" && (
-                  <p className="mt-1 text-xs text-red-600">
+                  <p className="mt-1 text-xs text-red-400">
                     ไม่รองรับไฟล์ประเภทนี้ กรุณาเลือกไฟล์ .csv หรือ .pdf
                   </p>
                 )}
@@ -579,13 +575,13 @@ export default function BankStatementsPage() {
                   non-editable constant — see FIXED_PDF_PREVIEW_LAYOUT's own comment). Only an
                   optional password field for an encrypted PDF. ===== */}
               {file && fileKind === "pdf" && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <h3 className="text-sm font-semibold text-slate-800">ไฟล์ PDF</h3>
-                  <p className="mt-1 text-xs text-slate-500">
+                <div className="rounded-xl border border-neutral-800 bg-black p-4">
+                  <h3 className="text-sm font-semibold text-neutral-100">ไฟล์ PDF</h3>
+                  <p className="mt-1 text-xs text-neutral-500">
                     ระบบจะอ่านและตรวจสอบไฟล์ PDF โดยอัตโนมัติ — ไม่ต้องตั้งค่าคอลัมน์เอง
                   </p>
                   <div className="mt-3 max-w-sm">
-                    <label htmlFor="pdf-password" className="mb-1 block text-xs font-medium text-slate-500">
+                    <label htmlFor="pdf-password" className="mb-1 block text-xs font-medium text-neutral-500">
                       รหัสผ่านไฟล์ PDF (กรอกเฉพาะกรณีไฟล์มีการป้องกันด้วยรหัสผ่าน)
                     </label>
                     <input
@@ -597,7 +593,7 @@ export default function BankStatementsPage() {
                       placeholder="เว้นว่างไว้ถ้าไฟล์ไม่มีรหัสผ่าน"
                       className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
                     />
-                    <p className="mt-1 text-xs text-slate-400">
+                    <p className="mt-1 text-xs text-neutral-500">
                       รหัสผ่านนี้ใช้เฉพาะการอัปโหลดครั้งนี้เท่านั้น ระบบจะไม่บันทึกรหัสผ่านไว้ที่ใดทั้งสิ้น
                     </p>
                   </div>
@@ -605,15 +601,15 @@ export default function BankStatementsPage() {
               )}
 
               {file && fileKind === "csv" && csvHeaders.length > 0 && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <h3 className="text-sm font-semibold text-slate-800">ตั้งค่าคอลัมน์ (Mapping)</h3>
-                  <p className="mt-1 text-xs text-slate-500">
+                <div className="rounded-xl border border-neutral-800 bg-black p-4">
+                  <h3 className="text-sm font-semibold text-neutral-100">ตั้งค่าคอลัมน์ (Mapping)</h3>
+                  <p className="mt-1 text-xs text-neutral-500">
                     เลือกว่าคอลัมน์ใดในไฟล์ตรงกับข้อมูลแต่ละประเภท ระบบจะไม่เดา mapping ให้อัตโนมัติ
                   </p>
 
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         คอลัมน์วันที่ *
                       </label>
                       <select
@@ -631,7 +627,7 @@ export default function BankStatementsPage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         รูปแบบวันที่ *
                       </label>
                       <select
@@ -647,7 +643,7 @@ export default function BankStatementsPage() {
                         ))}
                       </select>
                       {mappingForm.dateFormat && (
-                        <p className="mt-1 text-xs text-slate-400">
+                        <p className="mt-1 text-xs text-neutral-500">
                           {dateFormatExample[mappingForm.dateFormat]} — รูปแบบวันที่ต้องตรงกับไฟล์ CSV
                           ทั้งไฟล์
                         </p>
@@ -655,7 +651,7 @@ export default function BankStatementsPage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         คอลัมน์รายละเอียด (ถ้ามี)
                       </label>
                       <select
@@ -673,7 +669,7 @@ export default function BankStatementsPage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         คอลัมน์ยอดคงเหลือ (ถ้ามี)
                       </label>
                       <select
@@ -691,7 +687,7 @@ export default function BankStatementsPage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         คอลัมน์รหัสธุรกรรมธนาคาร (ถ้ามี)
                       </label>
                       <select
@@ -709,7 +705,7 @@ export default function BankStatementsPage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         คอลัมน์เลขอ้างอิง (ถ้ามี)
                       </label>
                       <select
@@ -728,11 +724,11 @@ export default function BankStatementsPage() {
                   </div>
 
                   <div className="mt-5 border-t pt-4">
-                    <label className="mb-2 block text-xs font-medium text-slate-500">
+                    <label className="mb-2 block text-xs font-medium text-neutral-500">
                       รูปแบบจำนวนเงินในไฟล์ *
                     </label>
                     <div className="flex flex-col gap-2 sm:flex-row sm:gap-4">
-                      <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <label className="flex items-center gap-2 text-sm text-neutral-300">
                         <input
                           type="radio"
                           name="moneyKind"
@@ -741,7 +737,7 @@ export default function BankStatementsPage() {
                         />
                         แยกคอลัมน์เดบิต/เครดิต
                       </label>
-                      <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <label className="flex items-center gap-2 text-sm text-neutral-300">
                         <input
                           type="radio"
                           name="moneyKind"
@@ -750,7 +746,7 @@ export default function BankStatementsPage() {
                         />
                         จำนวนเงินเดียว + คอลัมน์ทิศทาง
                       </label>
-                      <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <label className="flex items-center gap-2 text-sm text-neutral-300">
                         <input
                           type="radio"
                           name="moneyKind"
@@ -764,7 +760,7 @@ export default function BankStatementsPage() {
                     {mappingForm.moneyKind === "separate_columns" && (
                       <div className="mt-3 grid gap-4 sm:grid-cols-2">
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             คอลัมน์เดบิต (ถอน/หัก) *
                           </label>
                           <select
@@ -781,7 +777,7 @@ export default function BankStatementsPage() {
                           </select>
                         </div>
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             คอลัมน์เครดิต (ฝาก/เข้า) *
                           </label>
                           <select
@@ -803,7 +799,7 @@ export default function BankStatementsPage() {
                     {mappingForm.moneyKind === "amount_with_direction" && (
                       <div className="mt-3 grid gap-4 sm:grid-cols-2">
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             คอลัมน์จำนวนเงิน *
                           </label>
                           <select
@@ -820,7 +816,7 @@ export default function BankStatementsPage() {
                           </select>
                         </div>
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             คอลัมน์ทิศทาง *
                           </label>
                           <select
@@ -837,7 +833,7 @@ export default function BankStatementsPage() {
                           </select>
                         </div>
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             ค่าที่หมายถึง &quot;เครดิต&quot; (คั่นด้วยจุลภาค) *
                           </label>
                           <input
@@ -849,7 +845,7 @@ export default function BankStatementsPage() {
                           />
                         </div>
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             ค่าที่หมายถึง &quot;เดบิต&quot; (คั่นด้วยจุลภาค) *
                           </label>
                           <input
@@ -866,7 +862,7 @@ export default function BankStatementsPage() {
                     {mappingForm.moneyKind === "signed_amount" && (
                       <div className="mt-3 grid gap-4 sm:grid-cols-2">
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             คอลัมน์จำนวนเงิน *
                           </label>
                           <select
@@ -883,7 +879,7 @@ export default function BankStatementsPage() {
                           </select>
                         </div>
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             ค่าบวก (+) หมายถึง
                           </label>
                           <select
@@ -904,7 +900,7 @@ export default function BankStatementsPage() {
               )}
 
               {alreadyImportedNotice && (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                <div className="rounded-xl border border-amber-900/50 bg-amber-950/40 p-4 text-sm text-amber-400">
                   ไฟล์นี้เคยถูกอัปโหลดแล้ว เป็น Statement #{alreadyImportedNotice.existingStatementId} (
                   สถานะ: {statusLabel(alreadyImportedNotice.existingStatementStatus)}){" "}
                   <Link
@@ -917,7 +913,7 @@ export default function BankStatementsPage() {
               )}
 
               {uploadError && (
-                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                <div className="rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
                   {uploadError}
                 </div>
               )}
@@ -937,32 +933,32 @@ export default function BankStatementsPage() {
         </section>
 
         {/* ===== Past Statements section ===== */}
-        <section className="rounded-2xl border bg-white shadow-sm">
+        <section className="rounded-2xl border bg-neutral-900 shadow-sm">
           <div className="flex items-center justify-between border-b p-5">
-            <h2 className="text-lg font-semibold text-slate-900">รายการ Statement ที่ผ่านมา</h2>
+            <h2 className="text-lg font-semibold text-white">รายการ Statement ที่ผ่านมา</h2>
             <button
               type="button"
               onClick={() => loadStatements()}
-              className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-400 hover:bg-black"
             >
               รีเฟรช
             </button>
           </div>
 
           {statementsError && (
-            <div className="m-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <div className="m-5 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
               {statementsError}
             </div>
           )}
 
           {statementsLoading ? (
-            <div className="p-10 text-center text-sm text-slate-500">กำลังโหลดรายการ Statement...</div>
+            <div className="p-10 text-center text-sm text-neutral-500">กำลังโหลดรายการ Statement...</div>
           ) : statements.length === 0 ? (
-            <div className="p-10 text-center text-sm text-slate-500">ยังไม่มี Statement ที่นำเข้า</div>
+            <div className="p-10 text-center text-sm text-neutral-500">ยังไม่มี Statement ที่นำเข้า</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px] text-left text-sm">
-                <thead className="bg-slate-50 text-slate-600">
+                <thead className="bg-black text-neutral-400">
                   <tr>
                     <th className="p-4">บัญชี</th>
                     <th className="p-4">ไฟล์</th>
@@ -975,22 +971,22 @@ export default function BankStatementsPage() {
                 </thead>
                 <tbody>
                   {statements.map((s) => (
-                    <tr key={s.id} className="border-t hover:bg-slate-50">
+                    <tr key={s.id} className="border-t hover:bg-black">
                       <td className="p-4">
-                        <div className="font-medium text-slate-900">{s.bankName ?? "-"}</div>
-                        <div className="text-xs text-slate-500">
+                        <div className="font-medium text-white">{s.bankName ?? "-"}</div>
+                        <div className="text-xs text-neutral-500">
                           {s.accountName ?? "-"} ({s.accountNumberMasked ?? "-"})
                         </div>
                       </td>
-                      <td className="p-4 max-w-[200px] truncate text-slate-600" title={s.sourceFileName}>
+                      <td className="p-4 max-w-[200px] truncate text-neutral-400" title={s.sourceFileName}>
                         {s.sourceFileName}
                       </td>
-                      <td className="p-4 whitespace-nowrap text-slate-600">
+                      <td className="p-4 whitespace-nowrap text-neutral-400">
                         {s.statementPeriodFrom && s.statementPeriodTo
                           ? `${s.statementPeriodFrom} - ${s.statementPeriodTo}`
                           : "-"}
                       </td>
-                      <td className="p-4 text-slate-600">{s.rowCountTotal ?? "-"}</td>
+                      <td className="p-4 text-neutral-400">{s.rowCountTotal ?? "-"}</td>
                       <td className="p-4">
                         <span
                           className={`rounded-full px-3 py-1 text-xs font-medium ${statusBadge(s.status)}`}
@@ -998,11 +994,11 @@ export default function BankStatementsPage() {
                           {statusLabel(s.status)}
                         </span>
                       </td>
-                      <td className="p-4 whitespace-nowrap text-slate-500">{s.updatedAt}</td>
+                      <td className="p-4 whitespace-nowrap text-neutral-500">{s.updatedAt}</td>
                       <td className="p-4">
                         <Link
                           href={`/bank/statements/${s.id}`}
-                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800"
                         >
                           เปิดดู
                         </Link>

@@ -104,7 +104,7 @@ export default function ContentPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
+    <main className="min-h-screen bg-neutral-800 p-6 text-white">
       <div className="mx-auto max-w-6xl">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -112,7 +112,7 @@ export default function ContentPage() {
               📚 Content Library
             </h1>
 
-            <p className="mt-1 text-slate-500">
+            <p className="mt-1 text-neutral-500">
               คลังคอนเทนต์ที่บันทึกจาก Content Studio
             </p>
           </div>
@@ -126,12 +126,12 @@ export default function ContentPage() {
         </div>
 
         {message && (
-          <div className="mb-6 rounded-xl border bg-white p-4">
+          <div className="mb-6 rounded-xl border bg-neutral-900 p-4">
             {message}
           </div>
         )}
 
-        <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm">
+        <div className="mb-6 rounded-2xl bg-neutral-900 p-5 shadow-sm">
           <div className="grid gap-3 md:grid-cols-2">
             <input
               value={search}
@@ -159,11 +159,11 @@ export default function ContentPage() {
         </div>
 
         {loading ? (
-          <div className="rounded-2xl bg-white p-10 text-center">
+          <div className="rounded-2xl bg-neutral-900 p-10 text-center">
             กำลังโหลดคอนเทนต์...
           </div>
         ) : filteredContents.length === 0 ? (
-          <div className="rounded-2xl bg-white p-10 text-center text-slate-500">
+          <div className="rounded-2xl bg-neutral-900 p-10 text-center text-neutral-500">
             ยังไม่มีคอนเทนต์ที่ตรงกับเงื่อนไข
           </div>
         ) : (
@@ -172,7 +172,7 @@ export default function ContentPage() {
               return (
                 <article
                   key={item.id}
-                  className="rounded-2xl bg-white p-5 shadow-sm"
+                  className="rounded-2xl bg-neutral-900 p-5 shadow-sm"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div>
@@ -181,26 +181,26 @@ export default function ContentPage() {
                       </h2>
 
                       <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                        <span className="rounded-full bg-slate-100 px-3 py-1">
+                        <span className="rounded-full bg-neutral-800 px-3 py-1">
                           {item.platform || "ไม่ระบุแพลตฟอร์ม"}
                         </span>
 
-                        <span className="rounded-full bg-slate-100 px-3 py-1">
+                        <span className="rounded-full bg-neutral-800 px-3 py-1">
                           {item.content_type || "ไม่ระบุประเภท"}
                         </span>
 
-                        <span className="rounded-full bg-slate-100 px-3 py-1">
+                        <span className="rounded-full bg-neutral-800 px-3 py-1">
                           {item.status}
                         </span>
                       </div>
                     </div>
 
-                    <span className="text-sm text-slate-400">
+                    <span className="text-sm text-neutral-500">
                       {formatDate(item.created_at)}
                     </span>
                   </div>
 
-                  <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                  <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-neutral-300">
                     {item.caption || ""}
                   </p>
 
@@ -243,7 +243,7 @@ export default function ContentPage() {
 
         {selected && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
-            <div className="max-h-[85vh] w-full max-w-3xl overflow-auto rounded-2xl bg-white p-6">
+            <div className="max-h-[85vh] w-full max-w-3xl overflow-auto rounded-2xl bg-neutral-900 p-6">
               <div className="flex items-start justify-between gap-4">
                 <h2 className="text-xl font-bold">
                   {selected.title}
@@ -260,7 +260,7 @@ export default function ContentPage() {
                 </button>
               </div>
 
-              <p className="mt-5 whitespace-pre-wrap leading-8 text-slate-700">
+              <p className="mt-5 whitespace-pre-wrap leading-8 text-neutral-300">
                 {selected.caption || ""}
               </p>
 

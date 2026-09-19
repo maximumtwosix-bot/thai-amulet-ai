@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
+import BackLink from "@/components/BackLink";
 
 // STEP 27 — สร้างออเดอร์ใหม่จากหน้าเว็บ ใช้ POST /api/orders / createOrder() เดิมทั้งหมด
 // STEP 36 — เพิ่มการเลือก/สร้างลูกค้าแล้ว ส่ง customerId เข้า POST /api/orders (ก่อนหน้านี้ไม่รองรับ
@@ -387,46 +387,41 @@ export default function NewOrderPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-4xl">
         <div className="mb-6">
-          <Link
-            href="/orders"
-            className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-          >
-            ← กลับไปรายการออเดอร์
-          </Link>
+          <BackLink href="/orders" label="กลับไปรายการออเดอร์" />
         </div>
 
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-slate-900">➕ สร้างออเดอร์ใหม่</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="text-2xl font-bold text-white">➕ สร้างออเดอร์ใหม่</h1>
+          <p className="mt-1 text-sm text-neutral-500">
             เลือกสินค้า ระบุจำนวนและราคาขาย ระบบจะตัดสต็อกให้อัตโนมัติเมื่อบันทึก
           </p>
         </div>
 
         {productsError && (
-          <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="mb-6 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
             {productsError}
           </div>
         )}
 
         {/* STEP 36 — customer selection, entirely optional. Existing orders with no customer must
             keep working exactly as before, so this section never blocks order submission. */}
-        <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">👤 ลูกค้า (ถ้ามี)</h2>
+        <section className="mb-6 rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-6">
+          <h2 className="text-lg font-semibold text-white">👤 ลูกค้า (ถ้ามี)</h2>
 
           {selectedCustomer ? (
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-900/50 bg-emerald-950/40 p-4">
               <div>
-                <p className="text-sm font-semibold text-emerald-800">{selectedCustomer.name}</p>
+                <p className="text-sm font-semibold text-emerald-400">{selectedCustomer.name}</p>
                 {selectedCustomer.phone && (
-                  <p className="text-xs text-emerald-700">{selectedCustomer.phone}</p>
+                  <p className="text-xs text-emerald-400">{selectedCustomer.phone}</p>
                 )}
                 {(selectedCustomer.address ||
                   selectedCustomer.district ||
                   selectedCustomer.province) && (
-                  <p className="text-xs text-emerald-700">
+                  <p className="text-xs text-emerald-400">
                     {[
                       selectedCustomer.address,
                       selectedCustomer.district,
@@ -442,7 +437,7 @@ export default function NewOrderPage() {
               <button
                 type="button"
                 onClick={clearSelectedCustomer}
-                className="rounded-xl border bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                className="rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:border-amber-500/50 hover:bg-amber-500/10 hover:text-amber-400"
               >
                 เปลี่ยน
               </button>
@@ -456,15 +451,15 @@ export default function NewOrderPage() {
                   onChange={(e) => setCustomerSearch(e.target.value)}
                   onFocus={() => setCustomerDropdownOpen(true)}
                   placeholder="ค้นหาชื่อหรือเบอร์โทรลูกค้าที่มีอยู่แล้ว..."
-                  className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                 />
 
                 {customerDropdownOpen && (
-                  <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border bg-white shadow-lg">
+                  <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-amber-500/20 bg-neutral-950/95 backdrop-blur-lg shadow-[0_0_20px_rgba(245,158,11,0.1)]">
                     {customerSearchLoading ? (
-                      <p className="p-3 text-sm text-slate-500">กำลังค้นหา...</p>
+                      <p className="p-3 text-sm text-neutral-500">กำลังค้นหา...</p>
                     ) : customerResults.length === 0 ? (
-                      <p className="p-3 text-sm text-slate-500">
+                      <p className="p-3 text-sm text-neutral-500">
                         {customerSearch.trim() ? "ไม่พบลูกค้าที่ค้นหา" : "ยังไม่มีลูกค้าในระบบ"}
                       </p>
                     ) : (
@@ -473,17 +468,17 @@ export default function NewOrderPage() {
                           key={c.id}
                           type="button"
                           onClick={() => selectCustomer(c)}
-                          className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-slate-50"
+                          className="block w-full border-b border-neutral-800 px-3 py-2 text-left text-sm last:border-b-0 hover:bg-amber-500/10"
                         >
-                          <span className="font-medium text-slate-900">{c.name}</span>
-                          {c.phone && <span className="ml-2 text-slate-500">{c.phone}</span>}
+                          <span className="font-medium text-white">{c.name}</span>
+                          {c.phone && <span className="ml-2 text-neutral-500">{c.phone}</span>}
                         </button>
                       ))
                     )}
                     <button
                       type="button"
                       onClick={() => setCustomerDropdownOpen(false)}
-                      className="block w-full border-t px-3 py-2 text-left text-xs text-slate-400 hover:bg-slate-50"
+                      className="block w-full border-t border-neutral-800 px-3 py-2 text-left text-xs text-neutral-500 hover:bg-neutral-800"
                     >
                       ปิด
                     </button>
@@ -497,89 +492,89 @@ export default function NewOrderPage() {
                   setShowNewCustomerForm((current) => !current);
                   setCustomerDropdownOpen(false);
                 }}
-                className="mt-2 rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                className="mt-2 rounded-xl border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:border-amber-500/50 hover:bg-amber-500/10 hover:text-amber-400"
               >
                 {showNewCustomerForm ? "ยกเลิกการเพิ่มลูกค้าใหม่" : "+ เพิ่มลูกค้าใหม่"}
               </button>
 
               {showNewCustomerForm && (
-                <div className="mt-3 rounded-xl border bg-slate-50 p-4">
+                <div className="mt-3 rounded-xl border border-neutral-800 bg-black p-4">
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         ชื่อลูกค้า *
                       </label>
                       <input
                         type="text"
                         value={newCustomerForm.name}
                         onChange={(e) => updateNewCustomerForm("name", e.target.value)}
-                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                       />
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         เบอร์โทร (ถ้ามี)
                       </label>
                       <input
                         type="text"
                         value={newCustomerForm.phone}
                         onChange={(e) => updateNewCustomerForm("phone", e.target.value)}
-                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                       />
                     </div>
 
                     <div className="sm:col-span-2">
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         ที่อยู่ (ถ้ามี)
                       </label>
                       <input
                         type="text"
                         value={newCustomerForm.address}
                         onChange={(e) => updateNewCustomerForm("address", e.target.value)}
-                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                       />
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         ตำบล/แขวง (ถ้ามี)
                       </label>
                       <input
                         type="text"
                         value={newCustomerForm.district}
                         onChange={(e) => updateNewCustomerForm("district", e.target.value)}
-                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                       />
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         จังหวัด (ถ้ามี)
                       </label>
                       <input
                         type="text"
                         value={newCustomerForm.province}
                         onChange={(e) => updateNewCustomerForm("province", e.target.value)}
-                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                       />
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         รหัสไปรษณีย์ (ถ้ามี)
                       </label>
                       <input
                         type="text"
                         value={newCustomerForm.postalCode}
                         onChange={(e) => updateNewCustomerForm("postalCode", e.target.value)}
-                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                       />
                     </div>
                   </div>
 
                   {customerFormError && (
-                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    <div className="mt-3 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
                       {customerFormError}
                     </div>
                   )}
@@ -588,7 +583,7 @@ export default function NewOrderPage() {
                     type="button"
                     onClick={submitNewCustomer}
                     disabled={creatingCustomer}
-                    className="mt-3 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+                    className="mt-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 px-4 py-2 text-sm font-medium text-black shadow-[0_0_15px_rgba(245,158,11,0.4)] hover:from-amber-400 hover:to-amber-300 disabled:opacity-50"
                   >
                     {creatingCustomer ? "กำลังบันทึก..." : "บันทึกลูกค้า"}
                   </button>
@@ -598,17 +593,17 @@ export default function NewOrderPage() {
           )}
         </section>
 
-        <section className="rounded-2xl border bg-white shadow-sm">
-          <div className="border-b p-5">
-            <h2 className="text-lg font-semibold text-slate-900">รายการสินค้า</h2>
+        <section className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)]">
+          <div className="border-b border-neutral-800 p-5">
+            <h2 className="text-lg font-semibold text-white">รายการสินค้า</h2>
           </div>
 
           {productsLoading ? (
-            <div className="p-10 text-center text-sm text-slate-500">
+            <div className="p-10 text-center text-sm text-neutral-500">
               กำลังโหลดรายการสินค้า...
             </div>
           ) : (
-            <div className="divide-y">
+            <div className="divide-y divide-neutral-800">
               {items.map((item, index) => {
                 const product = findProduct(item.productId);
                 const subtotal = lineSubtotal(item);
@@ -616,13 +611,13 @@ export default function NewOrderPage() {
                 return (
                   <div key={item.key} className="grid gap-3 p-5 sm:grid-cols-12 sm:items-end">
                     <div className="sm:col-span-5">
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         สินค้า {index + 1}
                       </label>
                       <select
                         value={item.productId}
                         onChange={(e) => handleProductChange(item.key, e.target.value)}
-                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                       >
                         <option value="">-- เลือกสินค้า --</option>
                         {products.map((p) => (
@@ -632,11 +627,11 @@ export default function NewOrderPage() {
                         ))}
                       </select>
                       {product && (
-                        <p className="mt-1 text-xs text-slate-500">
+                        <p className="mt-1 text-xs text-neutral-500">
                           สต็อกปัจจุบัน:{" "}
                           <span
                             className={
-                              product.stock <= 0 ? "font-semibold text-red-600" : "font-medium text-slate-700"
+                              product.stock <= 0 ? "font-semibold text-red-400" : "font-medium text-neutral-300"
                             }
                           >
                             {product.stock} ชิ้น
@@ -646,18 +641,18 @@ export default function NewOrderPage() {
                     </div>
 
                     <div className="sm:col-span-2">
-                      <label className="mb-1 block text-xs font-medium text-slate-500">จำนวน</label>
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">จำนวน</label>
                       <input
                         type="number"
                         min="1"
                         value={item.quantity}
                         onChange={(e) => updateItem(item.key, { quantity: e.target.value })}
-                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                       />
                     </div>
 
                     <div className="sm:col-span-2">
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         ราคาขาย/ชิ้น
                       </label>
                       <input
@@ -666,13 +661,13 @@ export default function NewOrderPage() {
                         step="0.01"
                         value={item.price}
                         onChange={(e) => updateItem(item.key, { price: e.target.value })}
-                        className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                       />
                     </div>
 
                     <div className="sm:col-span-2">
-                      <label className="mb-1 block text-xs font-medium text-slate-500">รวม</label>
-                      <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-900">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">รวม</label>
+                      <p className="rounded-xl bg-black px-3 py-2 text-sm font-semibold text-white">
                         {formatCurrency(subtotal)}
                       </p>
                     </div>
@@ -683,7 +678,7 @@ export default function NewOrderPage() {
                         onClick={() => removeItem(item.key)}
                         disabled={items.length === 1}
                         title={items.length === 1 ? "ต้องมีอย่างน้อย 1 รายการ" : "ลบรายการนี้"}
-                        className="w-full rounded-xl border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="w-full rounded-xl border border-red-900/50 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         ลบ
                       </button>
@@ -694,11 +689,11 @@ export default function NewOrderPage() {
             </div>
           )}
 
-          <div className="border-t p-5">
+          <div className="border-t border-neutral-800 p-5">
             <button
               type="button"
               onClick={addItem}
-              className="rounded-xl border px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              className="rounded-xl border border-neutral-700 px-4 py-2 text-sm font-medium text-neutral-300 hover:border-amber-500/50 hover:bg-amber-500/10 hover:text-amber-400"
             >
               + เพิ่มสินค้าอีกรายการ
             </button>
@@ -707,12 +702,12 @@ export default function NewOrderPage() {
 
         {/* STEP 47 — payment method / sales channel / shipping fee. Previously not exposed by this
             page at all; POST /api/orders and createOrder() already fully support all three. */}
-        <section className="mt-6 rounded-2xl border bg-white p-6 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold text-slate-900">การชำระเงินและการจัดส่ง</h2>
+        <section className="mt-6 rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-6">
+          <h2 className="mb-4 text-lg font-semibold text-white">การชำระเงินและการจัดส่ง</h2>
 
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 วิธีชำระเงิน
               </label>
               <div className="flex gap-2">
@@ -721,8 +716,8 @@ export default function NewOrderPage() {
                   onClick={() => setPaymentMethod("transfer")}
                   className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
                     paymentMethod === "transfer"
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "text-slate-700 hover:bg-slate-50"
+                      ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                      : "border-neutral-700 text-neutral-300 hover:bg-neutral-800"
                   }`}
                 >
                   โอนเงิน
@@ -732,8 +727,8 @@ export default function NewOrderPage() {
                   onClick={() => setPaymentMethod("cod")}
                   className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
                     paymentMethod === "cod"
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "text-slate-700 hover:bg-slate-50"
+                      ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                      : "border-neutral-700 text-neutral-300 hover:bg-neutral-800"
                   }`}
                 >
                   COD / เก็บเงินปลายทาง
@@ -742,13 +737,13 @@ export default function NewOrderPage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 ช่องทางการขาย
               </label>
               <select
                 value={channel}
                 onChange={(e) => setChannel(e.target.value)}
-                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
               >
                 {CHANNEL_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -759,7 +754,7 @@ export default function NewOrderPage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 ค่าจัดส่ง
               </label>
               <input
@@ -768,25 +763,25 @@ export default function NewOrderPage() {
                 step="0.01"
                 value={shippingFee}
                 onChange={(e) => setShippingFee(e.target.value)}
-                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
               />
             </div>
           </div>
         </section>
 
-        <section className="mt-6 rounded-2xl border bg-white p-6 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold text-slate-900">สรุปออเดอร์</h2>
+        <section className="mt-6 rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-6">
+          <h2 className="mb-4 text-lg font-semibold text-white">สรุปออเดอร์</h2>
 
           <div className="space-y-2 text-sm">
-            <div className="flex justify-between text-slate-600">
+            <div className="flex justify-between text-neutral-400">
               <span>ยอดรวมสินค้า</span>
               <span>{formatCurrency(orderSubtotal)}</span>
             </div>
-            <div className="flex justify-between text-slate-600">
+            <div className="flex justify-between text-neutral-400">
               <span>ค่าจัดส่ง</span>
               <span>{formatCurrency(shippingFeeValue)}</span>
             </div>
-            <div className="flex justify-between border-t pt-2 text-base font-bold text-slate-900">
+            <div className="flex justify-between border-t border-neutral-800 pt-2 text-base font-bold text-white">
               <span>ยอดรวมสุทธิ</span>
               <span>{formatCurrency(orderTotal)}</span>
             </div>
@@ -795,18 +790,18 @@ export default function NewOrderPage() {
           {/* STEP 47 — COD collection messaging, display-only: no new database field, computed
               entirely from the existing orderTotal so it's always exactly the final order total. */}
           {paymentMethod === "cod" && (
-            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
-              <p className="text-sm font-medium text-amber-800">
+            <div className="mt-4 rounded-xl border border-amber-900/50 bg-amber-950/40 p-4">
+              <p className="text-sm font-medium text-amber-400">
                 💰 ยอดเก็บเงินปลายทาง (COD)
               </p>
-              <p className="mt-1 text-xl font-bold text-amber-900">
+              <p className="mt-1 text-xl font-bold text-amber-400">
                 {formatCurrency(orderTotal)}
               </p>
             </div>
           )}
 
           {formError && (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
               {formError}
             </div>
           )}
@@ -815,7 +810,7 @@ export default function NewOrderPage() {
             type="button"
             onClick={submitOrder}
             disabled={submitting || productsLoading}
-            className="mt-5 w-full rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50 sm:w-auto"
+            className="mt-5 w-full rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 px-5 py-3 text-sm font-medium text-black shadow-[0_0_15px_rgba(245,158,11,0.4)] hover:from-amber-400 hover:to-amber-300 disabled:opacity-50 sm:w-auto"
           >
             {submitting ? "กำลังบันทึก..." : "✅ ยืนยันสร้างออเดอร์"}
           </button>

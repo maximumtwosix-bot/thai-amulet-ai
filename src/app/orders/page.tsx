@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import BackLink from "@/components/BackLink";
 import {
   getAllowedNextStatuses,
   ORDER_STATUS_LABELS,
@@ -47,6 +48,38 @@ function formatDate(value: string) {
 
 function formatCurrency(value: number) {
   return `฿${value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// Cyber-Gold status pills — สีเรืองแสงต่างกันตามความหมายจริงของแต่ละสถานะ (เดิมทุกสถานะ order
+// ใช้สีเหลืองเดียวกันหมด ไม่ว่าจะ pending/paid/shipped/completed/cancelled ก็ตาม)
+function getOrderStatusBadgeClass(status: string): string {
+  switch (status) {
+    case "paid":
+      return "bg-sky-500/10 text-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.4)]";
+    case "shipped":
+      return "bg-violet-500/10 text-violet-400 shadow-[0_0_8px_rgba(167,139,250,0.4)]";
+    case "completed":
+      return "bg-emerald-500/10 text-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.4)]";
+    case "cancelled":
+      return "bg-red-500/10 text-red-400 shadow-[0_0_8px_rgba(248,113,113,0.4)]";
+    case "pending":
+    default:
+      return "bg-amber-500/10 text-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.4)]";
+  }
+}
+
+function getDeliveryStatusBadgeClass(status: string): string {
+  switch (status) {
+    case "shipping":
+      return "bg-sky-500/10 text-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.4)]";
+    case "shipped":
+      return "bg-emerald-500/10 text-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.4)]";
+    case "returned":
+      return "bg-red-500/10 text-red-400 shadow-[0_0_8px_rgba(248,113,113,0.4)]";
+    case "pending":
+    default:
+      return "bg-neutral-800 text-neutral-400";
+  }
 }
 
 // STEP 59 — Bangkok "today" for the date picker's default value, computed via Intl with an
@@ -200,12 +233,12 @@ export default function OrdersPage() {
     .reduce((sum, order) => sum + order.total, 0);
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-7xl">
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">🧾 ออเดอร์</h1>
-            <p className="mt-1 text-sm text-slate-500">
+            <h1 className="text-2xl font-bold text-white">🧾 ออเดอร์</h1>
+            <p className="mt-1 text-sm text-neutral-500">
               รายการคำสั่งซื้อทั้งหมดในระบบ
             </p>
           </div>
@@ -213,17 +246,12 @@ export default function OrdersPage() {
           <div className="flex flex-wrap gap-3">
             <Link
               href="/orders/new"
-              className="w-fit rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700"
+              className="w-fit rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 px-4 py-2.5 text-sm font-medium text-black shadow-[0_0_15px_rgba(245,158,11,0.4)] hover:from-amber-400 hover:to-amber-300"
             >
               ➕ สร้างออเดอร์ใหม่
             </Link>
 
-            <Link
-              href="/"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              ← กลับหน้าแรก
-            </Link>
+            <BackLink href="/" label="กลับหน้าแรก" />
 
             <LogoutButton />
           </div>
@@ -231,14 +259,14 @@ export default function OrdersPage() {
 
         {/* STEP 59 — daily-operations date filter. Clearing (empty selectedDate) restores the
             exact pre-STEP-59 "show everything, up to 100 rows" behavior. */}
-        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl border bg-white p-4 shadow-sm">
-          <label className="text-sm font-medium text-slate-700">
+        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-4">
+          <label className="text-sm font-medium text-neutral-300">
             📅 วันที่:
             <input
               type="date"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              className="ml-2 rounded-xl border px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+              className="ml-2 rounded-xl border border-neutral-700 bg-black px-3 py-1.5 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
             />
           </label>
 
@@ -246,62 +274,62 @@ export default function OrdersPage() {
             <button
               type="button"
               onClick={() => setSelectedDate("")}
-              className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+              className="rounded-xl border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:border-amber-500/50 hover:bg-amber-500/10 hover:text-amber-400"
             >
               ดูทั้งหมด (ล้างวันที่)
             </button>
           )}
 
           {selectedDate && (
-            <span className="text-xs text-slate-400">{formatDateThai(selectedDate)}</span>
+            <span className="text-xs text-neutral-500">{formatDateThai(selectedDate)}</span>
           )}
         </div>
 
         <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5">
+            <p className="text-sm text-neutral-400">
               {selectedDate ? "ออเดอร์วันนี้" : "จำนวนออเดอร์"}
             </p>
-            <p className="mt-2 text-3xl font-bold text-slate-900">
+            <p className="mt-2 text-3xl font-bold text-white">
               {totalOrders.toLocaleString()}
             </p>
           </div>
 
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">ยอดขายรวม</p>
-            <p className="mt-2 text-3xl font-bold text-emerald-600">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5">
+            <p className="text-sm text-neutral-400">ยอดขายรวม</p>
+            <p className="mt-2 text-3xl font-bold text-emerald-400">
               {formatCurrency(totalRevenue)}
             </p>
           </div>
 
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">📋 ต้องดำเนินการ</p>
-            <p className="mt-2 text-3xl font-bold text-amber-600">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5">
+            <p className="text-sm text-neutral-400">📋 ต้องดำเนินการ</p>
+            <p className="mt-2 text-3xl font-bold text-amber-400">
               {activeCount.toLocaleString()}
             </p>
           </div>
 
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">✅ สำเร็จ</p>
-            <p className="mt-2 text-3xl font-bold text-emerald-600">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5">
+            <p className="text-sm text-neutral-400">✅ สำเร็จ</p>
+            <p className="mt-2 text-3xl font-bold text-emerald-400">
               {completedCount.toLocaleString()}
             </p>
           </div>
 
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">🚫 ยกเลิก</p>
-            <p className="mt-2 text-3xl font-bold text-slate-400">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5">
+            <p className="text-sm text-neutral-400">🚫 ยกเลิก</p>
+            <p className="mt-2 text-3xl font-bold text-neutral-500">
               {cancelledCount.toLocaleString()}
             </p>
           </div>
         </div>
 
-        <section className="rounded-2xl border bg-white shadow-sm">
-          <div className="border-b p-5">
-            <h2 className="text-lg font-semibold text-slate-900">
+        <section className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)]">
+          <div className="border-b border-neutral-800 p-5">
+            <h2 className="text-lg font-semibold text-white">
               รายการออเดอร์
             </h2>
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm text-neutral-500">
               เรียงจากออเดอร์ล่าสุดไปเก่าสุด
             </p>
 
@@ -322,8 +350,8 @@ export default function OrdersPage() {
                   onClick={() => setStatusFilter(tab.key)}
                   className={`rounded-xl border px-3 py-1.5 text-xs font-medium ${
                     statusFilter === tab.key
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "text-slate-700 hover:bg-slate-50"
+                      ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                      : "border-neutral-700 text-neutral-300 hover:bg-neutral-800"
                   }`}
                 >
                   {tab.label}
@@ -333,17 +361,17 @@ export default function OrdersPage() {
           </div>
 
           {error && (
-            <div className="m-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <div className="m-5 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
               {error}
             </div>
           )}
 
           {loading ? (
-            <div className="p-10 text-center text-sm text-slate-500">
+            <div className="p-10 text-center text-sm text-neutral-500">
               กำลังโหลดรายการออเดอร์...
             </div>
           ) : filteredOrders.length === 0 ? (
-            <div className="p-10 text-center text-sm text-slate-500">
+            <div className="p-10 text-center text-sm text-neutral-500">
               {statusFilter === "active"
                 ? "🎉 ไม่มีออเดอร์ที่ค้างดำเนินการ"
                 : selectedDate
@@ -353,7 +381,7 @@ export default function OrdersPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1000px] text-left text-sm">
-                <thead className="bg-slate-50 text-slate-600">
+                <thead className="bg-black/40 text-neutral-400">
                   <tr>
                     <th className="p-4">เลขที่ออเดอร์</th>
                     <th className="p-4">วันที่</th>
@@ -380,42 +408,46 @@ export default function OrdersPage() {
                     ).includes("completed");
 
                     return (
-                      <tr key={order.id} className="border-t hover:bg-slate-50">
-                        <td className="p-4 font-semibold text-slate-900">
+                      <tr key={order.id} className="border-t border-neutral-800 hover:bg-neutral-800/60">
+                        <td className="p-4 font-semibold text-white">
                           {order.order_number}
                         </td>
 
-                        <td className="p-4 whitespace-nowrap text-slate-500">
+                        <td className="p-4 whitespace-nowrap text-neutral-500">
                           {formatDate(order.created_at)}
                         </td>
 
-                        <td className="p-4 text-slate-700">
+                        <td className="p-4 text-neutral-300">
                           {order.customer_name || "-"}
                         </td>
 
-                        <td className="p-4 text-slate-700">
+                        <td className="p-4 text-neutral-300">
                           {order.channel || "-"}
                         </td>
 
-                        <td className="p-4 text-slate-700">
+                        <td className="p-4 text-neutral-300">
                           {order.total_quantity.toLocaleString()} ชิ้น
-                          <span className="ml-1 text-xs text-slate-400">
+                          <span className="ml-1 text-xs text-neutral-500">
                             ({order.item_count} รายการ)
                           </span>
                         </td>
 
-                        <td className="p-4 font-semibold text-slate-900">
+                        <td className="p-4 font-semibold text-white">
                           {formatCurrency(order.total)}
                         </td>
 
                         <td className="p-4">
-                          <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                          <span
+                            className={`inline-block rounded-full px-3 py-1 text-xs font-medium ${getOrderStatusBadgeClass(order.status)}`}
+                          >
                             {ORDER_STATUS_LABELS[order.status as keyof typeof ORDER_STATUS_LABELS] || order.status}
                           </span>
                         </td>
 
                         <td className="p-4">
-                          <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700">
+                          <span
+                            className={`inline-block rounded-full px-3 py-1 text-xs font-medium ${getDeliveryStatusBadgeClass(order.delivery_status ?? "pending")}`}
+                          >
                             {DELIVERY_STATUS_LABELS[order.delivery_status ?? "pending"]}
                           </span>
                           {/* STEP 65 — returned-but-not-cancelled warning, same condition/wording
@@ -424,7 +456,7 @@ export default function OrdersPage() {
                               existing GET /api/orders response — no new field, no new API call, no
                               mutation. Hidden once the order is already cancelled. */}
                           {order.delivery_status === "returned" && order.status !== "cancelled" && (
-                            <span className="ml-2 inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                            <span className="ml-2 inline-block rounded-full bg-red-950/40 px-2 py-0.5 text-xs font-medium text-red-400">
                               ⚠️ พัสดุตีกลับ — ยังไม่ยกเลิก
                             </span>
                           )}
@@ -437,7 +469,7 @@ export default function OrdersPage() {
                                 type="button"
                                 onClick={() => confirmComplete(order.id)}
                                 disabled={confirmingId === order.id}
-                                className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                                className="rounded-xl border border-emerald-900/50 bg-emerald-950/40 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-950/40 disabled:opacity-50"
                               >
                                 {confirmingId === order.id
                                   ? "กำลังยืนยัน..."
@@ -446,13 +478,13 @@ export default function OrdersPage() {
                             )}
                             <Link
                               href={`/orders/${order.id}`}
-                              className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                              className="rounded-xl border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:border-amber-500/50 hover:bg-amber-500/10 hover:text-amber-400"
                             >
                               ดูรายละเอียด →
                             </Link>
                           </div>
                           {confirmErrors[order.id] && (
-                            <p className="mt-1 text-right text-xs text-red-600">
+                            <p className="mt-1 text-right text-xs text-red-400">
                               {confirmErrors[order.id]}
                             </p>
                           )}

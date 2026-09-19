@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import BackLink from "@/components/BackLink";
 
 // STEP D.7 — Client Component; types copied field-for-field from the ACTUAL current API responses
 // (src/app/api/reconciliation/[id]/route.ts, src/app/api/reconciliation/[id]/audit/route.ts), same
@@ -28,18 +28,18 @@ const statusLabels: Record<ReconciliationStatus, string> = {
   NEEDS_REVIEW: "ต้องตรวจสอบเพิ่มเติม",
 };
 const statusBadgeClass: Record<ReconciliationStatus, string> = {
-  SUGGESTED: "bg-slate-100 text-slate-600",
-  MATCHED: "bg-amber-50 text-amber-700",
-  CONFIRMED: "bg-emerald-50 text-emerald-700",
-  EXCLUDED: "bg-purple-50 text-purple-700",
-  UNMATCHED: "bg-slate-200 text-slate-700",
-  NEEDS_REVIEW: "bg-orange-50 text-orange-700",
+  SUGGESTED: "bg-neutral-800 text-neutral-400",
+  MATCHED: "bg-amber-950/40 text-amber-400",
+  CONFIRMED: "bg-emerald-950/40 text-emerald-400",
+  EXCLUDED: "bg-purple-950/40 text-purple-400",
+  UNMATCHED: "bg-neutral-700 text-neutral-300",
+  NEEDS_REVIEW: "bg-orange-950/40 text-orange-400",
 };
 function statusLabel(status: string): string {
   return statusLabels[status as ReconciliationStatus] ?? status;
 }
 function statusBadge(status: string): string {
-  return statusBadgeClass[status as ReconciliationStatus] ?? "bg-slate-100 text-slate-600";
+  return statusBadgeClass[status as ReconciliationStatus] ?? "bg-neutral-800 text-neutral-400";
 }
 
 const strategyLabels: Record<string, string> = {
@@ -292,26 +292,21 @@ export default function ReconciliationDetailPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-5xl">
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">🔗 รายละเอียดการจับคู่ (Reconciliation)</h1>
+            <h1 className="text-2xl font-bold text-white">🔗 รายละเอียดการจับคู่ (Reconciliation)</h1>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/bank/reconciliation"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              ← กลับรายการ Reconciliation
-            </Link>
+            <BackLink href="/bank/reconciliation" label="กลับรายการ Reconciliation" />
             <LogoutButton />
           </div>
         </div>
 
         {error && (
-          <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="mb-6 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
             {error}
             <button
               type="button"
@@ -324,22 +319,22 @@ export default function ReconciliationDetailPage() {
         )}
 
         {loading ? (
-          <div className="rounded-2xl border bg-white p-10 text-center text-sm text-slate-500 shadow-sm">
+          <div className="rounded-2xl border bg-neutral-900 p-10 text-center text-sm text-neutral-500 shadow-sm">
             กำลังโหลดข้อมูล...
           </div>
         ) : !match ? null : (
           <>
             {/* ===== Metadata card ===== */}
-            <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+            <section className="mb-6 rounded-2xl border bg-neutral-900 p-6 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold text-slate-900">Reconciliation #{match.id}</h2>
+                <h2 className="text-lg font-semibold text-white">Reconciliation #{match.id}</h2>
                 <span className={`rounded-full px-3 py-1 text-sm font-medium ${statusBadge(match.status)}`}>
                   {statusLabel(match.status)}
                 </span>
               </div>
 
               {match.possiblyStale && (
-                <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+                <div className="mt-4 rounded-xl border border-orange-900/50 bg-orange-950/40 p-4 text-sm text-orange-400">
                   ⚠️ รายการนี้อาจไม่เป็นปัจจุบัน (possibly stale) —{" "}
                   {match.staleReason === "TRANSACTION_MODIFIED_AFTER_CONFIRMATION"
                     ? "รายการทางการเงินที่เชื่อมโยงถูกแก้ไขหลังจากยืนยันการจับคู่แล้ว"
@@ -351,56 +346,56 @@ export default function ReconciliationDetailPage() {
 
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <div className="rounded-xl border p-4">
-                  <p className="text-xs font-medium text-slate-500">รายการธนาคาร</p>
-                  <p className="mt-1 text-sm text-slate-700">
+                  <p className="text-xs font-medium text-neutral-500">รายการธนาคาร</p>
+                  <p className="mt-1 text-sm text-neutral-300">
                     รหัสรายการธนาคาร #{match.bankStatementTransactionId}
                   </p>
-                  <p className="mt-1 text-xs text-slate-400">
+                  <p className="mt-1 text-xs text-neutral-500">
                     ระบบยังไม่รองรับการแสดงรายละเอียดเต็มของรายการธนาคารในหน้านี้ — ดูรายละเอียดได้จากหน้า
                     Bank Statement ที่เกี่ยวข้อง
                   </p>
                 </div>
                 <div className="rounded-xl border p-4">
-                  <p className="text-xs font-medium text-slate-500">รายการทางการเงิน</p>
+                  <p className="text-xs font-medium text-neutral-500">รายการทางการเงิน</p>
                   {financialTxn ? (
                     <>
-                      <p className="mt-1 text-sm text-slate-700">
+                      <p className="mt-1 text-sm text-neutral-300">
                         {financialTxn.description || financialTxn.category}
                       </p>
-                      <p className="mt-1 text-xs text-slate-400">
+                      <p className="mt-1 text-xs text-neutral-500">
                         {financialTxn.transactionDate} ·{" "}
                         {financialTxn.transactionType === "income" ? "รายรับ" : "รายจ่าย"} ·{" "}
                         {formatBaht(financialTxn.amount)} บาท
                       </p>
                     </>
                   ) : (
-                    <p className="mt-1 text-sm text-slate-700">รหัสรายการทางการเงิน #{match.transactionId}</p>
+                    <p className="mt-1 text-sm text-neutral-300">รหัสรายการทางการเงิน #{match.transactionId}</p>
                   )}
                 </div>
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div className="rounded-xl border p-4">
-                  <p className="text-xs text-slate-500">จำนวนที่จัดสรร</p>
-                  <p className="mt-1 text-lg font-bold text-slate-900">{formatSatang(match.allocatedAmount)}</p>
+                  <p className="text-xs text-neutral-500">จำนวนที่จัดสรร</p>
+                  <p className="mt-1 text-lg font-bold text-white">{formatSatang(match.allocatedAmount)}</p>
                 </div>
                 <div className="rounded-xl border p-4">
-                  <p className="text-xs text-slate-500">วิธีจับคู่</p>
-                  <p className="mt-1 text-sm font-medium text-slate-700">{strategyLabel(match.matchStrategy)}</p>
+                  <p className="text-xs text-neutral-500">วิธีจับคู่</p>
+                  <p className="mt-1 text-sm font-medium text-neutral-300">{strategyLabel(match.matchStrategy)}</p>
                 </div>
                 <div className="rounded-xl border p-4">
-                  <p className="text-xs text-slate-500">สร้างเมื่อ</p>
-                  <p className="mt-1 text-sm text-slate-700">{match.createdAt}</p>
+                  <p className="text-xs text-neutral-500">สร้างเมื่อ</p>
+                  <p className="mt-1 text-sm text-neutral-300">{match.createdAt}</p>
                 </div>
                 <div className="rounded-xl border p-4">
-                  <p className="text-xs text-slate-500">อัปเดตล่าสุด</p>
-                  <p className="mt-1 text-sm text-slate-700">{match.updatedAt}</p>
+                  <p className="text-xs text-neutral-500">อัปเดตล่าสุด</p>
+                  <p className="mt-1 text-sm text-neutral-300">{match.updatedAt}</p>
                 </div>
               </div>
 
               {match.note && (
-                <div className="mt-4 rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">
-                  <p className="text-xs font-medium text-slate-500">หมายเหตุ</p>
+                <div className="mt-4 rounded-xl border bg-black p-4 text-sm text-neutral-300">
+                  <p className="text-xs font-medium text-neutral-500">หมายเหตุ</p>
                   <p className="mt-1">{match.note}</p>
                 </div>
               )}
@@ -411,11 +406,11 @@ export default function ReconciliationDetailPage() {
               match.status === "MATCHED" ||
               match.status === "CONFIRMED" ||
               match.status === "NEEDS_REVIEW") && (
-              <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-slate-900">การดำเนินการ</h2>
+              <section className="mb-6 rounded-2xl border bg-neutral-900 p-6 shadow-sm">
+                <h2 className="text-lg font-semibold text-white">การดำเนินการ</h2>
 
                 {actionError && (
-                  <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  <div className="mt-3 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
                     {actionError}
                   </div>
                 )}
@@ -448,7 +443,7 @@ export default function ReconciliationDetailPage() {
                       type="button"
                       onClick={() => openReasonPrompt("unmatch")}
                       disabled={actionLoading !== null}
-                      className="rounded-xl border border-red-200 px-5 py-2.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                      className="rounded-xl border border-red-900/50 px-5 py-2.5 text-sm font-medium text-red-400 hover:bg-red-950/40 disabled:opacity-50"
                     >
                       ↩️ ยกเลิกการจับคู่ (Unmatch)
                     </button>
@@ -461,7 +456,7 @@ export default function ReconciliationDetailPage() {
                       type="button"
                       onClick={() => openReasonPrompt("exclude")}
                       disabled={actionLoading !== null}
-                      className="rounded-xl border px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      className="rounded-xl border px-5 py-2.5 text-sm font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                     >
                       🚫 ยกเว้น (Exclude)
                     </button>
@@ -473,7 +468,7 @@ export default function ReconciliationDetailPage() {
                     UI deliberately never offers that shortcut, forcing a human back through "จับคู่"
                     (match) first for a second look. */}
                 {match.status === "NEEDS_REVIEW" && (
-                  <p className="mt-3 text-xs text-slate-400">
+                  <p className="mt-3 text-xs text-neutral-500">
                     รายการนี้ต้องตรวจสอบเพิ่มเติม — กรุณากด &quot;จับคู่&quot; เพื่อตรวจทานอีกครั้งก่อนยืนยัน
                     (ไม่สามารถยืนยันตรงจากสถานะนี้ได้ในหน้านี้)
                   </p>
@@ -481,8 +476,8 @@ export default function ReconciliationDetailPage() {
 
                 {/* Reason capture — required for unmatch/exclude, two-step (reveal then confirm) */}
                 {reasonPromptFor && (
-                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <label className="mb-1 block text-xs font-medium text-slate-500">
+                  <div className="mt-4 rounded-xl border border-neutral-800 bg-black p-4">
+                    <label className="mb-1 block text-xs font-medium text-neutral-500">
                       เหตุผล ({reasonPromptFor === "unmatch" ? "การยกเลิกการจับคู่" : "การยกเว้น"}) *
                     </label>
                     <textarea
@@ -508,7 +503,7 @@ export default function ReconciliationDetailPage() {
                           setReasonText("");
                         }}
                         disabled={actionLoading !== null}
-                        className="rounded-xl border px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                        className="rounded-xl border px-4 py-2 text-xs font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                       >
                         ยกเลิก
                       </button>
@@ -519,24 +514,24 @@ export default function ReconciliationDetailPage() {
             )}
 
             {(match.status === "EXCLUDED" || match.status === "UNMATCHED") && (
-              <p className="mb-6 text-center text-xs text-slate-400">
+              <p className="mb-6 text-center text-xs text-neutral-500">
                 รายการนี้อยู่ในสถานะสิ้นสุด (terminal) — ไม่สามารถดำเนินการเพิ่มเติมกับรายการนี้ได้
                 หากต้องการจับคู่รายการเดิมใหม่ ให้เสนอการจับคู่ใหม่จากหน้า Reconciliation
               </p>
             )}
 
             {/* ===== Audit trail ===== */}
-            <section className="rounded-2xl border bg-white shadow-sm">
+            <section className="rounded-2xl border bg-neutral-900 shadow-sm">
               <div className="border-b p-5">
-                <h2 className="text-lg font-semibold text-slate-900">ประวัติการดำเนินการ (Audit Trail)</h2>
+                <h2 className="text-lg font-semibold text-white">ประวัติการดำเนินการ (Audit Trail)</h2>
               </div>
 
               {audit.length === 0 ? (
-                <div className="p-10 text-center text-sm text-slate-500">ยังไม่มีประวัติการดำเนินการ</div>
+                <div className="p-10 text-center text-sm text-neutral-500">ยังไม่มีประวัติการดำเนินการ</div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[720px] text-left text-sm">
-                    <thead className="bg-slate-50 text-slate-600">
+                    <thead className="bg-black text-neutral-400">
                       <tr>
                         <th className="p-3">การกระทำ</th>
                         <th className="p-3">จาก</th>
@@ -548,13 +543,13 @@ export default function ReconciliationDetailPage() {
                     </thead>
                     <tbody>
                       {audit.map((a) => (
-                        <tr key={a.id} className="border-t hover:bg-slate-50">
-                          <td className="p-3 font-medium text-slate-800">{auditActionLabel(a.action)}</td>
-                          <td className="p-3 text-slate-500">{a.fromStatus ? statusLabel(a.fromStatus) : "-"}</td>
-                          <td className="p-3 text-slate-700">{statusLabel(a.toStatus)}</td>
-                          <td className="p-3 max-w-xs text-slate-500">{a.reason || "-"}</td>
-                          <td className="p-3 text-slate-500">{a.performedBy}</td>
-                          <td className="p-3 whitespace-nowrap text-slate-500">{a.performedAt}</td>
+                        <tr key={a.id} className="border-t hover:bg-black">
+                          <td className="p-3 font-medium text-neutral-100">{auditActionLabel(a.action)}</td>
+                          <td className="p-3 text-neutral-500">{a.fromStatus ? statusLabel(a.fromStatus) : "-"}</td>
+                          <td className="p-3 text-neutral-300">{statusLabel(a.toStatus)}</td>
+                          <td className="p-3 max-w-xs text-neutral-500">{a.reason || "-"}</td>
+                          <td className="p-3 text-neutral-500">{a.performedBy}</td>
+                          <td className="p-3 whitespace-nowrap text-neutral-500">{a.performedAt}</td>
                         </tr>
                       ))}
                     </tbody>

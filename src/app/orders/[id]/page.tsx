@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
+import BackLink from "@/components/BackLink";
 import {
   ORDER_STATUS_LABELS,
   getAllowedNextStatuses,
@@ -1345,15 +1345,10 @@ export default function OrderDetailPage() {
     .reduce((sum, t) => sum + t.amount, 0);
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-4xl">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3 print:hidden">
-          <Link
-            href="/orders"
-            className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-          >
-            ← กลับไปรายการออเดอร์
-          </Link>
+          <BackLink href="/orders" label="กลับไปรายการออเดอร์" />
 
           {/* STEP 48 — print-friendly receipt/packing-slip view. Uses only order data already
               loaded by this page (no new fetch, no new endpoint). window.print() is the browser's
@@ -1371,15 +1366,15 @@ export default function OrderDetailPage() {
         </div>
 
         {loading ? (
-          <div className="rounded-2xl border bg-white p-10 text-center text-sm text-slate-500 shadow-sm print:hidden">
+          <div className="rounded-2xl border bg-neutral-900 p-10 text-center text-sm text-neutral-500 shadow-sm print:hidden">
             กำลังโหลดข้อมูลออเดอร์...
           </div>
         ) : notFound ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-10 text-center text-sm text-red-700 shadow-sm print:hidden">
+          <div className="rounded-2xl border border-red-900/50 bg-red-950/40 p-10 text-center text-sm text-red-400 shadow-sm print:hidden">
             ไม่พบออเดอร์ที่ต้องการ
           </div>
         ) : error ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-10 text-center text-sm text-red-700 shadow-sm print:hidden">
+          <div className="rounded-2xl border border-red-900/50 bg-red-950/40 p-10 text-center text-sm text-red-400 shadow-sm print:hidden">
             {error}
           </div>
         ) : order ? (
@@ -1390,29 +1385,29 @@ export default function OrderDetailPage() {
                 rendered instead. Nothing inside this div changed: same JSX, same handlers, same
                 data, only the wrapping element and this one className are new. */}
             <div className="print:hidden">
-            <div className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+            <div className="mb-6 rounded-2xl border bg-neutral-900 p-6 shadow-sm">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h1 className="text-2xl font-bold text-slate-900">
+                  <h1 className="text-2xl font-bold text-white">
                     {order.order_number}
                   </h1>
-                  <p className="mt-1 text-sm text-slate-500">
+                  <p className="mt-1 text-sm text-neutral-500">
                     {formatDate(order.created_at)}
                   </p>
                 </div>
 
                 <div className="flex flex-col items-end gap-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="w-fit rounded-full bg-amber-50 px-4 py-1.5 text-sm font-medium text-amber-700">
+                    <span className="w-fit rounded-full bg-amber-950/40 px-4 py-1.5 text-sm font-medium text-amber-400">
                       {ORDER_STATUS_LABELS[order.status] || order.status}
                     </span>
 
                     {order.linkedIncomeTransactionId ? (
-                      <span className="w-fit rounded-full bg-emerald-50 px-4 py-1.5 text-sm font-medium text-emerald-700">
+                      <span className="w-fit rounded-full bg-emerald-950/40 px-4 py-1.5 text-sm font-medium text-emerald-400">
                         ✅ บันทึกรายรับแล้ว (#{order.linkedIncomeTransactionId})
                       </span>
                     ) : (
-                      <span className="w-fit rounded-full bg-slate-100 px-4 py-1.5 text-sm font-medium text-slate-500">
+                      <span className="w-fit rounded-full bg-neutral-800 px-4 py-1.5 text-sm font-medium text-neutral-500">
                         ยังไม่มีรายรับที่บันทึกไว้
                       </span>
                     )}
@@ -1423,14 +1418,14 @@ export default function OrderDetailPage() {
                       order reaches a terminal status (completed/cancelled) */}
                   {getAllowedNextStatuses(order.status).length > 0 && (
                     <div className="flex flex-wrap items-center justify-end gap-2">
-                      <span className="text-xs text-slate-400">เปลี่ยนสถานะ:</span>
+                      <span className="text-xs text-neutral-500">เปลี่ยนสถานะ:</span>
                       {getAllowedNextStatuses(order.status).map((next) => (
                         <button
                           key={next}
                           type="button"
                           onClick={() => changeStatus(next)}
                           disabled={updatingStatus}
-                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                         >
                           {updatingStatus ? "กำลังบันทึก..." : ORDER_STATUS_LABELS[next]}
                         </button>
@@ -1439,7 +1434,7 @@ export default function OrderDetailPage() {
                   )}
 
                   {statusError && (
-                    <p className="text-xs text-red-600">{statusError}</p>
+                    <p className="text-xs text-red-400">{statusError}</p>
                   )}
                 </div>
               </div>
@@ -1453,7 +1448,7 @@ export default function OrderDetailPage() {
                   remain two separate business events, exactly as instructed. Hidden once the order
                   is already cancelled, since there's nothing left to warn about at that point. */}
               {order.delivery_status === "returned" && order.status !== "cancelled" && (
-                <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
                   ⚠️ พัสดุตีกลับ — ออเดอร์ยังไม่ถูกยกเลิก กรุณาตรวจสอบ
                 </div>
               )}
@@ -1461,7 +1456,7 @@ export default function OrderDetailPage() {
               <div className="mt-6 grid gap-4 sm:grid-cols-2">
                 <div>
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
                       ลูกค้า
                     </p>
                     <div className="flex items-center gap-3">
@@ -1472,7 +1467,7 @@ export default function OrderDetailPage() {
                         <button
                           type="button"
                           onClick={startEditCustomer}
-                          className="text-xs font-medium text-amber-700 hover:underline"
+                          className="text-xs font-medium text-amber-400 hover:underline"
                         >
                           ✏️ แก้ไขข้อมูลลูกค้า
                         </button>
@@ -1493,20 +1488,20 @@ export default function OrderDetailPage() {
                             🔁 เปลี่ยนลูกค้า
                           </button>
                         ) : (
-                          <span className="text-xs text-slate-400">สิ้นสุดแล้ว</span>
+                          <span className="text-xs text-neutral-500">สิ้นสุดแล้ว</span>
                         ))}
                     </div>
                   </div>
-                  <p className="mt-1 text-sm text-slate-700">
+                  <p className="mt-1 text-sm text-neutral-300">
                     {order.customer_name || "ไม่มีข้อมูลลูกค้า"}
                   </p>
                   {order.customer_phone && (
-                    <p className="text-sm text-slate-500">{order.customer_phone}</p>
+                    <p className="text-sm text-neutral-500">{order.customer_phone}</p>
                   )}
                   {(order.customer_address ||
                     order.customer_district ||
                     order.customer_province) && (
-                    <p className="text-sm text-slate-500">
+                    <p className="text-sm text-neutral-500">
                       {[
                         order.customer_address,
                         order.customer_district,
@@ -1521,7 +1516,7 @@ export default function OrderDetailPage() {
 
                 <div>
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
                       ช่องทาง / การชำระเงิน
                     </p>
                     {/* STEP 55 — channel edit. Hidden once the order is terminal; the server
@@ -1531,12 +1526,12 @@ export default function OrderDetailPage() {
                         <button
                           type="button"
                           onClick={startEditChannel}
-                          className="text-xs font-medium text-amber-700 hover:underline"
+                          className="text-xs font-medium text-amber-400 hover:underline"
                         >
                           ✏️ แก้ไขช่องทางการขาย
                         </button>
                       ) : (
-                        <span className="text-xs text-slate-400">สิ้นสุดแล้ว</span>
+                        <span className="text-xs text-neutral-500">สิ้นสุดแล้ว</span>
                       ))}
                   </div>
 
@@ -1555,7 +1550,7 @@ export default function OrderDetailPage() {
                       </select>
 
                       {channelError && (
-                        <p className="mt-2 text-xs text-red-600">{channelError}</p>
+                        <p className="mt-2 text-xs text-red-400">{channelError}</p>
                       )}
 
                       <div className="mt-2 flex gap-3">
@@ -1571,14 +1566,14 @@ export default function OrderDetailPage() {
                           type="button"
                           onClick={cancelEditChannel}
                           disabled={savingChannel}
-                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
                         >
                           ยกเลิก
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <p className="mt-1 text-sm text-slate-700">
+                    <p className="mt-1 text-sm text-neutral-300">
                       {order.channel || "-"}
                     </p>
                   )}
@@ -1592,12 +1587,12 @@ export default function OrderDetailPage() {
                         <button
                           type="button"
                           onClick={startEditPaymentMethod}
-                          className="text-xs font-medium text-amber-700 hover:underline"
+                          className="text-xs font-medium text-amber-400 hover:underline"
                         >
                           ✏️ แก้ไขวิธีชำระเงิน
                         </button>
                       ) : (
-                        <span className="text-xs text-slate-400">สิ้นสุดแล้ว</span>
+                        <span className="text-xs text-neutral-500">สิ้นสุดแล้ว</span>
                       )
                     )}
                   </div>
@@ -1617,7 +1612,7 @@ export default function OrderDetailPage() {
                       </select>
 
                       {paymentMethodError && (
-                        <p className="mt-2 text-xs text-red-600">{paymentMethodError}</p>
+                        <p className="mt-2 text-xs text-red-400">{paymentMethodError}</p>
                       )}
 
                       <div className="mt-2 flex gap-3">
@@ -1633,14 +1628,14 @@ export default function OrderDetailPage() {
                           type="button"
                           onClick={cancelEditPaymentMethod}
                           disabled={savingPaymentMethod}
-                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
                         >
                           ยกเลิก
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <p className="text-sm text-slate-500">
+                    <p className="text-sm text-neutral-500">
                       {order.payment_method || "-"}
                     </p>
                   )}
@@ -1652,14 +1647,14 @@ export default function OrderDetailPage() {
                   via loadOrder() so both the on-screen info above and the print view (which reads
                   the same order.customer_* fields) pick up the change automatically. */}
               {editingCustomer && (
-                <div className="mt-6 rounded-xl border bg-slate-50 p-4">
-                  <h3 className="text-sm font-semibold text-slate-900">
+                <div className="mt-6 rounded-xl border bg-black p-4">
+                  <h3 className="text-sm font-semibold text-white">
                     ✏️ แก้ไขข้อมูลลูกค้า
                   </h3>
 
                   <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         ชื่อลูกค้า *
                       </label>
                       <input
@@ -1671,7 +1666,7 @@ export default function OrderDetailPage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         เบอร์โทร (ถ้ามี)
                       </label>
                       <input
@@ -1683,7 +1678,7 @@ export default function OrderDetailPage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         รหัสไปรษณีย์ (ถ้ามี)
                       </label>
                       <input
@@ -1695,7 +1690,7 @@ export default function OrderDetailPage() {
                     </div>
 
                     <div className="sm:col-span-2 lg:col-span-3">
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         ที่อยู่ (ถ้ามี)
                       </label>
                       <input
@@ -1707,7 +1702,7 @@ export default function OrderDetailPage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         ตำบล/แขวง (ถ้ามี)
                       </label>
                       <input
@@ -1719,7 +1714,7 @@ export default function OrderDetailPage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         จังหวัด (ถ้ามี)
                       </label>
                       <input
@@ -1732,7 +1727,7 @@ export default function OrderDetailPage() {
                   </div>
 
                   {customerFormError && (
-                    <p className="mt-3 text-xs text-red-600">{customerFormError}</p>
+                    <p className="mt-3 text-xs text-red-400">{customerFormError}</p>
                   )}
 
                   <div className="mt-4 flex gap-3">
@@ -1748,7 +1743,7 @@ export default function OrderDetailPage() {
                       type="button"
                       onClick={cancelEditCustomer}
                       disabled={savingCustomer}
-                      className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      className="rounded-xl border px-4 py-2.5 text-sm font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
                     >
                       ยกเลิก
                     </button>
@@ -1761,9 +1756,9 @@ export default function OrderDetailPage() {
                   /api/orders/[id]/customer with the newly-selected customer's id. Requires
                   explicitly picking a customer before Save (never sends a null/missing id). */}
               {reassigningCustomer && (
-                <div className="mt-6 rounded-xl border bg-slate-50 p-4">
-                  <h3 className="text-sm font-semibold text-slate-900">🔁 เปลี่ยนลูกค้า</h3>
-                  <p className="mt-1 text-xs text-slate-500">
+                <div className="mt-6 rounded-xl border bg-black p-4">
+                  <h3 className="text-sm font-semibold text-white">🔁 เปลี่ยนลูกค้า</h3>
+                  <p className="mt-1 text-xs text-neutral-500">
                     เลือกลูกค้าที่มีอยู่แล้วในระบบเพื่อเปลี่ยนให้ออเดอร์นี้ผูกกับลูกค้ารายนั้นแทน
                     (ไม่แก้ไขข้อมูลลูกค้าเดิม)
                   </p>
@@ -1795,7 +1790,7 @@ export default function OrderDetailPage() {
                       <button
                         type="button"
                         onClick={() => setReassignTarget(null)}
-                        className="rounded-xl border bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        className="rounded-xl border bg-neutral-900 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-black"
                       >
                         เปลี่ยน
                       </button>
@@ -1812,11 +1807,11 @@ export default function OrderDetailPage() {
                       />
 
                       {reassignDropdownOpen && (
-                        <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border bg-white shadow-lg">
+                        <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border bg-neutral-900 shadow-lg">
                           {reassignSearchLoading ? (
-                            <p className="p-3 text-sm text-slate-500">กำลังค้นหา...</p>
+                            <p className="p-3 text-sm text-neutral-500">กำลังค้นหา...</p>
                           ) : reassignResults.length === 0 ? (
-                            <p className="p-3 text-sm text-slate-500">
+                            <p className="p-3 text-sm text-neutral-500">
                               {reassignSearch.trim() ? "ไม่พบลูกค้าที่ค้นหา" : "ยังไม่มีลูกค้าในระบบ"}
                             </p>
                           ) : (
@@ -1825,17 +1820,17 @@ export default function OrderDetailPage() {
                                 key={c.id}
                                 type="button"
                                 onClick={() => pickReassignTarget(c)}
-                                className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-slate-50"
+                                className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-black"
                               >
-                                <span className="font-medium text-slate-900">{c.name}</span>
-                                {c.phone && <span className="ml-2 text-slate-500">{c.phone}</span>}
+                                <span className="font-medium text-white">{c.name}</span>
+                                {c.phone && <span className="ml-2 text-neutral-500">{c.phone}</span>}
                               </button>
                             ))
                           )}
                           <button
                             type="button"
                             onClick={() => setReassignDropdownOpen(false)}
-                            className="block w-full border-t px-3 py-2 text-left text-xs text-slate-400 hover:bg-slate-50"
+                            className="block w-full border-t px-3 py-2 text-left text-xs text-neutral-500 hover:bg-black"
                           >
                             ปิด
                           </button>
@@ -1845,7 +1840,7 @@ export default function OrderDetailPage() {
                   )}
 
                   {reassignError && (
-                    <p className="mt-3 text-xs text-red-600">{reassignError}</p>
+                    <p className="mt-3 text-xs text-red-400">{reassignError}</p>
                   )}
 
                   <div className="mt-4 flex gap-3">
@@ -1861,7 +1856,7 @@ export default function OrderDetailPage() {
                       type="button"
                       onClick={cancelReassignCustomer}
                       disabled={savingReassign}
-                      className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      className="rounded-xl border px-4 py-2.5 text-sm font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
                     >
                       ยกเลิก
                     </button>
@@ -1870,9 +1865,9 @@ export default function OrderDetailPage() {
               )}
             </div>
 
-            <section className="rounded-2xl border bg-white shadow-sm">
+            <section className="rounded-2xl border bg-neutral-900 shadow-sm">
               <div className="flex items-center justify-between gap-2 border-b p-5">
-                <h2 className="text-lg font-semibold text-slate-900">
+                <h2 className="text-lg font-semibold text-white">
                   รายการสินค้า
                 </h2>
 
@@ -1885,12 +1880,12 @@ export default function OrderDetailPage() {
                     <button
                       type="button"
                       onClick={startEditPrices}
-                      className="text-xs font-medium text-amber-700 hover:underline"
+                      className="text-xs font-medium text-amber-400 hover:underline"
                     >
                       ✏️ แก้ไขราคา
                     </button>
                   ) : (
-                    <span className="text-xs text-slate-400">
+                    <span className="text-xs text-neutral-500">
                       ออเดอร์นี้อยู่ในสถานะสิ้นสุดแล้ว ไม่สามารถแก้ไขราคาได้
                     </span>
                   ))}
@@ -1898,7 +1893,7 @@ export default function OrderDetailPage() {
 
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[600px] text-left text-sm">
-                  <thead className="bg-slate-50 text-slate-600">
+                  <thead className="bg-black text-neutral-400">
                     <tr>
                       <th className="p-4">สินค้า</th>
                       <th className="p-4">จำนวน</th>
@@ -1914,17 +1909,17 @@ export default function OrderDetailPage() {
                         editingPrices && Number.isFinite(editedPrice) ? editedPrice : item.price;
 
                       return (
-                        <tr key={item.id} className="border-t hover:bg-slate-50">
+                        <tr key={item.id} className="border-t hover:bg-black">
                           <td className="p-4">
-                            <div className="font-semibold text-slate-900">
+                            <div className="font-semibold text-white">
                               {item.product_name || `สินค้ารหัส ${item.product_id}`}
                             </div>
-                            <div className="mt-1 text-xs text-slate-400">
+                            <div className="mt-1 text-xs text-neutral-500">
                               Product ID: {item.product_id}
                             </div>
                           </td>
-                          <td className="p-4 text-slate-700">{item.quantity}</td>
-                          <td className="p-4 text-slate-700">
+                          <td className="p-4 text-neutral-300">{item.quantity}</td>
+                          <td className="p-4 text-neutral-300">
                             {editingPrices ? (
                               <input
                                 type="number"
@@ -1938,7 +1933,7 @@ export default function OrderDetailPage() {
                               formatCurrency(item.price)
                             )}
                           </td>
-                          <td className="p-4 font-semibold text-slate-900">
+                          <td className="p-4 font-semibold text-white">
                             {formatCurrency(rowPrice * item.quantity)}
                           </td>
                         </tr>
@@ -1951,7 +1946,7 @@ export default function OrderDetailPage() {
               {editingPrices && (
                 <div className="border-t p-5">
                   {priceError && (
-                    <p className="mb-3 text-xs text-red-600">{priceError}</p>
+                    <p className="mb-3 text-xs text-red-400">{priceError}</p>
                   )}
                   <div className="flex flex-wrap items-center gap-3">
                     <button
@@ -1966,7 +1961,7 @@ export default function OrderDetailPage() {
                       type="button"
                       onClick={cancelEditPrices}
                       disabled={savingPrices}
-                      className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      className="rounded-xl border px-4 py-2.5 text-sm font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
                     >
                       ยกเลิก
                     </button>
@@ -2007,12 +2002,12 @@ export default function OrderDetailPage() {
 
                   return (
                     <>
-                      <div className="flex justify-between text-slate-600">
+                      <div className="flex justify-between text-neutral-400">
                         <span>ยอดรวมสินค้า{editingPrices ? " (ตัวอย่าง)" : ""}</span>
                         <span>{formatCurrency(previewSubtotal)}</span>
                       </div>
 
-                      <div className="flex items-center justify-between text-slate-600">
+                      <div className="flex items-center justify-between text-neutral-400">
                         <span>ค่าจัดส่ง</span>
                         {editingSummary ? (
                           <input
@@ -2028,7 +2023,7 @@ export default function OrderDetailPage() {
                         )}
                       </div>
 
-                      <div className="flex items-center justify-between text-slate-600">
+                      <div className="flex items-center justify-between text-neutral-400">
                         <span>ส่วนลด</span>
                         {editingSummary ? (
                           <input
@@ -2044,7 +2039,7 @@ export default function OrderDetailPage() {
                         )}
                       </div>
 
-                      <div className="flex justify-between border-t pt-2 text-base font-bold text-slate-900">
+                      <div className="flex justify-between border-t pt-2 text-base font-bold text-white">
                         <span>ยอดรวมสุทธิ{previewing ? " (ตัวอย่าง)" : ""}</span>
                         <span>{formatCurrency(previewTotal)}</span>
                       </div>
@@ -2058,12 +2053,12 @@ export default function OrderDetailPage() {
                             <button
                               type="button"
                               onClick={startEditSummary}
-                              className="text-xs font-medium text-amber-700 hover:underline"
+                              className="text-xs font-medium text-amber-400 hover:underline"
                             >
                               ✏️ แก้ไขค่าจัดส่ง/ส่วนลด
                             </button>
                           ) : (
-                            <span className="text-xs text-slate-400">
+                            <span className="text-xs text-neutral-500">
                               ออเดอร์นี้อยู่ในสถานะสิ้นสุดแล้ว ไม่สามารถแก้ไขค่าจัดส่ง/ส่วนลดได้
                             </span>
                           ))}
@@ -2072,7 +2067,7 @@ export default function OrderDetailPage() {
                       {editingSummary && (
                         <div className="pt-2">
                           {summaryError && (
-                            <p className="mb-2 text-xs text-red-600">{summaryError}</p>
+                            <p className="mb-2 text-xs text-red-400">{summaryError}</p>
                           )}
                           <div className="flex flex-wrap items-center gap-3">
                             <button
@@ -2087,7 +2082,7 @@ export default function OrderDetailPage() {
                               type="button"
                               onClick={cancelEditSummary}
                               disabled={savingSummary}
-                              className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                              className="rounded-xl border px-4 py-2.5 text-sm font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
                             >
                               ยกเลิก
                             </button>
@@ -2100,27 +2095,27 @@ export default function OrderDetailPage() {
               </div>
             </section>
 
-            <section className="mt-6 rounded-2xl border bg-white shadow-sm">
+            <section className="mt-6 rounded-2xl border bg-neutral-900 shadow-sm">
               <div className="border-b p-5">
-                <h2 className="text-lg font-semibold text-slate-900">
+                <h2 className="text-lg font-semibold text-white">
                   🚚 สรุปค่าจัดส่ง
                 </h2>
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-neutral-500">
                   แยกระหว่างเงินที่เรียกเก็บจากลูกค้ากับต้นทุนจริงที่ร้านจ่าย — ตัวเลขมาจากข้อมูลจริงใน
                   ระบบเท่านั้น แสดง N/A เมื่อไม่มีข้อมูล
                 </p>
               </div>
 
               <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl border bg-slate-50 p-4">
-                  <p className="text-xs text-slate-500">ค่าส่งที่เรียกเก็บจากลูกค้า</p>
-                  <p className="mt-1 text-lg font-bold text-slate-900">
+                <div className="rounded-xl border bg-black p-4">
+                  <p className="text-xs text-neutral-500">ค่าส่งที่เรียกเก็บจากลูกค้า</p>
+                  <p className="mt-1 text-lg font-bold text-white">
                     {formatCurrency(order.shipping_fee)}
                   </p>
                 </div>
-                <div className="rounded-xl border bg-slate-50 p-4">
-                  <p className="text-xs text-slate-500">ค่าขนส่งจริงที่ร้านจ่าย</p>
-                  <p className="mt-1 text-lg font-bold text-slate-900">
+                <div className="rounded-xl border bg-black p-4">
+                  <p className="text-xs text-neutral-500">ค่าขนส่งจริงที่ร้านจ่าย</p>
+                  <p className="mt-1 text-lg font-bold text-white">
                     {transactionsLoading
                       ? "..."
                       : actualShippingExpense === null
@@ -2128,9 +2123,9 @@ export default function OrderDetailPage() {
                         : formatCurrency(actualShippingExpense)}
                   </p>
                 </div>
-                <div className="rounded-xl border bg-slate-50 p-4">
-                  <p className="text-xs text-slate-500">ค่าเสียหายจากพัสดุตีกลับ</p>
-                  <p className="mt-1 text-lg font-bold text-slate-900">
+                <div className="rounded-xl border bg-black p-4">
+                  <p className="text-xs text-neutral-500">ค่าเสียหายจากพัสดุตีกลับ</p>
+                  <p className="mt-1 text-lg font-bold text-white">
                     {transactionsLoading
                       ? "..."
                       : returnShippingExpense === null
@@ -2138,9 +2133,9 @@ export default function OrderDetailPage() {
                         : formatCurrency(returnShippingExpense)}
                   </p>
                 </div>
-                <div className="rounded-xl border bg-slate-50 p-4">
-                  <p className="text-xs text-slate-500">ค่าธรรมเนียม COD</p>
-                  <p className="mt-1 text-lg font-bold text-slate-900">
+                <div className="rounded-xl border bg-black p-4">
+                  <p className="text-xs text-neutral-500">ค่าธรรมเนียม COD</p>
+                  <p className="mt-1 text-lg font-bold text-white">
                     {transactionsLoading ? "..." : codFee === null ? "N/A" : formatCurrency(codFee)}
                   </p>
                 </div>
@@ -2154,16 +2149,16 @@ export default function OrderDetailPage() {
               {!transactionsLoading && actualShippingExpense === null && (
                 <div className="border-t p-5">
                   {getAllowedNextStatuses(order.status).length === 0 ? (
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-neutral-500">
                       ออเดอร์นี้สิ้นสุดแล้ว — ไม่สามารถบันทึกค่าขนส่งได้
                     </p>
                   ) : recordingShipping ? (
                     <div className="max-w-sm">
-                      <h3 className="text-sm font-semibold text-slate-900">บันทึกค่าขนส่ง</h3>
+                      <h3 className="text-sm font-semibold text-white">บันทึกค่าขนส่ง</h3>
 
                       <div className="mt-3 grid gap-3">
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             จำนวนเงิน (บาท) *
                           </label>
                           <input
@@ -2177,7 +2172,7 @@ export default function OrderDetailPage() {
                         </div>
 
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             วันที่ *
                           </label>
                           <input
@@ -2190,7 +2185,7 @@ export default function OrderDetailPage() {
                       </div>
 
                       {shippingError && (
-                        <p className="mt-2 text-xs text-red-600">{shippingError}</p>
+                        <p className="mt-2 text-xs text-red-400">{shippingError}</p>
                       )}
 
                       <div className="mt-3 flex gap-3">
@@ -2206,7 +2201,7 @@ export default function OrderDetailPage() {
                           type="button"
                           onClick={cancelRecordShipping}
                           disabled={savingShipping}
-                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
                         >
                           ยกเลิก
                         </button>
@@ -2216,7 +2211,7 @@ export default function OrderDetailPage() {
                     <button
                       type="button"
                       onClick={startRecordShipping}
-                      className="text-xs font-medium text-amber-700 hover:underline"
+                      className="text-xs font-medium text-amber-400 hover:underline"
                     >
                       ➕ บันทึกค่าขนส่ง
                     </button>
@@ -2232,16 +2227,16 @@ export default function OrderDetailPage() {
               {!transactionsLoading && returnShippingExpense === null && (
                 <div className="border-t p-5">
                   {getAllowedNextStatuses(order.status).length === 0 ? (
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-neutral-500">
                       ออเดอร์นี้สิ้นสุดแล้ว — ไม่สามารถบันทึกค่าพัสดุตีกลับได้
                     </p>
                   ) : recordingReturnedParcel ? (
                     <div className="max-w-sm">
-                      <h3 className="text-sm font-semibold text-slate-900">บันทึกค่าพัสดุตีกลับ</h3>
+                      <h3 className="text-sm font-semibold text-white">บันทึกค่าพัสดุตีกลับ</h3>
 
                       <div className="mt-3 grid gap-3">
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             จำนวนเงิน (บาท) *
                           </label>
                           <input
@@ -2255,7 +2250,7 @@ export default function OrderDetailPage() {
                         </div>
 
                         <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">
+                          <label className="mb-1 block text-xs font-medium text-neutral-500">
                             วันที่ *
                           </label>
                           <input
@@ -2268,7 +2263,7 @@ export default function OrderDetailPage() {
                       </div>
 
                       {returnedParcelError && (
-                        <p className="mt-2 text-xs text-red-600">{returnedParcelError}</p>
+                        <p className="mt-2 text-xs text-red-400">{returnedParcelError}</p>
                       )}
 
                       <div className="mt-3 flex gap-3">
@@ -2284,7 +2279,7 @@ export default function OrderDetailPage() {
                           type="button"
                           onClick={cancelRecordReturnedParcel}
                           disabled={savingReturnedParcel}
-                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
                         >
                           ยกเลิก
                         </button>
@@ -2294,7 +2289,7 @@ export default function OrderDetailPage() {
                     <button
                       type="button"
                       onClick={startRecordReturnedParcel}
-                      className="text-xs font-medium text-amber-700 hover:underline"
+                      className="text-xs font-medium text-amber-400 hover:underline"
                     >
                       ➕ บันทึกค่าพัสดุตีกลับ
                     </button>
@@ -2309,21 +2304,21 @@ export default function OrderDetailPage() {
                 purpose. Per approved scope: multiple entries per order are allowed (the total below
                 is a running SUM, not "the one entry"), and the action is available on terminal
                 orders too — neither is hidden/blocked here or server-side. */}
-            <section className="mt-6 rounded-2xl border bg-white shadow-sm">
+            <section className="mt-6 rounded-2xl border bg-neutral-900 shadow-sm">
               <div className="border-b p-5">
-                <h2 className="text-lg font-semibold text-slate-900">
+                <h2 className="text-lg font-semibold text-white">
                   💼 ค่าคอมมิชชันแพลตฟอร์ม
                 </h2>
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-neutral-500">
                   ค่าคอมมิชชัน/ค่าธรรมเนียมการตัดจ่ายจริงจากแพลตฟอร์มสำหรับออเดอร์นี้ อาจมีได้มากกว่า 1
                   รายการ (เช่น รอบตัดจ่ายเพิ่มเติมหลังออเดอร์ปิดแล้ว) — ตัวเลขด้านล่างคือยอดรวมทุกรายการ
                 </p>
               </div>
 
               <div className="p-5">
-                <div className="rounded-xl border bg-slate-50 p-4">
-                  <p className="text-xs text-slate-500">ค่าคอมมิชชันแพลตฟอร์ม (รวมทุกรายการ)</p>
-                  <p className="mt-1 text-lg font-bold text-slate-900">
+                <div className="rounded-xl border bg-black p-4">
+                  <p className="text-xs text-neutral-500">ค่าคอมมิชชันแพลตฟอร์ม (รวมทุกรายการ)</p>
+                  <p className="mt-1 text-lg font-bold text-white">
                     {transactionsLoading
                       ? "..."
                       : platformCommissionTotal === null
@@ -2336,13 +2331,13 @@ export default function OrderDetailPage() {
               <div className="border-t p-5">
                 {recordingPlatformCommission ? (
                   <div className="max-w-sm">
-                    <h3 className="text-sm font-semibold text-slate-900">
+                    <h3 className="text-sm font-semibold text-white">
                       บันทึกค่าคอมมิชชันแพลตฟอร์ม
                     </h3>
 
                     <div className="mt-3 grid gap-3">
                       <div>
-                        <label className="mb-1 block text-xs font-medium text-slate-500">
+                        <label className="mb-1 block text-xs font-medium text-neutral-500">
                           จำนวนเงิน (บาท) *
                         </label>
                         <input
@@ -2356,7 +2351,7 @@ export default function OrderDetailPage() {
                       </div>
 
                       <div>
-                        <label className="mb-1 block text-xs font-medium text-slate-500">
+                        <label className="mb-1 block text-xs font-medium text-neutral-500">
                           วันที่ *
                         </label>
                         <input
@@ -2369,7 +2364,7 @@ export default function OrderDetailPage() {
                     </div>
 
                     {platformCommissionError && (
-                      <p className="mt-2 text-xs text-red-600">{platformCommissionError}</p>
+                      <p className="mt-2 text-xs text-red-400">{platformCommissionError}</p>
                     )}
 
                     <div className="mt-3 flex gap-3">
@@ -2385,7 +2380,7 @@ export default function OrderDetailPage() {
                         type="button"
                         onClick={cancelRecordPlatformCommission}
                         disabled={savingPlatformCommission}
-                        className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
                       >
                         ยกเลิก
                       </button>
@@ -2395,7 +2390,7 @@ export default function OrderDetailPage() {
                   <button
                     type="button"
                     onClick={startRecordPlatformCommission}
-                    className="text-xs font-medium text-amber-700 hover:underline"
+                    className="text-xs font-medium text-amber-400 hover:underline"
                   >
                     ➕ บันทึกค่าคอมมิชชันแพลตฟอร์ม
                   </button>
@@ -2407,19 +2402,19 @@ export default function OrderDetailPage() {
                 delivery proof photos), approved 2026-09-01. Fully independent of the order-status
                 card above — no automatic sync, no effect on transactions/inventory in either
                 direction. */}
-            <section className="mt-6 rounded-2xl border bg-white shadow-sm">
+            <section className="mt-6 rounded-2xl border bg-neutral-900 shadow-sm">
               <div className="border-b p-5">
-                <h2 className="text-lg font-semibold text-slate-900">
+                <h2 className="text-lg font-semibold text-white">
                   🚚 การจัดส่งพัสดุ
                 </h2>
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-neutral-500">
                   ข้อมูลขนส่ง/เลขพัสดุ/สถานะการจัดส่ง แยกต่างหากจากสถานะออเดอร์ด้านบน แก้ไขได้อิสระ
                   โดยไม่กระทบรายรับ/สต็อก/สถานะออเดอร์
                 </p>
               </div>
 
               <div className="grid gap-4 p-5 sm:grid-cols-2">
-                <label className="text-sm text-slate-700">
+                <label className="text-sm text-neutral-300">
                   ขนส่ง (บริษัทขนส่ง)
                   {/* STEP 58 — dropdown of common Thai carriers, backed by the same free-text
                       carrierInput/API contract as before (zero backend change). Any value not in
@@ -2475,7 +2470,7 @@ export default function OrderDetailPage() {
                   })()}
                 </label>
 
-                <label className="text-sm text-slate-700">
+                <label className="text-sm text-neutral-300">
                   เลขพัสดุ (Tracking Number)
                   <input
                     type="text"
@@ -2486,7 +2481,7 @@ export default function OrderDetailPage() {
                   />
                 </label>
 
-                <label className="text-sm text-slate-700 sm:col-span-2">
+                <label className="text-sm text-neutral-300 sm:col-span-2">
                   สถานะการจัดส่ง
                   <select
                     value={deliveryStatusInput}
@@ -2522,28 +2517,28 @@ export default function OrderDetailPage() {
                 <button
                   type="button"
                   onClick={() => setTrackingCheckOpen((current) => !current)}
-                  className="rounded-xl border px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  className="rounded-xl border px-4 py-2.5 text-sm font-medium text-neutral-300 hover:bg-black"
                 >
                   🔍 ตรวจสอบสถานะพัสดุ
                 </button>
 
-                <span className="w-fit rounded-full bg-amber-50 px-4 py-1.5 text-sm font-medium text-amber-700">
+                <span className="w-fit rounded-full bg-amber-950/40 px-4 py-1.5 text-sm font-medium text-amber-400">
                   {DELIVERY_STATUS_LABELS[order.delivery_status] || order.delivery_status}
                 </span>
 
                 {deliveryError && (
-                  <p className="w-full text-xs text-red-600">{deliveryError}</p>
+                  <p className="w-full text-xs text-red-400">{deliveryError}</p>
                 )}
               </div>
 
               {trackingCheckOpen && (
-                <div className="border-t bg-slate-50 p-5">
-                  <h3 className="text-sm font-semibold text-slate-900">
+                <div className="border-t bg-black p-5">
+                  <h3 className="text-sm font-semibold text-white">
                     ผลการตรวจสอบสถานะพัสดุ
                   </h3>
 
                   {!order.tracking_number ? (
-                    <p className="mt-2 text-sm text-slate-500">
+                    <p className="mt-2 text-sm text-neutral-500">
                       ยังไม่มีเลขพัสดุที่บันทึกไว้สำหรับออเดอร์นี้ กรุณากรอกและกด
                       &quot;บันทึกข้อมูลการจัดส่ง&quot; ก่อน
                     </p>
@@ -2556,10 +2551,10 @@ export default function OrderDetailPage() {
 
                       return (
                         <>
-                          <p className="mt-2 text-sm text-slate-500">
+                          <p className="mt-2 text-sm text-neutral-500">
                             ยังไม่สามารถตรวจสอบสถานะอัตโนมัติได้สำหรับบริษัทขนส่งนี้
                           </p>
-                          <p className="mt-1 text-xs text-slate-400">
+                          <p className="mt-1 text-xs text-neutral-500">
                             เลขพัสดุที่บันทึกไว้: {order.tracking_number}
                             {order.carrier ? ` (${order.carrier})` : ""}
                           </p>
@@ -2569,12 +2564,12 @@ export default function OrderDetailPage() {
                               href={trackingUrl}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="mt-3 inline-block rounded-xl border bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                              className="mt-3 inline-block rounded-xl border bg-neutral-900 px-4 py-2 text-sm font-medium text-neutral-300 hover:bg-neutral-800"
                             >
                               🔗 เปิดหน้าติดตามพัสดุ
                             </a>
                           ) : (
-                            <p className="mt-3 text-xs text-slate-400">
+                            <p className="mt-3 text-xs text-neutral-500">
                               ยังไม่มีลิงก์ติดตามพัสดุที่เชื่อถือได้สำหรับบริษัทขนส่งนี้ในระบบ
                             </p>
                           )}
@@ -2586,7 +2581,7 @@ export default function OrderDetailPage() {
               )}
 
               <div className="border-t p-5">
-                <h3 className="text-sm font-semibold text-slate-900">รูปหลักฐานการจัดส่ง</h3>
+                <h3 className="text-sm font-semibold text-white">รูปหลักฐานการจัดส่ง</h3>
 
                 <div className="mt-3">
                   <input
@@ -2600,21 +2595,21 @@ export default function OrderDetailPage() {
                       }
                       e.target.value = "";
                     }}
-                    className="text-sm text-slate-600"
+                    className="text-sm text-neutral-400"
                   />
                   {uploadingProof && (
-                    <p className="mt-1 text-xs text-slate-500">กำลังอัปโหลด...</p>
+                    <p className="mt-1 text-xs text-neutral-500">กำลังอัปโหลด...</p>
                   )}
                 </div>
 
                 {proofError && (
-                  <p className="mt-2 text-xs text-red-600">{proofError}</p>
+                  <p className="mt-2 text-xs text-red-400">{proofError}</p>
                 )}
 
                 {proofsLoading ? (
-                  <p className="mt-3 text-sm text-slate-500">กำลังโหลดรูปหลักฐาน...</p>
+                  <p className="mt-3 text-sm text-neutral-500">กำลังโหลดรูปหลักฐาน...</p>
                 ) : deliveryProofs.length === 0 ? (
-                  <p className="mt-3 text-sm text-slate-500">ยังไม่มีรูปหลักฐานการจัดส่ง</p>
+                  <p className="mt-3 text-sm text-neutral-500">ยังไม่มีรูปหลักฐานการจัดส่ง</p>
                 ) : (
                   <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
                     {deliveryProofs.map((proof) => (
@@ -2630,7 +2625,7 @@ export default function OrderDetailPage() {
                           type="button"
                           onClick={() => deleteDeliveryProof(proof.id)}
                           disabled={deletingProofId === proof.id}
-                          className="w-full border-t bg-white px-2 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                          className="w-full border-t bg-neutral-900 px-2 py-1.5 text-xs font-medium text-red-400 hover:bg-red-950/40 disabled:opacity-50"
                         >
                           {deletingProofId === proof.id ? "กำลังลบ..." : "ลบรูปนี้"}
                         </button>
@@ -2641,26 +2636,26 @@ export default function OrderDetailPage() {
               </div>
             </section>
 
-            <section className="mt-6 rounded-2xl border bg-white shadow-sm">
+            <section className="mt-6 rounded-2xl border bg-neutral-900 shadow-sm">
               <div className="border-b p-5">
-                <h2 className="text-lg font-semibold text-slate-900">
+                <h2 className="text-lg font-semibold text-white">
                   💳 ธุรกรรมที่เกี่ยวข้องกับออเดอร์
                 </h2>
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-neutral-500">
                   รายการนี้เป็นข้อมูลอ่านอย่างเดียว — ไม่สามารถแก้ไข/ลบธุรกรรมจากหน้านี้ได้
                 </p>
               </div>
 
               {transactionsError && (
-                <div className="m-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                <div className="m-5 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
                   {transactionsError}
                 </div>
               )}
 
               {transactionsLoading ? (
-                <p className="p-5 text-sm text-slate-500">กำลังโหลดข้อมูล...</p>
+                <p className="p-5 text-sm text-neutral-500">กำลังโหลดข้อมูล...</p>
               ) : !orderTransactions || orderTransactions.length === 0 ? (
-                <p className="p-5 text-sm text-slate-500">
+                <p className="p-5 text-sm text-neutral-500">
                   ยังไม่มีธุรกรรมที่ผูกกับออเดอร์นี้
                 </p>
               ) : (
@@ -2675,25 +2670,25 @@ export default function OrderDetailPage() {
                             <span
                               className={`w-fit rounded-full px-3 py-1 text-xs font-medium ${
                                 t.transactionType === "income"
-                                  ? "bg-emerald-50 text-emerald-700"
-                                  : "bg-red-50 text-red-700"
+                                  ? "bg-emerald-950/40 text-emerald-400"
+                                  : "bg-red-950/40 text-red-400"
                               }`}
                             >
                               {t.transactionType === "income" ? "รายได้" : "ค่าใช้จ่าย"}
                             </span>
-                            <p className="mt-2 text-sm font-semibold text-slate-900">
+                            <p className="mt-2 text-sm font-semibold text-white">
                               {categoryLabel(t.transactionType, t.category)}
                             </p>
                             {t.description && (
-                              <p className="mt-1 text-xs text-slate-500">{t.description}</p>
+                              <p className="mt-1 text-xs text-neutral-500">{t.description}</p>
                             )}
-                            <p className="mt-1 text-xs text-slate-400">{t.transactionDate}</p>
+                            <p className="mt-1 text-xs text-neutral-500">{t.transactionDate}</p>
                             {t.linkedOrderStatus && (
-                              <p className="mt-1 text-xs text-slate-500">
+                              <p className="mt-1 text-xs text-neutral-500">
                                 สถานะออเดอร์: {ORDER_STATUS_LABELS[t.linkedOrderStatus] || t.linkedOrderStatus}
                               </p>
                             )}
-                            <p className="mt-1 text-xs text-slate-500">
+                            <p className="mt-1 text-xs text-neutral-500">
                               {attachment?.loaded
                                 ? attachment.hasAttachment
                                   ? (
@@ -2703,7 +2698,7 @@ export default function OrderDetailPage() {
                                         href={attachment.fileUrl ?? "#"}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="text-amber-700 underline hover:text-amber-900"
+                                        className="text-amber-400 underline hover:text-amber-400"
                                       >
                                         ดูหลักฐาน
                                       </a>
@@ -2716,7 +2711,7 @@ export default function OrderDetailPage() {
 
                           <p
                             className={`text-lg font-bold ${
-                              t.transactionType === "income" ? "text-emerald-600" : "text-red-600"
+                              t.transactionType === "income" ? "text-emerald-400" : "text-red-400"
                             }`}
                           >
                             {t.transactionType === "income" ? "+" : "-"}
@@ -2727,16 +2722,16 @@ export default function OrderDetailPage() {
                     })}
                   </div>
 
-                  <div className="space-y-2 border-t bg-slate-50 p-5 text-sm">
-                    <div className="flex justify-between text-slate-600">
+                  <div className="space-y-2 border-t bg-black p-5 text-sm">
+                    <div className="flex justify-between text-neutral-400">
                       <span>รายได้รวม</span>
-                      <span className="font-semibold text-emerald-600">
+                      <span className="font-semibold text-emerald-400">
                         {formatCurrency(totalIncome)}
                       </span>
                     </div>
-                    <div className="flex justify-between text-slate-600">
+                    <div className="flex justify-between text-neutral-400">
                       <span>ค่าใช้จ่ายรวม</span>
-                      <span className="font-semibold text-red-600">
+                      <span className="font-semibold text-red-400">
                         {formatCurrency(totalExpense)}
                       </span>
                     </div>

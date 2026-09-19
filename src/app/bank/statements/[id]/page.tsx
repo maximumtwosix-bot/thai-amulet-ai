@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import BackLink from "@/components/BackLink";
 
 // STEP C.5 — Client Component; types copied field-for-field from the ACTUAL current API responses
 // (src/app/api/bank-statements/[id]/route.ts, src/app/api/bank-statements/[id]/confirm/route.ts),
@@ -19,19 +20,19 @@ const statusLabels: Record<string, string> = {
   CANCELLED: "ยกเลิกแล้ว",
 };
 const statusBadgeClass: Record<string, string> = {
-  UPLOADED: "bg-slate-100 text-slate-600",
-  VALIDATING: "bg-slate-100 text-slate-600",
-  PREVIEW_READY: "bg-amber-50 text-amber-700",
-  IMPORTING: "bg-slate-100 text-slate-600",
-  IMPORTED: "bg-emerald-50 text-emerald-700",
-  FAILED: "bg-red-50 text-red-700",
-  CANCELLED: "bg-slate-100 text-slate-600",
+  UPLOADED: "bg-neutral-800 text-neutral-400",
+  VALIDATING: "bg-neutral-800 text-neutral-400",
+  PREVIEW_READY: "bg-amber-950/40 text-amber-400",
+  IMPORTING: "bg-neutral-800 text-neutral-400",
+  IMPORTED: "bg-emerald-950/40 text-emerald-400",
+  FAILED: "bg-red-950/40 text-red-400",
+  CANCELLED: "bg-neutral-800 text-neutral-400",
 };
 export function statusLabel(status: string): string {
   return statusLabels[status] ?? status;
 }
 export function statusBadge(status: string): string {
-  return statusBadgeClass[status] ?? "bg-slate-100 text-slate-600";
+  return statusBadgeClass[status] ?? "bg-neutral-800 text-neutral-400";
 }
 
 // Exact message strings the backend uses to distinguish the two duplicate reasons (verified from
@@ -51,12 +52,12 @@ export const categoryLabels: Record<RowCategory, string> = {
   IMPORTED: "นำเข้าแล้ว",
 };
 export const categoryBadgeClass: Record<RowCategory, string> = {
-  NEW: "bg-emerald-50 text-emerald-700",
-  WARNING: "bg-amber-50 text-amber-700",
-  INVALID: "bg-red-50 text-red-700",
-  INFORMATIONAL: "bg-slate-100 text-slate-600",
-  DUPLICATE_CANDIDATE: "bg-purple-50 text-purple-700",
-  IMPORTED: "bg-emerald-50 text-emerald-700",
+  NEW: "bg-emerald-950/40 text-emerald-400",
+  WARNING: "bg-amber-950/40 text-amber-400",
+  INVALID: "bg-red-950/40 text-red-400",
+  INFORMATIONAL: "bg-neutral-800 text-neutral-400",
+  DUPLICATE_CANDIDATE: "bg-purple-950/40 text-purple-400",
+  IMPORTED: "bg-emerald-950/40 text-emerald-400",
 };
 
 // Preview-shape row (PREVIEW_READY / FAILED-fatalError) — matches ParsedRowResult from
@@ -333,31 +334,26 @@ export default function BankStatementDetailPage() {
     ).length ?? 0;
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-6xl">
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">📄 รายละเอียด Bank Statement</h1>
+            <h1 className="text-2xl font-bold text-white">📄 รายละเอียด Bank Statement</h1>
             {statement && (
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="mt-1 text-sm text-neutral-500">
                 {statement.bankName} - {statement.accountName} ({statement.accountNumberMasked})
               </p>
             )}
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/bank/statements"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              ← กลับรายการ Statement
-            </Link>
+            <BackLink href="/bank/statements" label="กลับรายการ Statement" />
             <LogoutButton />
           </div>
         </div>
 
         {error && (
-          <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="mb-6 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
             {error}
             <button
               type="button"
@@ -370,25 +366,25 @@ export default function BankStatementDetailPage() {
         )}
 
         {loading ? (
-          <div className="rounded-2xl border bg-white p-10 text-center text-sm text-slate-500 shadow-sm">
+          <div className="rounded-2xl border bg-neutral-900 p-10 text-center text-sm text-neutral-500 shadow-sm">
             กำลังโหลดข้อมูล Statement...
           </div>
         ) : !statement ? null : (
           <>
             {/* ===== Metadata card ===== */}
-            <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+            <section className="mb-6 rounded-2xl border bg-neutral-900 p-6 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-lg font-semibold text-slate-900">{statement.sourceFileName}</h2>
+                    <h2 className="text-lg font-semibold text-white">{statement.sourceFileName}</h2>
                     {/* STEP E.7 — file type shown explicitly, read from trusted server state. */}
                     {statement.sourceFileType && (
-                      <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+                      <span className="rounded-full bg-neutral-800 px-2.5 py-0.5 text-xs font-medium text-neutral-400">
                         {statement.sourceFileType}
                       </span>
                     )}
                   </div>
-                  <p className="mt-1 text-sm text-slate-500">
+                  <p className="mt-1 text-sm text-neutral-500">
                     ช่วงวันที่:{" "}
                     {statement.statementPeriodFrom && statement.statementPeriodTo
                       ? `${statement.statementPeriodFrom} - ${statement.statementPeriodTo}`
@@ -403,7 +399,7 @@ export default function BankStatementDetailPage() {
               </div>
 
               {statement.status === "FAILED" && (
-                <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
                   <p className="font-medium">นำเข้าไม่สำเร็จ: {statement.errorSummary || "เกิดข้อผิดพลาด"}</p>
                   <p className="mt-2">
                     {statement.sourceFileType === "PDF"
@@ -422,40 +418,40 @@ export default function BankStatementDetailPage() {
               {/* Summary cards */}
               <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div className="rounded-xl border p-4">
-                  <p className="text-xs text-slate-500">ทั้งหมด</p>
-                  <p className="mt-1 text-xl font-bold text-slate-900">{statement.summary.total ?? "-"}</p>
+                  <p className="text-xs text-neutral-500">ทั้งหมด</p>
+                  <p className="mt-1 text-xl font-bold text-white">{statement.summary.total ?? "-"}</p>
                 </div>
                 <div className="rounded-xl border p-4">
-                  <p className="text-xs text-slate-500">ใช้งานได้ / รายการใหม่</p>
-                  <p className="mt-1 text-xl font-bold text-emerald-700">{statement.summary.valid ?? "-"}</p>
+                  <p className="text-xs text-neutral-500">ใช้งานได้ / รายการใหม่</p>
+                  <p className="mt-1 text-xl font-bold text-emerald-400">{statement.summary.valid ?? "-"}</p>
                 </div>
                 <div className="rounded-xl border p-4">
-                  <p className="text-xs text-slate-500">รายการซ้ำ</p>
-                  <p className="mt-1 text-xl font-bold text-purple-700">{statement.summary.duplicate ?? "-"}</p>
+                  <p className="text-xs text-neutral-500">รายการซ้ำ</p>
+                  <p className="mt-1 text-xl font-bold text-purple-400">{statement.summary.duplicate ?? "-"}</p>
                 </div>
                 <div className="rounded-xl border p-4">
-                  <p className="text-xs text-slate-500">รายการผิดพลาด</p>
-                  <p className="mt-1 text-xl font-bold text-red-700">{statement.summary.invalid ?? "-"}</p>
+                  <p className="text-xs text-neutral-500">รายการผิดพลาด</p>
+                  <p className="mt-1 text-xl font-bold text-red-400">{statement.summary.invalid ?? "-"}</p>
                 </div>
               </div>
             </section>
 
             {/* ===== Confirm section (PREVIEW_READY only) ===== */}
             {statement.status === "PREVIEW_READY" && !confirmResult && (
-              <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-slate-900">ยืนยันการนำเข้า</h2>
-                <div className="mt-3 space-y-1 text-sm text-slate-700">
+              <section className="mb-6 rounded-2xl border bg-neutral-900 p-6 shadow-sm">
+                <h2 className="text-lg font-semibold text-white">ยืนยันการนำเข้า</h2>
+                <div className="mt-3 space-y-1 text-sm text-neutral-300">
                   <p>
                     ยืนยันนำเข้ารายการใหม่ {statement.summary.valid ?? 0} รายการ
                     {overrideRowNumbers.size > 0 && ` + รายการซ้ำที่เลือกนำเข้า ${overrideRowNumbers.size} รายการ`}
                   </p>
                   {(statement.summary.duplicate ?? 0) > 0 && (
-                    <p className="text-slate-500">
+                    <p className="text-neutral-500">
                       รายการซ้ำ {(statement.summary.duplicate ?? 0) - overrideRowNumbers.size} รายการจะไม่ถูกนำเข้า
                     </p>
                   )}
                   {(statement.summary.invalid ?? 0) > 0 && (
-                    <p className="text-slate-500">
+                    <p className="text-neutral-500">
                       รายการผิดพลาด {statement.summary.invalid} รายการจะไม่ถูกนำเข้า
                     </p>
                   )}
@@ -467,7 +463,7 @@ export default function BankStatementDetailPage() {
                     "password is never persisted across the upload -> confirm boundary" decision. ===== */}
                 {statement.sourceFileType === "PDF" && (
                   <div className="mt-4 max-w-sm">
-                    <label htmlFor="confirm-pdf-password" className="mb-1 block text-xs font-medium text-slate-500">
+                    <label htmlFor="confirm-pdf-password" className="mb-1 block text-xs font-medium text-neutral-500">
                       รหัสผ่านไฟล์ PDF{statement.pdfRequiresPasswordForPreview ? " *" : " (กรอกเฉพาะกรณีไฟล์มีรหัสผ่าน)"}
                     </label>
                     <input
@@ -479,14 +475,14 @@ export default function BankStatementDetailPage() {
                       placeholder={statement.pdfRequiresPasswordForPreview ? "จำเป็นต้องกรอกรหัสผ่าน" : "เว้นว่างไว้ถ้าไฟล์ไม่มีรหัสผ่าน"}
                       className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
                     />
-                    <p className="mt-1 text-xs text-slate-400">
+                    <p className="mt-1 text-xs text-neutral-500">
                       ต้องกรอกรหัสผ่านใหม่ทุกครั้งที่ยืนยันการนำเข้า — ระบบไม่บันทึกรหัสผ่านไว้ที่ใดทั้งสิ้น
                     </p>
                   </div>
                 )}
 
                 {confirmError && (
-                  <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  <div className="mt-3 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
                     {confirmError}
                   </div>
                 )}
@@ -506,9 +502,9 @@ export default function BankStatementDetailPage() {
             )}
 
             {confirmResult && (
-              <section className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-emerald-900">นำเข้าสำเร็จ</h2>
-                <p className="mt-2 text-sm text-emerald-800">
+              <section className="mb-6 rounded-2xl border border-emerald-900/50 bg-emerald-950/40 p-6 shadow-sm">
+                <h2 className="text-lg font-semibold text-emerald-400">นำเข้าสำเร็จ</h2>
+                <p className="mt-2 text-sm text-emerald-400">
                   นำเข้าแล้ว {confirmResult.imported} รายการ — ข้ามรายการซ้ำ {confirmResult.skippedDuplicates}{" "}
                   รายการ
                 </p>
@@ -516,20 +512,20 @@ export default function BankStatementDetailPage() {
             )}
 
             {/* ===== Row review table ===== */}
-            <section className="rounded-2xl border bg-white shadow-sm">
+            <section className="rounded-2xl border bg-neutral-900 shadow-sm">
               <div className="flex items-center justify-between border-b p-5">
-                <h2 className="text-lg font-semibold text-slate-900">
+                <h2 className="text-lg font-semibold text-white">
                   รายการธุรกรรม {statement.pagination.total > 0 && `(${statement.pagination.total} รายการ)`}
                 </h2>
                 {statement.status === "PREVIEW_READY" && overridableDuplicateCount > 0 && (
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-neutral-500">
                     เลือก &quot;นำเข้ารายการนี้ด้วย&quot; สำหรับรายการซ้ำที่มั่นใจว่าเป็นรายการที่แตกต่างกันจริง
                   </p>
                 )}
               </div>
 
               {statement.rows.length === 0 ? (
-                <div className="p-10 text-center text-sm text-slate-500">
+                <div className="p-10 text-center text-sm text-neutral-500">
                   {/* STEP E.7 — a password-protected PDF has no row-level detail to show here (GET
                       never has a password to decrypt with, STEP E.6.1) — explained honestly rather
                       than shown as a generic empty state; row-level detail becomes visible only
@@ -542,7 +538,7 @@ export default function BankStatementDetailPage() {
                 <>
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[1000px] text-left text-sm">
-                      <thead className="bg-slate-50 text-slate-600">
+                      <thead className="bg-black text-neutral-400">
                         <tr>
                           <th className="p-3">#</th>
                           <th className="p-3">วันที่</th>
@@ -585,31 +581,31 @@ export default function BankStatementDetailPage() {
                             category === "DUPLICATE_CANDIDATE" && !isBankIdDuplicate;
 
                           return (
-                            <tr key={`${rowNumber}-${idx}`} className="border-t hover:bg-slate-50">
-                              <td className="p-3 text-slate-500">{rowNumber}</td>
-                              <td className="p-3 whitespace-nowrap text-slate-700">{date ?? "-"}</td>
-                              <td className="p-3 max-w-xs truncate text-slate-700" title={description ?? ""}>
+                            <tr key={`${rowNumber}-${idx}`} className="border-t hover:bg-black">
+                              <td className="p-3 text-neutral-500">{rowNumber}</td>
+                              <td className="p-3 whitespace-nowrap text-neutral-300">{date ?? "-"}</td>
+                              <td className="p-3 max-w-xs truncate text-neutral-300" title={description ?? ""}>
                                 {description || "-"}
                               </td>
-                              <td className="p-3 text-slate-700">{formatSatang(debit)}</td>
-                              <td className="p-3 text-slate-700">{formatSatang(credit)}</td>
-                              <td className="p-3 font-medium text-slate-900">{formatSatang(amount)}</td>
-                              <td className="p-3 text-slate-500">{formatSatang(balance)}</td>
-                              <td className="p-3 text-slate-500">{bankTransactionId || "-"}</td>
+                              <td className="p-3 text-neutral-300">{formatSatang(debit)}</td>
+                              <td className="p-3 text-neutral-300">{formatSatang(credit)}</td>
+                              <td className="p-3 font-medium text-white">{formatSatang(amount)}</td>
+                              <td className="p-3 text-neutral-500">{formatSatang(balance)}</td>
+                              <td className="p-3 text-neutral-500">{bankTransactionId || "-"}</td>
                               <td className="p-3">
                                 <span
-                                  className={`rounded-full px-2.5 py-1 text-xs font-medium ${categoryBadgeClass[category] ?? "bg-slate-100 text-slate-600"}`}
+                                  className={`rounded-full px-2.5 py-1 text-xs font-medium ${categoryBadgeClass[category] ?? "bg-neutral-800 text-neutral-400"}`}
                                 >
                                   {categoryLabels[category] ?? category}
                                 </span>
                               </td>
-                              <td className="p-3 max-w-xs text-xs text-slate-500">
+                              <td className="p-3 max-w-xs text-xs text-neutral-500">
                                 {preview?.message || "-"}
                               </td>
                               {statement.status === "PREVIEW_READY" && (
                                 <td className="p-3">
                                   {isOverridableDuplicate && (
-                                    <label className="flex items-center gap-2 text-xs text-slate-600">
+                                    <label className="flex items-center gap-2 text-xs text-neutral-400">
                                       <input
                                         type="checkbox"
                                         checked={overrideRowNumbers.has(rowNumber)}
@@ -633,11 +629,11 @@ export default function BankStatementDetailPage() {
                       type="button"
                       onClick={() => setPage((p) => Math.max(1, p - 1))}
                       disabled={!statement.pagination.hasPrevious || loading}
-                      className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                     >
                       ← ก่อนหน้า
                     </button>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-neutral-500">
                       หน้า {statement.pagination.page} — แสดง {statement.rows.length} จาก{" "}
                       {statement.pagination.total} รายการ
                     </p>
@@ -645,7 +641,7 @@ export default function BankStatementDetailPage() {
                       type="button"
                       onClick={() => setPage((p) => p + 1)}
                       disabled={!statement.pagination.hasNext || loading}
-                      className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                     >
                       ถัดไป →
                     </button>
@@ -655,7 +651,7 @@ export default function BankStatementDetailPage() {
             </section>
 
             {statement.status === "IMPORTED" && (
-              <p className="mt-4 text-center text-xs text-slate-400">
+              <p className="mt-4 text-center text-xs text-neutral-500">
                 ข้อมูลชุดนี้เป็นหลักฐานต้นฉบับจากธนาคาร (source evidence) ไม่สามารถแก้ไขได้
               </p>
             )}

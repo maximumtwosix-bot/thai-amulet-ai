@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import BackLink from "@/components/BackLink";
+import { BotIcon, GeminiIcon, GoogleIcon, MessageCircleIcon, SparklesIcon } from "@/components/icons";
 
 // STEP 74 — Local AI Assistant chat UI. Client Component (same client/server-boundary reasoning
 // documented in src/app/customers/page.tsx etc.) — talks ONLY to this codebase's own
@@ -55,6 +56,86 @@ function isPendingConfirmation(value: unknown): value is PendingConfirmation {
     typeof v.message === "string"
   );
 }
+
+// Sidebar "รูปแบบคอนเทนต์" — เติมคำถามสำเร็จรูปลง textarea เท่านั้น ไม่ได้ยิง request เอง และไม่ใช่
+// tool/endpoint ใหม่ใดๆ — ยังคงเป็นข้อความธรรมดาที่ส่งผ่าน sendMessage()/POST /api/assistant/chat
+// เดิมทุกประการ ผู้ใช้แก้ไขข้อความก่อนกดส่งได้เสมอ
+type ContentPreset = {
+  id: string;
+  icon: string;
+  label: string;
+  prompt: string;
+};
+
+const CONTENT_PRESETS: ContentPreset[] = [
+  {
+    id: "sale-caption",
+    icon: "🛍️",
+    label: "แคปชั่นขายของ",
+    prompt: "ช่วยเขียนแคปชั่นขายพระเครื่อง เน้นจุดเด่นและความน่าเชื่อถือ สั้น กระชับ ดึงดูดให้อยากสั่งซื้อ พร้อมแฮชแท็กท้ายโพสต์",
+  },
+  {
+    id: "tiktok-script",
+    icon: "🎬",
+    label: "สคริปต์ TikTok",
+    prompt: "ช่วยเขียนสคริปต์วิดีโอ TikTok ความยาวประมาณ 30 วินาที แนะนำพระเครื่อง มี Hook เปิดเรื่องที่น่าสนใจในช่วง 3 วินาทีแรก",
+  },
+  {
+    id: "history-article",
+    icon: "📜",
+    label: "บทความประวัติพระ",
+    prompt: "ช่วยเขียนบทความสั้นๆ เล่าประวัติความเป็นมาและความศักดิ์สิทธิ์ของพระเครื่องรุ่นนี้ ในโทนที่น่าเชื่อถือและขลัง",
+  },
+  {
+    id: "facebook-ad",
+    icon: "📢",
+    label: "โฆษณา Facebook",
+    prompt: "ช่วยเขียนข้อความโฆษณา Facebook Ads สำหรับพระเครื่อง เน้นกระตุ้นให้ตัดสินใจสั่งซื้อทันที",
+  },
+  {
+    id: "hashtags",
+    icon: "#️⃣",
+    label: "แฮชแท็กแนะนำ",
+    prompt: "ช่วยแนะนำแฮชแท็กภาษาไทยและอังกฤษสำหรับโพสต์ขายพระเครื่อง เพื่อเพิ่มการมองเห็นบนโซเชียล",
+  },
+];
+
+// ปุ่มลัดเปิดหน้าเว็บจัดการ API ของผู้ให้บริการ AI ภายนอก — เป็นแค่ลิงก์ target="_blank" ธรรมดา
+// ไม่มีการเชื่อมต่อ/เรียก API ใดๆ จากหน้านี้ ไม่กระทบ POST /api/assistant/chat เดิมแต่อย่างใด
+type ExternalAiTool = {
+  id: string;
+  label: string;
+  href: string;
+  icon: typeof BotIcon;
+};
+
+const EXTERNAL_AI_TOOLS: ExternalAiTool[] = [
+  { id: "openai", label: "OpenAI API", href: "https://platform.openai.com/", icon: BotIcon },
+  {
+    id: "gemini",
+    label: "Google Gemini / AI Studio",
+    href: "https://aistudio.google.com/",
+    icon: SparklesIcon,
+  },
+  {
+    id: "chatgpt",
+    label: "ChatGPT",
+    href: "https://chatgpt.com/",
+    icon: MessageCircleIcon,
+  },
+  {
+    id: "google-flow",
+    label: "Google Flow",
+    href: "https://flow.google.com/",
+    icon: GoogleIcon,
+  },
+  {
+    id: "google-gemini",
+    label: "Google Gemini",
+    href: "https://gemini.google.com/",
+    icon: GeminiIcon,
+  },
+];
 
 function parseAssistantReply(raw: string): { content: string; pendingConfirmation: PendingConfirmation | null } {
   // The route's response body is NDJSON — one JSON object per line, each shaped like an Ollama
@@ -109,6 +190,15 @@ export default function AssistantPage() {
   const confirmingRef = useRef(false);
 
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+
+  function applyPreset(preset: ContentPreset) {
+    if (loading || pending) return;
+    setSelectedPresetId(preset.id);
+    setInput(preset.prompt);
+    textareaRef.current?.focus();
+  }
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -134,6 +224,7 @@ export default function AssistantPage() {
     if (!trimmed || loading || pending) return;
 
     setError("");
+    setSelectedPresetId(null);
 
     const nextMessages: ChatMessage[] = [...messages, { role: "user", content: trimmed }];
     setMessages(nextMessages);
@@ -243,36 +334,78 @@ export default function AssistantPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
-      <div className="mx-auto flex max-w-3xl flex-col" style={{ minHeight: "calc(100vh - 3rem)" }}>
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
+      <div className="mx-auto flex max-w-6xl flex-col" style={{ minHeight: "calc(100vh - 3rem)" }}>
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">🤖 ผู้ช่วย AI</h1>
-            <p className="mt-1 text-sm text-slate-500">
-              อ่านข้อมูลออเดอร์ สินค้า ลูกค้า ยอดขาย การเงิน กำไร และสต็อกได้ และ &ldquo;เสนอ&rdquo;
-              เปลี่ยนสถานะออเดอร์ได้ — แต่จะเปลี่ยนจริงก็ต่อเมื่อคุณกด &ldquo;อนุมัติ&rdquo; ยืนยันเองเท่านั้น
-              ข้อมูลประเภทอื่นนอกจากสถานะออเดอร์ ผู้ช่วยไม่สามารถแก้ไขได้โดยตรง
+            <h1 className="text-2xl font-bold text-white">🤖 ผู้ช่วย AI</h1>
+            <p className="mt-1 text-sm text-neutral-500">
+              คิดคอนเทนต์และแคปชั่นพระเครื่องได้ (เลือกรูปแบบจากด้านซ้าย) และอ่านข้อมูลออเดอร์ สินค้า
+              ลูกค้า ยอดขาย การเงิน กำไร และสต็อกได้ พร้อม &ldquo;เสนอ&rdquo;เปลี่ยนสถานะออเดอร์ — แต่จะ
+              เปลี่ยนจริงก็ต่อเมื่อคุณกด &ldquo;อนุมัติ&rdquo; ยืนยันเองเท่านั้น
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              ← กลับหน้าแรก
-            </Link>
+            <BackLink href="/" label="กลับหน้าแรก" />
             <LogoutButton />
           </div>
         </div>
 
-        <section className="flex flex-1 flex-col rounded-2xl border bg-white shadow-sm">
+        <div className="flex flex-1 flex-col gap-4 md:flex-row">
+          <aside className="shrink-0 rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-4 md:w-64">
+            <p className="mb-3 px-1 text-[11px] font-bold uppercase tracking-wider text-neutral-500">
+              รูปแบบคอนเทนต์
+            </p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-1">
+              {CONTENT_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => applyPreset(preset)}
+                  disabled={loading || !!pending}
+                  className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-all hover:bg-amber-500/10 hover:text-amber-500 hover:shadow-[0_0_15px_rgba(245,158,11,0.15)] disabled:cursor-not-allowed disabled:opacity-40 ${
+                    selectedPresetId === preset.id
+                      ? "border border-amber-500/40 bg-amber-500/10 text-amber-400"
+                      : "border border-transparent text-neutral-400"
+                  }`}
+                >
+                  <span className="text-base">{preset.icon}</span>
+                  <span>{preset.label}</span>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className="flex flex-1 flex-col rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)]">
+          <div className="flex items-center justify-between border-b border-neutral-800 px-5 py-3">
+            <p className="text-xs font-medium text-neutral-500">เครื่องมือ AI ภายนอก</p>
+            <div className="flex items-center gap-2">
+              {EXTERNAL_AI_TOOLS.map((tool) => {
+                const Icon = tool.icon;
+                return (
+                  <a
+                    key={tool.id}
+                    href={tool.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={tool.label}
+                    aria-label={tool.label}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-amber-500/20 bg-neutral-950/60 text-neutral-400 transition-all hover:border-amber-400 hover:text-amber-500 hover:shadow-[0_0_10px_rgba(245,158,11,0.4)]"
+                  >
+                    <Icon className="h-4 w-4" />
+                  </a>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="flex-1 space-y-4 overflow-y-auto p-5" style={{ minHeight: "50vh" }}>
             {messages.length === 0 && !loading && (
-              <div className="rounded-xl border border-dashed p-6 text-center text-sm text-slate-500">
-                ลองถามเช่น &ldquo;มีสินค้าอะไรบ้าง&rdquo;, &ldquo;ยอดขายวันนี้เท่าไร&rdquo;, &ldquo;สต็อกสินค้าตอนนี้เป็นยังไง&rdquo;
+              <div className="rounded-xl border border-dashed border-neutral-700 p-6 text-center text-sm text-neutral-500">
+                เลือกรูปแบบคอนเทนต์ด้านซ้าย หรือลองถามเช่น &ldquo;มีสินค้าอะไรบ้าง&rdquo;, &ldquo;ยอดขายวันนี้เท่าไร&rdquo;
                 <br />
-                <span className="mt-1 block text-xs text-slate-400">
+                <span className="mt-1 block text-xs text-neutral-500">
                   ⏳ AI รันบนเครื่องนี้เอง อาจใช้เวลาตอบ 30 วินาที ถึง 3 นาที โปรดรอสักครู่
                 </span>
               </div>
@@ -283,12 +416,12 @@ export default function AssistantPage() {
                 <div
                   className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm ${
                     m.role === "user"
-                      ? "bg-slate-900 text-white"
-                      : "border bg-slate-50 text-slate-800"
+                      ? "border border-neutral-700 bg-neutral-800 text-white"
+                      : "border border-amber-500/20 bg-amber-500/10 text-amber-50"
                   }`}
                 >
                   {m.content || (
-                    <span className="italic text-slate-400">
+                    <span className="italic text-neutral-500">
                       (ไม่ได้รับคำตอบ — โปรดลองถามอีกครั้ง)
                     </span>
                   )}
@@ -298,7 +431,7 @@ export default function AssistantPage() {
 
             {loading && (
               <div className="flex justify-start">
-                <div className="max-w-[85%] rounded-2xl border bg-slate-50 px-4 py-2.5 text-sm text-slate-500">
+                <div className="max-w-[85%] rounded-2xl border border-amber-500/10 bg-amber-500/5 px-4 py-2.5 text-sm text-neutral-400">
                   🤔 กำลังคิด... ({elapsedSeconds} วินาที)
                 </div>
               </div>
@@ -308,26 +441,26 @@ export default function AssistantPage() {
                 is never rendered here — only the human-readable order/status fields and message. */}
             {pending && (
               <div className="flex justify-start">
-                <div className="max-w-[85%] rounded-2xl border-2 border-amber-300 bg-amber-50 px-4 py-3 text-sm text-slate-800">
-                  <p className="font-semibold text-amber-800">⚠️ ต้องการการยืนยันจากคุณ</p>
+                <div className="max-w-[85%] rounded-2xl border-2 border-amber-900/50 bg-amber-950/40 px-4 py-3 text-sm text-neutral-100">
+                  <p className="font-semibold text-amber-400">⚠️ ต้องการการยืนยันจากคุณ</p>
                   <dl className="mt-2 space-y-0.5">
                     <div>
-                      <dt className="inline text-slate-500">คำสั่งซื้อ: </dt>
+                      <dt className="inline text-neutral-500">คำสั่งซื้อ: </dt>
                       <dd className="inline font-mono">{pending.orderNumber}</dd>
                     </div>
                     <div>
-                      <dt className="inline text-slate-500">สถานะปัจจุบัน: </dt>
+                      <dt className="inline text-neutral-500">สถานะปัจจุบัน: </dt>
                       <dd className="inline font-medium">{pending.currentStatus}</dd>
                     </div>
                     <div>
-                      <dt className="inline text-slate-500">สถานะที่ขอเปลี่ยน: </dt>
+                      <dt className="inline text-neutral-500">สถานะที่ขอเปลี่ยน: </dt>
                       <dd className="inline font-medium">{pending.requestedStatus}</dd>
                     </div>
                   </dl>
-                  <p className="mt-2 text-slate-600">{pending.message}</p>
+                  <p className="mt-2 text-neutral-400">{pending.message}</p>
 
                   {confirmError && (
-                    <p className="mt-2 rounded-lg bg-red-100 px-2 py-1 text-xs text-red-700">
+                    <p className="mt-2 rounded-lg bg-red-950/40 px-2 py-1 text-xs text-red-400">
                       {confirmError}
                     </p>
                   )}
@@ -345,7 +478,7 @@ export default function AssistantPage() {
                       type="button"
                       onClick={cancelPending}
                       disabled={confirming}
-                      className="rounded-lg border px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      className="rounded-lg border border-neutral-700 px-4 py-2 text-xs font-semibold text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                     >
                       ยกเลิก
                     </button>
@@ -358,13 +491,14 @@ export default function AssistantPage() {
           </div>
 
           {error && (
-            <div className="mx-5 mb-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <div className="mx-5 mb-3 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
               {error}
             </div>
           )}
 
-          <div className="flex items-end gap-3 border-t p-4">
+          <div className="flex items-end gap-3 border-t border-neutral-800 p-4">
             <textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -372,22 +506,23 @@ export default function AssistantPage() {
               placeholder={
                 pending
                   ? "โปรดกด \"อนุมัติ\" หรือ \"ยกเลิก\" ด้านบนก่อน"
-                  : "พิมพ์คำถาม... (Enter เพื่อส่ง, Shift+Enter ขึ้นบรรทัดใหม่)"
+                  : "พิมพ์คำถาม หรือเลือกรูปแบบคอนเทนต์ด้านซ้าย... (Enter เพื่อส่ง, Shift+Enter ขึ้นบรรทัดใหม่)"
               }
               rows={2}
-              className="flex-1 resize-none rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300 disabled:opacity-50"
+              className="flex-1 resize-none rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 disabled:opacity-50"
             />
 
             <button
               type="button"
               onClick={sendMessage}
               disabled={loading || !!pending || !input.trim()}
-              className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+              className="rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 px-5 py-2.5 text-sm font-medium text-black shadow-[0_0_15px_rgba(245,158,11,0.4)] hover:from-amber-400 hover:to-amber-300 disabled:opacity-50"
             >
               {loading ? "กำลังส่ง..." : "ส่ง"}
             </button>
           </div>
-        </section>
+          </section>
+        </div>
       </div>
     </main>
   );

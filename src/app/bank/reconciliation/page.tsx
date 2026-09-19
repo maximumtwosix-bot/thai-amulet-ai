@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import BackLink from "@/components/BackLink";
 
 // STEP D.7 — Client Component; duplicates plain response-shape types locally rather than importing
 // src/lib/* (which imports ./db → better-sqlite3), matching the exact convention already established
@@ -55,12 +56,12 @@ const statusLabels: Record<ReconciliationStatus, string> = {
 };
 
 const statusBadgeClass: Record<ReconciliationStatus, string> = {
-  SUGGESTED: "bg-slate-100 text-slate-600",
-  MATCHED: "bg-amber-50 text-amber-700",
-  CONFIRMED: "bg-emerald-50 text-emerald-700",
-  EXCLUDED: "bg-purple-50 text-purple-700",
-  UNMATCHED: "bg-slate-200 text-slate-700",
-  NEEDS_REVIEW: "bg-orange-50 text-orange-700",
+  SUGGESTED: "bg-neutral-800 text-neutral-400",
+  MATCHED: "bg-amber-950/40 text-amber-400",
+  CONFIRMED: "bg-emerald-950/40 text-emerald-400",
+  EXCLUDED: "bg-purple-950/40 text-purple-400",
+  UNMATCHED: "bg-neutral-700 text-neutral-300",
+  NEEDS_REVIEW: "bg-orange-950/40 text-orange-400",
 };
 
 // Must not crash on an unexpected value — same convention as bank/statements/page.tsx's
@@ -69,7 +70,7 @@ function statusLabel(status: string): string {
   return statusLabels[status as ReconciliationStatus] ?? status;
 }
 function statusBadge(status: string): string {
-  return statusBadgeClass[status as ReconciliationStatus] ?? "bg-slate-100 text-slate-600";
+  return statusBadgeClass[status as ReconciliationStatus] ?? "bg-neutral-800 text-neutral-400";
 }
 function strategyLabel(strategy: string): string {
   return strategyLabels[strategy as MatchStrategy] ?? strategy;
@@ -421,29 +422,24 @@ export default function ReconciliationPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-6xl">
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">🔗 Reconciliation</h1>
-            <p className="mt-1 text-sm text-slate-500">
+            <h1 className="text-2xl font-bold text-white">🔗 Reconciliation</h1>
+            <p className="mt-1 text-sm text-neutral-500">
               จับคู่รายการจาก Bank Statement กับรายการทางการเงิน (Finance) เพื่อกระทบยอด
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/bank"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              ← กลับหน้าบัญชีธนาคาร
-            </Link>
+            <BackLink href="/bank" label="กลับหน้าบัญชีธนาคาร" />
             <LogoutButton />
           </div>
         </div>
 
         {/* ===== MVP limitation disclosure — must not imply automatic matching ===== */}
-        <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
+        <div className="mb-6 rounded-xl border border-amber-900/50 bg-amber-950/40 p-4 text-xs text-amber-400">
           <p className="font-medium">ℹ️ ระบบนี้เป็นการจับคู่แบบ manual (MVP)</p>
           <p className="mt-1">
             ผู้ใช้ต้องเลือกรายการธนาคารและรายการทางการเงินด้วยตนเองทุกครั้ง ระบบยังไม่มีกลไกจับคู่อัตโนมัติ
@@ -453,8 +449,8 @@ export default function ReconciliationPage() {
         </div>
 
         {/* ===== Create suggestion ===== */}
-        <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">➕ เสนอการจับคู่ใหม่</h2>
+        <section className="mb-6 rounded-2xl border bg-neutral-900 p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-white">➕ เสนอการจับคู่ใหม่</h2>
 
           <div className="mt-4 grid gap-6 lg:grid-cols-2">
             {/* Bank transaction picker */}
@@ -462,18 +458,18 @@ export default function ReconciliationPage() {
                 picker table's intrinsic content width forces this grid track wider than the
                 viewport below the lg breakpoint, causing page-level horizontal scroll. */}
             <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-slate-800">1. เลือกรายการธนาคาร</h3>
+              <h3 className="text-sm font-semibold text-neutral-100">1. เลือกรายการธนาคาร</h3>
 
               <div className="mt-2">
-                <label className="mb-1 block text-xs font-medium text-slate-500">
+                <label className="mb-1 block text-xs font-medium text-neutral-500">
                   Bank Statement (นำเข้าแล้วเท่านั้น) *
                 </label>
                 {statementsLoading ? (
-                  <p className="text-xs text-slate-500">กำลังโหลด...</p>
+                  <p className="text-xs text-neutral-500">กำลังโหลด...</p>
                 ) : statementsError ? (
-                  <p className="text-xs text-red-600">{statementsError}</p>
+                  <p className="text-xs text-red-400">{statementsError}</p>
                 ) : importedStatements.length === 0 ? (
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-neutral-500">
                     ยังไม่มี Bank Statement ที่นำเข้าแล้ว —{" "}
                     <Link href="/bank/statements" className="underline hover:no-underline">
                       ไปนำเข้า Statement
@@ -499,14 +495,14 @@ export default function ReconciliationPage() {
               {selectedStatementId && (
                 <div className="mt-3 max-h-72 overflow-auto rounded-xl border">
                   {statementRowsLoading ? (
-                    <p className="p-4 text-center text-xs text-slate-500">กำลังโหลดรายการ...</p>
+                    <p className="p-4 text-center text-xs text-neutral-500">กำลังโหลดรายการ...</p>
                   ) : statementRowsError ? (
-                    <p className="p-4 text-center text-xs text-red-600">{statementRowsError}</p>
+                    <p className="p-4 text-center text-xs text-red-400">{statementRowsError}</p>
                   ) : statementRows.length === 0 ? (
-                    <p className="p-4 text-center text-xs text-slate-500">ไม่มีรายการในไฟล์นี้</p>
+                    <p className="p-4 text-center text-xs text-neutral-500">ไม่มีรายการในไฟล์นี้</p>
                   ) : (
                     <table className="w-full text-left text-xs">
-                      <thead className="sticky top-0 bg-slate-50 text-slate-600">
+                      <thead className="sticky top-0 bg-black text-neutral-400">
                         <tr>
                           <th className="p-2"></th>
                           <th className="p-2">วันที่</th>
@@ -518,8 +514,8 @@ export default function ReconciliationPage() {
                         {statementRows.map((row) => (
                           <tr
                             key={row.bankStatementTransactionId}
-                            className={`cursor-pointer border-t hover:bg-slate-50 ${
-                              selectedBankTxnId === row.bankStatementTransactionId ? "bg-amber-50" : ""
+                            className={`cursor-pointer border-t hover:bg-black ${
+                              selectedBankTxnId === row.bankStatementTransactionId ? "bg-amber-950/40" : ""
                             }`}
                             onClick={() => selectBankRow(row)}
                           >
@@ -549,7 +545,7 @@ export default function ReconciliationPage() {
 
             {/* Financial transaction picker */}
             <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-slate-800">2. เลือกรายการทางการเงิน</h3>
+              <h3 className="text-sm font-semibold text-neutral-100">2. เลือกรายการทางการเงิน</h3>
 
               <div className="mt-2 flex items-center gap-2">
                 <select
@@ -567,14 +563,14 @@ export default function ReconciliationPage() {
 
               <div className="mt-2 max-h-72 overflow-auto rounded-xl border">
                 {financialLoading ? (
-                  <p className="p-4 text-center text-xs text-slate-500">กำลังโหลดรายการ...</p>
+                  <p className="p-4 text-center text-xs text-neutral-500">กำลังโหลดรายการ...</p>
                 ) : financialError ? (
-                  <p className="p-4 text-center text-xs text-red-600">{financialError}</p>
+                  <p className="p-4 text-center text-xs text-red-400">{financialError}</p>
                 ) : filteredFinancialTransactions.length === 0 ? (
-                  <p className="p-4 text-center text-xs text-slate-500">ไม่มีรายการ</p>
+                  <p className="p-4 text-center text-xs text-neutral-500">ไม่มีรายการ</p>
                 ) : (
                   <table className="w-full text-left text-xs">
-                    <thead className="sticky top-0 bg-slate-50 text-slate-600">
+                    <thead className="sticky top-0 bg-black text-neutral-400">
                       <tr>
                         <th className="p-2"></th>
                         <th className="p-2">วันที่</th>
@@ -586,8 +582,8 @@ export default function ReconciliationPage() {
                       {filteredFinancialTransactions.map((t) => (
                         <tr
                           key={t.id}
-                          className={`cursor-pointer border-t hover:bg-slate-50 ${
-                            selectedFinancialTxnId === t.id ? "bg-amber-50" : ""
+                          className={`cursor-pointer border-t hover:bg-black ${
+                            selectedFinancialTxnId === t.id ? "bg-amber-950/40" : ""
                           }`}
                           onClick={() => setSelectedFinancialTxnId(t.id)}
                         >
@@ -605,7 +601,7 @@ export default function ReconciliationPage() {
                           </td>
                           <td
                             className={`p-2 whitespace-nowrap font-medium ${
-                              t.transactionType === "income" ? "text-emerald-700" : "text-red-700"
+                              t.transactionType === "income" ? "text-emerald-400" : "text-red-400"
                             }`}
                           >
                             {t.transactionType === "income" ? "+" : "-"}
@@ -622,7 +618,7 @@ export default function ReconciliationPage() {
 
           <div className="mt-5 grid gap-4 sm:grid-cols-3">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 จำนวนเงินที่จัดสรร (บาท) *
               </label>
               <input
@@ -634,13 +630,13 @@ export default function ReconciliationPage() {
                 className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
                 placeholder="0.00"
               />
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-xs text-neutral-500">
                 ไม่จำเป็นต้องเท่ากับยอดเต็มของรายการ — รองรับการจัดสรรบางส่วน (partial allocation)
               </p>
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">วิธีจับคู่ (Match Strategy) *</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">วิธีจับคู่ (Match Strategy) *</label>
               <select
                 value={matchStrategy}
                 onChange={(e) => setMatchStrategy(e.target.value as MatchStrategy)}
@@ -655,7 +651,7 @@ export default function ReconciliationPage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">หมายเหตุ (ถ้ามี)</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">หมายเหตุ (ถ้ามี)</label>
               <input
                 type="text"
                 value={note}
@@ -666,12 +662,12 @@ export default function ReconciliationPage() {
           </div>
 
           {suggestError && (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
               {suggestError}
             </div>
           )}
           {suggestSuccess && (
-            <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+            <div className="mt-4 rounded-xl border border-emerald-900/50 bg-emerald-950/40 p-3 text-sm text-emerald-400">
               {suggestSuccess}
             </div>
           )}
@@ -689,9 +685,9 @@ export default function ReconciliationPage() {
         </section>
 
         {/* ===== Existing matches list ===== */}
-        <section className="rounded-2xl border bg-white shadow-sm">
+        <section className="rounded-2xl border bg-neutral-900 shadow-sm">
           <div className="flex flex-col gap-4 border-b p-5 md:flex-row md:items-center md:justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">รายการ Reconciliation ทั้งหมด</h2>
+            <h2 className="text-lg font-semibold text-white">รายการ Reconciliation ทั้งหมด</h2>
 
             <select
               value={statusFilter}
@@ -708,7 +704,7 @@ export default function ReconciliationPage() {
           </div>
 
           {matchesError && (
-            <div className="m-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <div className="m-5 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
               {matchesError}
               <button
                 type="button"
@@ -721,15 +717,15 @@ export default function ReconciliationPage() {
           )}
 
           {matchesLoading ? (
-            <div className="p-10 text-center text-sm text-slate-500">กำลังโหลดรายการ Reconciliation...</div>
+            <div className="p-10 text-center text-sm text-neutral-500">กำลังโหลดรายการ Reconciliation...</div>
           ) : matches.length === 0 ? (
-            <div className="p-10 text-center text-sm text-slate-500">
+            <div className="p-10 text-center text-sm text-neutral-500">
               {statusFilter ? "ไม่พบรายการในสถานะนี้" : "ยังไม่มีรายการ Reconciliation"}
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[960px] text-left text-sm">
-                <thead className="bg-slate-50 text-slate-600">
+                <thead className="bg-black text-neutral-400">
                   <tr>
                     <th className="p-4">#</th>
                     <th className="p-4">รายการธนาคาร (ID)</th>
@@ -745,14 +741,14 @@ export default function ReconciliationPage() {
                   {matches.map((m) => {
                     const fin = financialById.get(m.transactionId);
                     return (
-                      <tr key={m.id} className="border-t hover:bg-slate-50">
-                        <td className="p-4 text-slate-500">{m.id}</td>
-                        <td className="p-4 text-slate-600">#{m.bankStatementTransactionId}</td>
-                        <td className="p-4 text-slate-600">
+                      <tr key={m.id} className="border-t hover:bg-black">
+                        <td className="p-4 text-neutral-500">{m.id}</td>
+                        <td className="p-4 text-neutral-400">#{m.bankStatementTransactionId}</td>
+                        <td className="p-4 text-neutral-400">
                           {fin ? (
                             <>
                               <div>{fin.description || fin.category}</div>
-                              <div className="text-xs text-slate-400">
+                              <div className="text-xs text-neutral-500">
                                 {fin.transactionDate} · {fin.transactionType === "income" ? "รายรับ" : "รายจ่าย"}
                               </div>
                             </>
@@ -760,8 +756,8 @@ export default function ReconciliationPage() {
                             `#${m.transactionId}`
                           )}
                         </td>
-                        <td className="p-4 font-medium text-slate-900">{formatSatang(m.allocatedAmount)}</td>
-                        <td className="p-4 text-slate-600">{strategyLabel(m.matchStrategy)}</td>
+                        <td className="p-4 font-medium text-white">{formatSatang(m.allocatedAmount)}</td>
+                        <td className="p-4 text-neutral-400">{strategyLabel(m.matchStrategy)}</td>
                         <td className="p-4">
                           <span
                             className={`rounded-full px-3 py-1 text-xs font-medium ${statusBadge(m.status)}`}
@@ -769,11 +765,11 @@ export default function ReconciliationPage() {
                             {statusLabel(m.status)}
                           </span>
                         </td>
-                        <td className="p-4 whitespace-nowrap text-slate-500">{m.updatedAt}</td>
+                        <td className="p-4 whitespace-nowrap text-neutral-500">{m.updatedAt}</td>
                         <td className="p-4">
                           <Link
                             href={`/bank/reconciliation/${m.id}`}
-                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800"
                           >
                             เปิดดู
                           </Link>

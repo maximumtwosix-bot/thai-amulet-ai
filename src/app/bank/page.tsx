@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import BackLink from "@/components/BackLink";
 
 // STEP B.5 — Client Component, so this duplicates the plain shape of the API's response types
 // locally rather than importing src/lib/bankAccounts.ts (which imports ./db → better-sqlite3 —
@@ -45,9 +46,9 @@ const classificationLabels: Record<Classification, string> = {
 };
 
 const classificationBadgeClass: Record<Classification, string> = {
-  BUSINESS: "bg-blue-50 text-blue-700",
-  PERSONAL: "bg-amber-50 text-amber-700",
-  MIXED: "bg-purple-50 text-purple-700",
+  BUSINESS: "bg-blue-950/40 text-blue-400",
+  PERSONAL: "bg-amber-950/40 text-amber-400",
+  MIXED: "bg-purple-950/40 text-purple-400",
 };
 
 const accountTypeLabels: Record<AccountType, string> = {
@@ -402,15 +403,15 @@ export default function BankAccountsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-5xl">
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">🏦 บัญชีธนาคาร</h1>
-            <p className="mt-1 text-sm text-slate-500">
+            <h1 className="text-2xl font-bold text-white">🏦 บัญชีธนาคาร</h1>
+            <p className="mt-1 text-sm text-neutral-500">
               จัดการบัญชีธนาคารที่เกี่ยวข้องกับรายรับ/รายจ่าย และการกระทบยอดในอนาคต
             </p>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-xs text-neutral-500">
               บัญชีเหล่านี้จะถูกใช้เชื่อมกับ Bank Statement, Reconciliation และ Tax &amp; Accounting
               Center ในขั้นถัดไปของระบบ
             </p>
@@ -425,23 +426,18 @@ export default function BankAccountsPage() {
             </Link>
             <Link
               href="/bank/reconciliation"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              className="w-fit rounded-xl border bg-neutral-900 px-4 py-2.5 text-sm font-medium text-neutral-300 hover:bg-neutral-800"
             >
               🔗 Reconciliation
             </Link>
-            <Link
-              href="/"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              ← กลับหน้าแรก
-            </Link>
+            <BackLink href="/" label="กลับหน้าแรก" />
             <LogoutButton />
           </div>
         </div>
 
-        <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
+        <section className="mb-6 rounded-2xl border bg-neutral-900 p-6 shadow-sm">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">
+            <h2 className="text-lg font-semibold text-white">
               {editingId ? `✏️ แก้ไขบัญชีธนาคาร #${editingId}` : "➕ เพิ่มบัญชีธนาคาร"}
             </h2>
 
@@ -449,7 +445,7 @@ export default function BankAccountsPage() {
               <button
                 type="button"
                 onClick={startCreate}
-                className="hidden rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:block"
+                className="hidden rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-500 hover:bg-black sm:block"
                 title="ล้างฟอร์ม"
               >
                 ล้างฟอร์ม
@@ -459,7 +455,7 @@ export default function BankAccountsPage() {
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">ธนาคาร *</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">ธนาคาร *</label>
               <input
                 type="text"
                 value={form.bankName}
@@ -470,7 +466,7 @@ export default function BankAccountsPage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">ชื่อบัญชี *</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">ชื่อบัญชี *</label>
               <input
                 type="text"
                 value={form.accountName}
@@ -481,7 +477,7 @@ export default function BankAccountsPage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">เลขที่บัญชี *</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">เลขที่บัญชี *</label>
               <div className="flex items-center gap-2">
                 <input
                   type={showAccountNumber ? "text" : "password"}
@@ -494,7 +490,7 @@ export default function BankAccountsPage() {
                 <button
                   type="button"
                   onClick={() => setShowAccountNumber((v) => !v)}
-                  className="shrink-0 rounded-xl border px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  className="shrink-0 rounded-xl border px-3 py-2 text-xs font-medium text-neutral-400 hover:bg-black"
                   title={showAccountNumber ? "ซ่อนเลขที่บัญชี" : "แสดงเลขที่บัญชี"}
                 >
                   {showAccountNumber ? "🙈" : "👁️"}
@@ -503,7 +499,7 @@ export default function BankAccountsPage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">ประเภทบัญชี (ถ้ามี)</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">ประเภทบัญชี (ถ้ามี)</label>
               <select
                 value={form.accountType}
                 onChange={(e) => updateForm("accountType", e.target.value as "" | AccountType)}
@@ -519,7 +515,7 @@ export default function BankAccountsPage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">สกุลเงิน *</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">สกุลเงิน *</label>
               <input
                 type="text"
                 value={form.currency}
@@ -530,7 +526,7 @@ export default function BankAccountsPage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 ประเภทการใช้งานบัญชี *
               </label>
               <select
@@ -550,7 +546,7 @@ export default function BankAccountsPage() {
             </div>
 
             <div className="sm:col-span-2 lg:col-span-3">
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 วัตถุประสงค์ (ถ้ามี)
               </label>
               <input
@@ -563,7 +559,7 @@ export default function BankAccountsPage() {
             </div>
 
             <div className="sm:col-span-2 lg:col-span-3">
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 หมายเหตุ (ถ้ามี)
               </label>
               <input
@@ -576,7 +572,7 @@ export default function BankAccountsPage() {
           </div>
 
           {formError && (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
               {formError}
             </div>
           )}
@@ -596,7 +592,7 @@ export default function BankAccountsPage() {
                 type="button"
                 onClick={cancelEdit}
                 disabled={saving}
-                className="rounded-xl border px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                className="rounded-xl border px-5 py-2.5 text-sm font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
               >
                 ยกเลิก
               </button>
@@ -604,9 +600,9 @@ export default function BankAccountsPage() {
           </div>
         </section>
 
-        <section className="rounded-2xl border bg-white shadow-sm">
+        <section className="rounded-2xl border bg-neutral-900 shadow-sm">
           <div className="flex flex-col gap-4 border-b p-5 md:flex-row md:flex-wrap md:items-center md:justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">รายการบัญชีธนาคารทั้งหมด</h2>
+            <h2 className="text-lg font-semibold text-white">รายการบัญชีธนาคารทั้งหมด</h2>
 
             <div className="flex flex-wrap items-center gap-3">
               <input
@@ -645,7 +641,7 @@ export default function BankAccountsPage() {
           </div>
 
           {error && (
-            <div className="m-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <div className="m-5 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
               {error}
               <button
                 type="button"
@@ -658,11 +654,11 @@ export default function BankAccountsPage() {
           )}
 
           {loading ? (
-            <div className="p-10 text-center text-sm text-slate-500">
+            <div className="p-10 text-center text-sm text-neutral-500">
               กำลังโหลดรายการบัญชีธนาคาร...
             </div>
           ) : accounts.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 p-10 text-center text-sm text-slate-500">
+            <div className="flex flex-col items-center gap-3 p-10 text-center text-sm text-neutral-500">
               <p>
                 {search.trim() || classificationFilter || statusFilter
                   ? "ไม่พบบัญชีธนาคารที่ค้นหา"
@@ -681,7 +677,7 @@ export default function BankAccountsPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[960px] text-left text-sm">
-                <thead className="bg-slate-50 text-slate-600">
+                <thead className="bg-black text-neutral-400">
                   <tr>
                     <th className="p-4">ธนาคาร</th>
                     <th className="p-4">ชื่อบัญชี</th>
@@ -696,13 +692,13 @@ export default function BankAccountsPage() {
 
                 <tbody>
                   {accounts.map((account) => (
-                    <tr key={account.id} className="border-t hover:bg-slate-50">
-                      <td className="p-4 font-medium text-slate-900">{account.bankName}</td>
-                      <td className="p-4 text-slate-600">{account.accountName}</td>
-                      <td className="p-4 font-mono text-slate-600">
+                    <tr key={account.id} className="border-t hover:bg-black">
+                      <td className="p-4 font-medium text-white">{account.bankName}</td>
+                      <td className="p-4 text-neutral-400">{account.accountName}</td>
+                      <td className="p-4 font-mono text-neutral-400">
                         {account.accountNumberMasked}
                       </td>
-                      <td className="p-4 text-slate-600">
+                      <td className="p-4 text-neutral-400">
                         {account.accountType ? accountTypeLabels[account.accountType] : "-"}
                       </td>
                       <td className="p-4">
@@ -712,13 +708,13 @@ export default function BankAccountsPage() {
                           {classificationLabels[account.classification]}
                         </span>
                       </td>
-                      <td className="p-4 max-w-xs text-slate-600">{account.purpose || "-"}</td>
+                      <td className="p-4 max-w-xs text-neutral-400">{account.purpose || "-"}</td>
                       <td className="p-4">
                         <span
                           className={`rounded-full px-3 py-1 text-xs font-medium ${
                             account.isActive
-                              ? "bg-emerald-50 text-emerald-700"
-                              : "bg-slate-100 text-slate-600"
+                              ? "bg-emerald-950/40 text-emerald-400"
+                              : "bg-neutral-800 text-neutral-400"
                           }`}
                         >
                           {account.isActive ? "ใช้งานอยู่" : "ปิดใช้งาน"}
@@ -729,7 +725,7 @@ export default function BankAccountsPage() {
                           <button
                             onClick={() => startEdit(account.id)}
                             disabled={editLoadingId === account.id}
-                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                           >
                             {editLoadingId === account.id ? "กำลังโหลด..." : "แก้ไข"}
                           </button>
@@ -737,7 +733,7 @@ export default function BankAccountsPage() {
                           <button
                             onClick={() => toggleActive(account)}
                             disabled={statusChangingId === account.id}
-                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                           >
                             {statusChangingId === account.id
                               ? "กำลังบันทึก..."
@@ -749,7 +745,7 @@ export default function BankAccountsPage() {
                           <button
                             onClick={() => deleteAccount(account)}
                             disabled={deletingId === account.id}
-                            className="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                            className="rounded-xl border border-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-950/40 disabled:opacity-50"
                           >
                             {deletingId === account.id ? "กำลังลบ..." : "ลบ"}
                           </button>

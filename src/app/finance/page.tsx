@@ -1,8 +1,8 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import BackLink from "@/components/BackLink";
 import { ORDER_STATUS_LABELS, type OrderStatus } from "@/lib/orderStatus";
 
 // Local copies of the STEP 19 constant lists — deliberately NOT imported from @/lib/transactions,
@@ -785,57 +785,52 @@ export default function FinancePage() {
   }, [transactions]);
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-6xl">
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">💰 การเงิน</h1>
-            <p className="mt-1 text-sm text-slate-500">
+            <h1 className="text-2xl font-bold text-white">💰 การเงิน</h1>
+            <p className="mt-1 text-sm text-neutral-500">
               บันทึกรายรับ-รายจ่ายของธุรกิจ (บันทึกด้วยตนเอง)
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              ← กลับหน้าแรก
-            </Link>
+            <BackLink href="/" label="กลับหน้าแรก" />
             <LogoutButton />
           </div>
         </div>
 
         <div className="mb-6 grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">รายรับรวม</p>
-            <p className="mt-2 text-3xl font-bold text-emerald-600">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5 transition-all hover:border-amber-500/40 hover:shadow-[0_0_15px_rgba(245, 158, 11,0.1)]">
+            <p className="text-sm text-neutral-400">รายรับรวม</p>
+            <p className="mt-2 text-3xl font-bold text-emerald-400">
               {formatCurrency(totals.income)}
             </p>
           </div>
 
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">รายจ่ายรวม</p>
-            <p className="mt-2 text-3xl font-bold text-red-600">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5 transition-all hover:border-amber-500/40 hover:shadow-[0_0_15px_rgba(245, 158, 11,0.1)]">
+            <p className="text-sm text-neutral-400">รายจ่ายรวม</p>
+            <p className="mt-2 text-3xl font-bold text-rose-400">
               {formatCurrency(totals.expense)}
             </p>
           </div>
 
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">สุทธิ</p>
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5 transition-all hover:border-amber-500/40 hover:shadow-[0_0_15px_rgba(245, 158, 11,0.1)]">
+            <p className="text-sm text-neutral-400">สุทธิ</p>
             <p
-              className={`mt-2 text-3xl font-bold ${totals.net >= 0 ? "text-emerald-600" : "text-red-600"}`}
+              className={`mt-2 text-3xl font-bold ${totals.net >= 0 ? "text-emerald-400" : "text-rose-400"}`}
             >
               {formatCurrency(totals.net)}
             </p>
           </div>
         </div>
 
-        <section className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/40 p-6 shadow-sm">
+        <section className="mb-6 rounded-2xl border border-amber-900/50 bg-amber-950/40 p-6 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">📷 อ่านสลิป/บิลด้วย AI</h2>
-              <p className="mt-1 text-xs text-slate-500">
+              <h2 className="text-lg font-semibold text-white">📷 อ่านสลิป/บิลด้วย AI</h2>
+              <p className="mt-1 text-xs text-neutral-500">
                 อัปโหลดรูปสลิปโอนเงินหรือใบเสร็จ ให้ AI ช่วยกรอกข้อมูลเบื้องต้น (ต้องตรวจสอบและกดยืนยันเองก่อนบันทึกทุกครั้ง)
               </p>
             </div>
@@ -843,8 +838,8 @@ export default function FinancePage() {
             <label
               className={`cursor-pointer rounded-xl border px-4 py-2.5 text-sm font-semibold ${
                 aiUploading
-                  ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                  : "border-amber-400 bg-amber-500 text-white hover:bg-amber-600"
+                  ? "cursor-not-allowed border-neutral-800 bg-neutral-800 text-neutral-500"
+                  : "border-amber-900/50 bg-amber-500 text-white hover:bg-amber-600"
               }`}
             >
               {aiUploading ? "กำลังอ่านข้อมูลจากสลิป..." : "📷 อ่านสลิป/บิลด้วย AI"}
@@ -865,13 +860,13 @@ export default function FinancePage() {
           </div>
 
           {aiUploading && (
-            <div className="mt-4 rounded-xl border border-amber-200 bg-white p-4 text-sm text-amber-700">
+            <div className="mt-4 rounded-xl border border-amber-900/50 bg-neutral-900 p-4 text-sm text-amber-400">
               ⏳ กำลังอ่านข้อมูลจากสลิป...
             </div>
           )}
 
           {!aiUploading && aiError && (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
               {aiError}
             </div>
           )}
@@ -889,18 +884,18 @@ export default function FinancePage() {
               </div>
 
               <div>
-                <div className="rounded-xl border border-amber-300 bg-amber-100/60 p-3 text-xs font-medium text-amber-800">
+                <div className="rounded-xl border border-amber-900/50 bg-amber-950/60 p-3 text-xs font-medium text-amber-400">
                   ⚠️ ข้อมูลจาก AI กรุณาตรวจสอบก่อนบันทึก
                   {aiExtraction?.needsReview && " — กรุณาตรวจสอบข้อมูลก่อนบันทึก (มีบางฟิลด์ที่ AI ไม่มั่นใจ)"}
                   {aiExtraction?.confidence !== null && aiExtraction?.confidence !== undefined && (
-                    <span className="ml-1 text-amber-600">
+                    <span className="ml-1 text-amber-400">
                       (ความมั่นใจ AI ~{Math.round(aiExtraction.confidence * 100)}%)
                     </span>
                   )}
                 </div>
 
                 {aiExtraction && aiExtraction.fieldsNeedingReview.length > 0 && (
-                  <p className="mt-2 text-xs text-red-600">
+                  <p className="mt-2 text-xs text-red-400">
                     ฟิลด์ที่ควรตรวจสอบ:{" "}
                     {aiExtraction.fieldsNeedingReview
                       .map((f) => aiFieldLabels[f] || f)
@@ -909,7 +904,7 @@ export default function FinancePage() {
                 )}
 
                 {aiReviewMode === "readonly" ? (
-                  <div className="mt-3 grid gap-x-4 gap-y-1 text-sm text-slate-700 sm:grid-cols-2">
+                  <div className="mt-3 grid gap-x-4 gap-y-1 text-sm text-neutral-300 sm:grid-cols-2">
                     <p>
                       ประเภทเอกสาร:{" "}
                       {aiExtraction?.documentType ? documentTypeLabels[aiExtraction.documentType] : "- ไม่ทราบ -"}
@@ -933,7 +928,7 @@ export default function FinancePage() {
                 ) : (
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">ประเภท</label>
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">ประเภท</label>
                       <div className="flex gap-2">
                         <button
                           type="button"
@@ -943,8 +938,8 @@ export default function FinancePage() {
                           }}
                           className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
                             aiReviewForm.transactionType === "income"
-                              ? "border-emerald-600 bg-emerald-50 text-emerald-700"
-                              : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                              ? "border-emerald-600 bg-emerald-950/40 text-emerald-400"
+                              : "border-neutral-800 text-neutral-400 hover:bg-black"
                           }`}
                         >
                           รายรับ
@@ -957,8 +952,8 @@ export default function FinancePage() {
                           }}
                           className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
                             aiReviewForm.transactionType === "expense"
-                              ? "border-red-600 bg-red-50 text-red-700"
-                              : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                              ? "border-rose-600 bg-rose-950/40 text-rose-400"
+                              : "border-neutral-800 text-neutral-400 hover:bg-black"
                           }`}
                         >
                           รายจ่าย
@@ -967,7 +962,7 @@ export default function FinancePage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">วันที่</label>
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">วันที่</label>
                       <input
                         type="date"
                         value={aiReviewForm.transactionDate}
@@ -977,7 +972,7 @@ export default function FinancePage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">จำนวนเงิน</label>
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">จำนวนเงิน</label>
                       <input
                         type="number"
                         min="0"
@@ -989,7 +984,7 @@ export default function FinancePage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">หมวดหมู่</label>
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">หมวดหมู่</label>
                       <select
                         value={aiReviewForm.category}
                         onChange={(e) => updateAiReviewForm("category", e.target.value)}
@@ -1006,7 +1001,7 @@ export default function FinancePage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">ผู้โอน</label>
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">ผู้โอน</label>
                       <input
                         type="text"
                         value={aiReviewForm.payerName}
@@ -1016,7 +1011,7 @@ export default function FinancePage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">ผู้รับ</label>
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">ผู้รับ</label>
                       <input
                         type="text"
                         value={aiReviewForm.recipientName}
@@ -1026,7 +1021,7 @@ export default function FinancePage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         ธนาคาร/ช่องทางชำระเงิน
                       </label>
                       <input
@@ -1038,7 +1033,7 @@ export default function FinancePage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">เลขอ้างอิง</label>
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">เลขอ้างอิง</label>
                       <input
                         type="text"
                         value={aiReviewForm.referenceNumber}
@@ -1048,7 +1043,7 @@ export default function FinancePage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-medium text-slate-500">
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">
                         ช่องทางการขาย (ถ้ามี)
                       </label>
                       <select
@@ -1066,7 +1061,7 @@ export default function FinancePage() {
                     </div>
 
                     <div className="sm:col-span-2">
-                      <label className="mb-1 block text-xs font-medium text-slate-500">รายละเอียด</label>
+                      <label className="mb-1 block text-xs font-medium text-neutral-500">รายละเอียด</label>
                       <input
                         type="text"
                         value={aiReviewForm.description}
@@ -1078,7 +1073,7 @@ export default function FinancePage() {
                 )}
 
                 {aiConfirmError && (
-                  <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  <div className="mt-3 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
                     {aiConfirmError}
                   </div>
                 )}
@@ -1089,7 +1084,7 @@ export default function FinancePage() {
                       type="button"
                       onClick={() => setAiReviewMode("editing")}
                       disabled={aiConfirming}
-                      className="rounded-xl border px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      className="rounded-xl border px-4 py-2 text-sm font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                     >
                       แก้ไข
                     </button>
@@ -1098,7 +1093,7 @@ export default function FinancePage() {
                       type="button"
                       onClick={() => setAiReviewMode("readonly")}
                       disabled={aiConfirming}
-                      className="rounded-xl border px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      className="rounded-xl border px-4 py-2 text-sm font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                     >
                       เสร็จแก้ไข
                     </button>
@@ -1108,7 +1103,7 @@ export default function FinancePage() {
                     type="button"
                     onClick={resetAiSession}
                     disabled={aiConfirming}
-                    className="rounded-xl border px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                    className="rounded-xl border px-4 py-2 text-sm font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                   >
                     ยกเลิก
                   </button>
@@ -1127,22 +1122,22 @@ export default function FinancePage() {
           )}
         </section>
 
-        <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">
+        <section className="mb-6 rounded-2xl border bg-neutral-900 p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-white">
             {editingId ? `✏️ แก้ไขรายการ #${editingId}` : "➕ เพิ่มรายรับ / รายจ่าย"}
           </h2>
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">ประเภท</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">ประเภท</label>
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => switchTransactionType("income")}
                   className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
                     form.transactionType === "income"
-                      ? "border-emerald-600 bg-emerald-50 text-emerald-700"
-                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                      ? "border-emerald-600 bg-emerald-950/40 text-emerald-400"
+                      : "border-neutral-800 text-neutral-400 hover:bg-black"
                   }`}
                 >
                   รายรับ
@@ -1152,8 +1147,8 @@ export default function FinancePage() {
                   onClick={() => switchTransactionType("expense")}
                   className={`flex-1 rounded-xl border px-3 py-2 text-sm font-medium ${
                     form.transactionType === "expense"
-                      ? "border-red-600 bg-red-50 text-red-700"
-                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                      ? "border-rose-600 bg-rose-950/40 text-rose-400"
+                      : "border-neutral-800 text-neutral-400 hover:bg-black"
                   }`}
                 >
                   รายจ่าย
@@ -1162,7 +1157,7 @@ export default function FinancePage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">จำนวนเงิน (บาท)</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">จำนวนเงิน (บาท)</label>
               <input
                 type="number"
                 min="0"
@@ -1175,7 +1170,7 @@ export default function FinancePage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">วันที่</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">วันที่</label>
               <input
                 type="date"
                 value={form.transactionDate}
@@ -1185,7 +1180,7 @@ export default function FinancePage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">หมวดหมู่</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">หมวดหมู่</label>
               <select
                 value={form.category}
                 onChange={(e) => updateForm("category", e.target.value)}
@@ -1200,7 +1195,7 @@ export default function FinancePage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 ช่องทางการขาย (ถ้ามี)
               </label>
               <select
@@ -1218,7 +1213,7 @@ export default function FinancePage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 วิธีชำระเงิน (ถ้ามี)
               </label>
               <input
@@ -1231,7 +1226,7 @@ export default function FinancePage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 สินค้าที่เกี่ยวข้อง (ถ้ามี)
               </label>
               <select
@@ -1249,7 +1244,7 @@ export default function FinancePage() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 ออเดอร์ที่เกี่ยวข้อง (ถ้ามี)
               </label>
               <select
@@ -1267,7 +1262,7 @@ export default function FinancePage() {
             </div>
 
             <div className="sm:col-span-2 lg:col-span-3">
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 รายละเอียด (ถ้ามี)
               </label>
               <input
@@ -1280,7 +1275,7 @@ export default function FinancePage() {
             </div>
 
             <div className="sm:col-span-2 lg:col-span-3">
-              <label className="mb-1 block text-xs font-medium text-slate-500">
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
                 หมายเหตุ (ถ้ามี)
               </label>
               <textarea
@@ -1292,7 +1287,7 @@ export default function FinancePage() {
           </div>
 
           {formError && (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <div className="mt-4 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
               {formError}
             </div>
           )}
@@ -1312,7 +1307,7 @@ export default function FinancePage() {
                 type="button"
                 onClick={cancelEdit}
                 disabled={saving}
-                className="rounded-xl border px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                className="rounded-xl border px-5 py-2.5 text-sm font-medium text-neutral-300 hover:bg-black disabled:opacity-50"
               >
                 ยกเลิก
               </button>
@@ -1320,9 +1315,9 @@ export default function FinancePage() {
           </div>
         </section>
 
-        <section className="rounded-2xl border bg-white shadow-sm">
+        <section className="rounded-2xl border bg-neutral-900 shadow-sm">
           <div className="flex flex-col gap-4 border-b p-5 md:flex-row md:items-center md:justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">รายการทั้งหมด</h2>
+            <h2 className="text-lg font-semibold text-white">รายการทั้งหมด</h2>
 
             <div className="flex gap-2">
               {(["all", "income", "expense"] as const).map((type) => (
@@ -1332,7 +1327,7 @@ export default function FinancePage() {
                   className={`rounded-xl border px-3 py-1.5 text-xs font-medium ${
                     filterType === type
                       ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                      : "border-neutral-800 text-neutral-400 hover:bg-black"
                   }`}
                 >
                   {type === "all" ? "ทั้งหมด" : type === "income" ? "รายรับ" : "รายจ่าย"}
@@ -1342,19 +1337,19 @@ export default function FinancePage() {
           </div>
 
           {error && (
-            <div className="m-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <div className="m-5 rounded-xl border border-red-900/50 bg-red-950/40 p-4 text-sm text-red-400">
               {error}
             </div>
           )}
 
           {loading ? (
-            <div className="p-10 text-center text-sm text-slate-500">กำลังโหลดรายการ...</div>
+            <div className="p-10 text-center text-sm text-neutral-500">กำลังโหลดรายการ...</div>
           ) : transactions.length === 0 ? (
-            <div className="p-10 text-center text-sm text-slate-500">ยังไม่มีรายการ</div>
+            <div className="p-10 text-center text-sm text-neutral-500">ยังไม่มีรายการ</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px] text-left text-sm">
-                <thead className="bg-slate-50 text-slate-600">
+                <thead className="bg-black text-neutral-400">
                   <tr>
                     <th className="p-4">วันที่</th>
                     <th className="p-4">ประเภท</th>
@@ -1369,8 +1364,8 @@ export default function FinancePage() {
                 <tbody>
                   {transactions.map((t) => (
                     <Fragment key={t.id}>
-                    <tr className="border-t hover:bg-slate-50">
-                      <td className="p-4 whitespace-nowrap text-slate-500">
+                    <tr className="border-t hover:bg-black">
+                      <td className="p-4 whitespace-nowrap text-neutral-500">
                         {formatDate(t.transactionDate)}
                       </td>
 
@@ -1378,19 +1373,19 @@ export default function FinancePage() {
                         <span
                           className={`rounded-full px-3 py-1 text-xs font-semibold ${
                             t.transactionType === "income"
-                              ? "bg-emerald-50 text-emerald-700"
-                              : "bg-red-50 text-red-700"
+                              ? "bg-emerald-950/40 text-emerald-400"
+                              : "bg-rose-950/40 text-rose-400"
                           }`}
                         >
                           {t.transactionType === "income" ? "รายรับ" : "รายจ่าย"}
                         </span>
                       </td>
 
-                      <td className="p-4 text-slate-700">
+                      <td className="p-4 text-neutral-300">
                         {categoryLabel(t.transactionType, t.category)}
                       </td>
 
-                      <td className="p-4 max-w-xs text-slate-600">
+                      <td className="p-4 max-w-xs text-neutral-400">
                         {t.description || "-"}
                         {/* STEP 31 — orderId is set either by the automatic order→income link
                             (src/lib/orders.ts) or by manually picking an order in the form above;
@@ -1406,8 +1401,8 @@ export default function FinancePage() {
                           <span
                             className={`ml-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
                               t.linkedOrderStatus === "cancelled"
-                                ? "bg-red-100 text-red-700"
-                                : "bg-slate-100 text-slate-500"
+                                ? "bg-red-950/40 text-red-400"
+                                : "bg-neutral-800 text-neutral-500"
                             }`}
                           >
                             🔗 ออเดอร์ #{t.orderId}
@@ -1424,19 +1419,19 @@ export default function FinancePage() {
                         {t.orderId &&
                           t.linkedDeliveryStatus === "returned" &&
                           t.linkedOrderStatus !== "cancelled" && (
-                            <span className="ml-2 inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                            <span className="ml-2 inline-block rounded-full bg-red-950/40 px-2 py-0.5 text-xs font-medium text-red-400">
                               ⚠️ พัสดุตีกลับ — ยังไม่ยกเลิก
                             </span>
                           )}
                       </td>
 
-                      <td className="p-4 text-slate-600">
+                      <td className="p-4 text-neutral-400">
                         {t.salesChannel ? salesChannelLabels[t.salesChannel] : "-"}
                       </td>
 
                       <td
                         className={`p-4 font-semibold ${
-                          t.transactionType === "income" ? "text-emerald-600" : "text-red-600"
+                          t.transactionType === "income" ? "text-emerald-400" : "text-rose-400"
                         }`}
                       >
                         {t.transactionType === "income" ? "+" : "-"}
@@ -1447,16 +1442,16 @@ export default function FinancePage() {
                         <div className="flex gap-2">
                           <button
                             onClick={() => startEdit(t)}
-                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800"
                           >
                             แก้ไข
                           </button>
                           <button
                             onClick={() => toggleAttachments(t.id)}
-                            className={`rounded-xl border px-3 py-1.5 text-xs font-medium hover:bg-slate-100 ${
+                            className={`rounded-xl border px-3 py-1.5 text-xs font-medium hover:bg-neutral-800 ${
                               expandedAttachmentsId === t.id
                                 ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
-                                : "text-slate-700"
+                                : "text-neutral-300"
                             }`}
                           >
                             {/* STEP 85 — count comes from the server-side attachmentCount (GET
@@ -1472,7 +1467,7 @@ export default function FinancePage() {
                           <button
                             onClick={() => removeTransaction(t)}
                             disabled={deletingId === t.id}
-                            className="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                            className="rounded-xl border border-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-950/40 disabled:opacity-50"
                           >
                             {deletingId === t.id ? "กำลังลบ..." : "ลบ"}
                           </button>
@@ -1481,15 +1476,15 @@ export default function FinancePage() {
                     </tr>
 
                     {expandedAttachmentsId === t.id && (
-                      <tr className="border-t bg-slate-50">
+                      <tr className="border-t bg-black">
                         <td colSpan={7} className="p-4">
-                          <div className="rounded-xl border bg-white p-4">
+                          <div className="rounded-xl border bg-neutral-900 p-4">
                             <div className="flex flex-wrap items-center justify-between gap-3">
-                              <p className="text-sm font-semibold text-slate-700">
+                              <p className="text-sm font-semibold text-neutral-300">
                                 📎 ไฟล์แนบ (ใบเสร็จ / สลิปโอนเงิน)
                               </p>
 
-                              <label className="cursor-pointer rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">
+                              <label className="cursor-pointer rounded-xl border px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800">
                                 {attachmentUploading === t.id ? "กำลังอัปโหลด..." : "+ อัปโหลดไฟล์"}
                                 <input
                                   type="file"
@@ -1508,15 +1503,15 @@ export default function FinancePage() {
                             </div>
 
                             {attachmentError[t.id] && (
-                              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                              <div className="mt-3 rounded-xl border border-red-900/50 bg-red-950/40 p-3 text-sm text-red-400">
                                 {attachmentError[t.id]}
                               </div>
                             )}
 
                             {attachmentsLoading === t.id ? (
-                              <p className="mt-3 text-sm text-slate-500">กำลังโหลดไฟล์แนบ...</p>
+                              <p className="mt-3 text-sm text-neutral-500">กำลังโหลดไฟล์แนบ...</p>
                             ) : (attachmentsByTransaction[t.id]?.length ?? 0) === 0 ? (
-                              <p className="mt-3 text-sm text-slate-500">ยังไม่มีไฟล์แนบ</p>
+                              <p className="mt-3 text-sm text-neutral-500">ยังไม่มีไฟล์แนบ</p>
                             ) : (
                               <div className="mt-3 flex flex-wrap gap-3">
                                 {attachmentsByTransaction[t.id]!.map((att) => (
@@ -1534,7 +1529,7 @@ export default function FinancePage() {
                                     <button
                                       onClick={() => deleteAttachment(t.id, att.id)}
                                       disabled={attachmentDeletingId === att.id}
-                                      className="mt-2 w-full rounded-lg border border-red-200 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                      className="mt-2 w-full rounded-lg border border-red-900/50 py-1 text-xs font-medium text-red-400 hover:bg-red-950/40 disabled:opacity-50"
                                     >
                                       {attachmentDeletingId === att.id ? "กำลังลบ..." : "ลบ"}
                                     </button>

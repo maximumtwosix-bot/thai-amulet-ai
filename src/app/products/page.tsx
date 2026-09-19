@@ -1,7 +1,8 @@
 "use client";
 import { Fragment, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
+import BackLink from "@/components/BackLink";
+import { PenLineIcon, UploadCloudIcon, XIcon } from "@/components/icons";
 
 type Product = {
   id: number;
@@ -28,6 +29,13 @@ function getStockLevel(product: Pick<Product, "stock" | "low_stock_threshold">):
   if (stock <= 0) return "out";
   if (stock <= threshold) return "low";
   return "ok";
+}
+
+// Deterministic, illustrative-only mock "จำนวนชิ้นที่ขายได้" — there is no sold-count or order-history
+// column/query behind this. It exists purely so the best-seller sort/badges below have something to
+// render; it is NOT wired to real orders and must never be presented as an actual sales figure.
+function mockSoldCount(id: number): number {
+  return (id * 37) % 250;
 }
 // รูปภาพสินค้า — ใช้ API/ตาราง product_media ที่มีอยู่แล้ว (STEP 13/14) ไม่สร้าง route/ตารางใหม่
 // รูปแบบ type ตรงกับ src/app/video-studio/page.tsx (ProductMediaItem) เพื่อความสอดคล้อง
@@ -70,6 +78,31 @@ export default function ProductsPage() {
   const [error, setError] = useState("");
   const [form, setForm] = useState<FormState>(emptyForm);
 
+  // Dropzone สำหรับ "เพิ่มสินค้าใหม่" — เก็บไฟล์ไว้เฉยๆ จนกว่าจะสร้างสินค้าสำเร็จ (มี productId จริง)
+  // แล้วค่อยอัปโหลดต่อผ่าน uploadProductImage() ที่มีอยู่แล้ว (ยิง /api/products/[id]/media จริง)
+  const [newImageFile, setNewImageFile] = useState<File | null>(null);
+  const [newImagePreviewUrl, setNewImagePreviewUrl] = useState<string | null>(null);
+
+  function setNewImage(file: File | undefined | null) {
+    if (newImagePreviewUrl) {
+      URL.revokeObjectURL(newImagePreviewUrl);
+    }
+    if (!file) {
+      setNewImageFile(null);
+      setNewImagePreviewUrl(null);
+      return;
+    }
+    setNewImageFile(file);
+    setNewImagePreviewUrl(URL.createObjectURL(file));
+  }
+
+  function closeAddModal() {
+    setShowForm(false);
+    setForm(emptyForm);
+    setNewImage(null);
+    setError("");
+  }
+
   // ===== แก้ไขสินค้า (STEP 30) — แยก state จากฟอร์ม "เพิ่มสินค้า" โดยเจตนา ไม่ใช้ร่วมกัน =====
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<FormState>(emptyForm);
@@ -87,6 +120,7 @@ export default function ProductsPage() {
   const [showLowStockOnly, setShowLowStockOnly] = useState(false);
 
   function startEdit(product: Product) {
+    setStockAdjustingId(null);
     setEditingId(product.id);
     setEditForm({
       name: product.name,
@@ -263,15 +297,33 @@ export default function ProductsPage() {
   const [mediaActionErrors, setMediaActionErrors] = useState<Record<number, string>>({});
   const loadedMediaIdsRef = useRef<Set<number>>(new Set());
 
+  // อ่าน .json() แบบปลอดภัย — ถ้า response ไม่ใช่ JSON จริง (เช่น dev server/Turbopack ล่มแล้วตอบกลับ
+  // เป็นหน้า error HTML ของ Next.js แทน: "Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON")
+  // ให้คืน null แทนที่จะโยน exception ออกไปให้ UI พัง
+  async function safeJson(response: Response) {
+    try {
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
   async function loadProductMedia(productId: number) {
     try {
       const response = await fetch(`/api/products/${productId}/media`, {
         cache: "no-store",
       });
-      const data = await response.json();
-      if (response.ok && Array.isArray(data.items)) {
+      const data = await safeJson(response);
+      if (response.ok && data && Array.isArray(data.items)) {
         setMediaByProduct((current) => ({ ...current, [productId]: data.items }));
+      } else if (response.status === 404) {
+        // สินค้า id นี้ถูกลบไปแล้วจริงที่ฐานข้อมูล (เช่นถูกลบจากแท็บ/เครื่องอื่น) แต่ยังค้างอยู่ใน
+        // state เดิมของหน้านี้ (โหลดไว้ก่อนถูกลบ) — เอาออกจากรายการที่แสดงผลทันที กันไม่ให้หน้ายัง
+        // แสดงแถวผี หรือยิง request ซ้ำไปที่ id ที่ไม่มีอยู่จริงอีก
+        setProducts((current) => current.filter((p) => p.id !== productId));
       }
+      // กรณีอื่น (เช่น response ไม่ใช่ JSON เลย จาก dev server ที่ล่มชั่วคราว) — ปล่อยผ่านแบบ silent
+      // ไม่ตั้ง error message ใดๆ ใต้ชื่อสินค้า แค่แสดง "ไม่มีรูป" เหมือนกรณียังไม่มีรูปเลย
     } catch (err) {
       console.error(err);
     } finally {
@@ -317,7 +369,7 @@ export default function ProductsPage() {
         body: formData,
       });
 
-      const data = await response.json();
+      const data = await safeJson(response);
 
       if (!response.ok) {
         throw new Error(data?.error || "ไม่สามารถอัปโหลดรูปภาพได้");
@@ -346,7 +398,7 @@ export default function ProductsPage() {
         { method: "PATCH" }
       );
 
-      const data = await response.json();
+      const data = await safeJson(response);
 
       if (!response.ok) {
         throw new Error(data?.error || "ไม่สามารถตั้งรูปหลักได้");
@@ -378,7 +430,7 @@ export default function ProductsPage() {
         { method: "DELETE" }
       );
 
-      const data = await response.json();
+      const data = await safeJson(response);
 
       if (!response.ok) {
         throw new Error(data?.error || "ไม่สามารถลบรูปภาพได้");
@@ -526,8 +578,14 @@ export default function ProductsPage() {
         throw new Error(data?.error || "ไม่สามารถเพิ่มสินค้าได้");
       }
       setProducts((current) => [data, ...current]);
-      setForm(emptyForm);
-      setShowForm(false);
+
+      // สินค้าถูกสร้างสำเร็จแล้ว (มี data.id จริง) — ถ้าผู้ใช้เลือกรูปไว้ใน dropzone ก่อนกดบันทึก
+      // ให้อัปโหลดต่อทันทีผ่าน endpoint /api/products/[id]/media เดิม (ไม่มี route ใหม่)
+      if (newImageFile) {
+        await uploadProductImage(data.id, newImageFile);
+      }
+
+      closeAddModal();
     } catch (err) {
       console.error(err);
       setError(
@@ -581,195 +639,96 @@ export default function ProductsPage() {
   const lowStockProducts = products.filter(
     (product) => getStockLevel(product) === "low"
   );
-  const visibleProducts = showLowStockOnly
-    ? products.filter((product) => getStockLevel(product) !== "ok")
-    : products;
+  // Best-seller ranking uses mockSoldCount (see its own comment) — descending, purely for display.
+  const visibleProducts = (
+    showLowStockOnly
+      ? products.filter((product) => getStockLevel(product) !== "ok")
+      : products
+  )
+    .slice()
+    .sort((a, b) => mockSoldCount(b.id) - mockSoldCount(a.id));
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-black bg-[linear-gradient(to_right,#f59e0b08_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b08_1px,transparent_1px)] bg-[size:24px_24px] p-6">
       <div className="mx-auto max-w-7xl">
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">📦 จัดการสินค้า</h1>
-            <p className="mt-1 text-sm text-slate-500">
+            <h1 className="text-2xl font-bold text-white">📦 จัดการสินค้า</h1>
+            <p className="mt-1 text-sm text-neutral-400">
               เพิ่มและจัดการข้อมูลวัตถุมงคลของร้าน
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/"
-              className="w-fit rounded-xl border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              ← กลับหน้าแรก
-            </Link>
+            <BackLink href="/" label="กลับหน้าแรก" />
             <button
-              onClick={() => setShowForm(!showForm)}
-              className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700"
+              onClick={() => {
+                setEditingId(null);
+                setShowForm(true);
+              }}
+              className="rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-semibold text-black hover:bg-amber-400"
             >
-              {showForm ? "ปิดแบบฟอร์ม" : "+ เพิ่มสินค้า"}
+              + เพิ่มสินค้าใหม่
             </button>
             <LogoutButton />
           </div>
         </div>
         {error && (
-          <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="mb-6 rounded-xl border border-red-900/50 bg-red-950/30 p-4 text-sm text-red-400">
             {error}
           </div>
         )}
-        {showForm && (
-          <section className="mb-6 rounded-2xl border bg-white p-6 shadow-sm">
-            <h2 className="mb-4 text-lg font-semibold text-slate-900">
-              เพิ่มสินค้าใหม่
-            </h2>
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              <input
-                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                placeholder="ชื่อสินค้า"
-                value={form.name}
-                onChange={(e) =>
-                  updateForm("name", e.target.value)
-                }
-              />
-              <input
-                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                placeholder="รุ่น"
-                value={form.model}
-                onChange={(e) =>
-                  updateForm("model", e.target.value)
-                }
-              />
-              <input
-                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                placeholder="พระอาจารย์ / ผู้สร้าง"
-                value={form.master}
-                onChange={(e) =>
-                  updateForm("master", e.target.value)
-                }
-              />
-              <input
-                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                placeholder="ปีที่สร้าง"
-                value={form.year}
-                onChange={(e) =>
-                  updateForm("year", e.target.value)
-                }
-              />
-              <input
-                className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                placeholder="รายละเอียดสินค้า"
-                value={form.description}
-                onChange={(e) =>
-                  updateForm("description", e.target.value)
-                }
-              />
-              <input
-                className="w-full rounded-xl border px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-amber-300"
-                type="number"
-                placeholder="ราคาขาย"
-                value={form.price}
-                onChange={(e) =>
-                  updateForm("price", e.target.value)
-                }
-              />
-              <input
-                className="w-full rounded-xl border px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-amber-300"
-                type="number"
-                placeholder="ต้นทุน"
-                value={form.cost}
-                onChange={(e) =>
-                  updateForm("cost", e.target.value)
-                }
-              />
-              <input
-                className="w-full rounded-xl border px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-amber-300"
-                type="number"
-                placeholder="จำนวนสินค้า"
-                value={form.stock}
-                onChange={(e) =>
-                  updateForm("stock", e.target.value)
-                }
-              />
-              <input
-                className="w-full rounded-xl border px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-amber-300"
-                type="number"
-                min="0"
-                placeholder="เกณฑ์แจ้งเตือนสต็อกต่ำ (ค่าเริ่มต้น 0)"
-                value={form.lowStockThreshold}
-                onChange={(e) =>
-                  updateForm("lowStockThreshold", e.target.value)
-                }
-              />
-            </div>
-            <div className="mt-5 flex gap-3">
-              <button
-                onClick={addProduct}
-                disabled={saving}
-                className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
-              >
-                {saving ? "กำลังบันทึก..." : "บันทึกสินค้า"}
-              </button>
-              <button
-                onClick={() => setShowForm(false)}
-                disabled={saving}
-                className="rounded-xl border px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                ยกเลิก
-              </button>
-            </div>
-          </section>
-        )}
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5">
+            <p className="text-sm text-neutral-400">
               สินค้าทั้งหมด
             </p>
-            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">
+            <p className="mt-2 text-3xl font-bold tabular-nums text-white">
               {products.length}
             </p>
           </div>
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5">
+            <p className="text-sm text-neutral-400">
               สินค้าพร้อมขาย
             </p>
-            <p className="mt-2 text-3xl font-bold tabular-nums text-emerald-600">
+            <p className="mt-2 text-3xl font-bold tabular-nums text-emerald-400">
               {availableProducts}
             </p>
           </div>
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5">
+            <p className="text-sm text-neutral-400">
               จำนวนคงเหลือ
             </p>
-            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">
+            <p className="mt-2 text-3xl font-bold tabular-nums text-white">
               {totalStock.toLocaleString()}
             </p>
           </div>
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">
+          <div className="rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)] p-5">
+            <p className="text-sm text-neutral-400">
               มูลค่าสินค้าตามราคาขาย
             </p>
-            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">
+            <p className="mt-2 text-3xl font-bold tabular-nums text-white">
               ฿{stockValue.toLocaleString()}
             </p>
           </div>
-          <div className="rounded-2xl border bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-500">
+          <div className="rounded-2xl border border-amber-500/30 bg-gradient-to-b from-amber-900/20 to-neutral-900 p-5 shadow-sm">
+            <p className="text-sm text-amber-400">
               สินค้าใกล้หมด
             </p>
-            <p className="mt-2 text-3xl font-bold tabular-nums text-amber-600">
+            <p className="mt-2 text-3xl font-bold tabular-nums text-amber-400">
               {lowStockProducts.length}
             </p>
           </div>
         </section>
-        <section className="mt-6 overflow-hidden rounded-2xl border bg-white shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
-            <h2 className="text-lg font-semibold text-slate-900">
+        <section className="mt-6 overflow-hidden rounded-2xl border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800 p-5">
+            <h2 className="text-lg font-semibold text-white">
               รายการสินค้า
             </h2>
             <button
               onClick={() => setShowLowStockOnly((current) => !current)}
               className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
                 showLowStockOnly
-                  ? "border-amber-600 bg-amber-50 text-amber-700"
-                  : "text-slate-700 hover:bg-slate-100"
+                  ? "border-amber-500 bg-amber-950/30 text-amber-400"
+                  : "border-neutral-700 text-neutral-300 hover:bg-neutral-800"
               }`}
             >
               {showLowStockOnly
@@ -778,11 +737,11 @@ export default function ProductsPage() {
             </button>
           </div>
           {loading ? (
-            <div className="p-10 text-center text-sm text-slate-500">
+            <div className="p-10 text-center text-sm text-neutral-500">
               กำลังโหลดข้อมูลสินค้า...
             </div>
           ) : products.length === 0 ? (
-            <div className="p-10 text-center text-sm text-slate-500">
+            <div className="p-10 text-center text-sm text-neutral-500">
               <p className="text-lg">
                 ยังไม่มีสินค้า
               </p>
@@ -791,7 +750,7 @@ export default function ProductsPage() {
               </p>
             </div>
           ) : visibleProducts.length === 0 ? (
-            <div className="p-10 text-center text-sm text-slate-500">
+            <div className="p-10 text-center text-sm text-neutral-500">
               <p className="text-lg">
                 ไม่มีสินค้าที่ใกล้หมดหรือหมด
               </p>
@@ -799,12 +758,11 @@ export default function ProductsPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1000px] text-left text-sm">
-                <thead className="bg-slate-50 text-slate-600">
+                <thead className="bg-black/40 text-neutral-500">
                   <tr>
                     <th className="p-4">สินค้า</th>
                     <th className="p-4">รุ่น</th>
                     <th className="p-4">หลวงพ่อ/วัด</th>
-                    <th className="p-4">ปี</th>
                     <th className="p-4 text-right">ราคา</th>
                     <th className="p-4 text-right">ต้นทุน</th>
                     <th className="p-4 text-right">คงเหลือ</th>
@@ -814,14 +772,14 @@ export default function ProductsPage() {
                 </thead>
 
                 <tbody>
-                  {visibleProducts.map((product) => (
+                  {visibleProducts.map((product, index) => (
                     <Fragment key={product.id}>
                     <tr
-                      className="border-t hover:bg-slate-50"
+                      className="border-t border-neutral-800 hover:bg-neutral-800/60"
                     >
                       <td className="p-4 font-medium">
                         <div className="flex items-start gap-3">
-                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl border bg-white">
+                          <div className="h-14 w-14 shrink-0 overflow-hidden rounded-md border border-amber-500/20 bg-neutral-950/60 backdrop-blur-lg shadow-[0_0_15px_rgba(245,158,11,0.05)]">
                             {getPrimaryMedia(product.id) ? (
                               <button
                                 type="button"
@@ -839,16 +797,21 @@ export default function ProductsPage() {
                                 />
                               </button>
                             ) : (
-                              <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">
+                              <div className="flex h-full w-full items-center justify-center text-[10px] text-neutral-600">
                                 ไม่มีรูป
                               </div>
                             )}
                           </div>
                           <div>
-                            <p className="text-slate-900">
+                            <p className="text-white">
                               {product.name}
                             </p>
-                            <label className="mt-1 inline-block cursor-pointer text-xs font-normal text-amber-700 hover:underline">
+                            {index < 3 && (
+                              <span className="inline-block bg-gradient-to-r from-amber-500 to-amber-400 text-black px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wide shadow-[0_0_8px_rgba(245,158,11,0.6)] mt-1">
+                                🔥 ขายดีอันดับ {index + 1}
+                              </span>
+                            )}
+                            <label className="mt-1 block cursor-pointer text-xs font-normal text-amber-400 hover:underline">
                               {uploadingId[product.id]
                                 ? "กำลังอัปโหลด..."
                                 : "+ เพิ่มรูปภาพ"}
@@ -867,7 +830,7 @@ export default function ProductsPage() {
                               />
                             </label>
                             {uploadErrors[product.id] && (
-                              <p className="mt-1 text-xs font-normal text-red-700">
+                              <p className="mt-1 text-xs font-normal text-red-400">
                                 {uploadErrors[product.id]}
                               </p>
                             )}
@@ -894,8 +857,8 @@ export default function ProductsPage() {
                                       }
                                       className={`h-6 w-6 overflow-hidden rounded border object-cover disabled:cursor-not-allowed ${
                                         item.isPrimary
-                                          ? "border-amber-600 ring-1 ring-amber-600"
-                                          : "border-slate-200"
+                                          ? "border-amber-500 ring-1 ring-amber-500"
+                                          : "border-neutral-700"
                                       } ${
                                         item.source === "product"
                                           ? "cursor-pointer"
@@ -910,7 +873,7 @@ export default function ProductsPage() {
                                       />
                                     </button>
                                     {item.isPrimary && (
-                                      <span className="pointer-events-none absolute -left-1.5 -top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-600 text-[7px] leading-none text-white shadow-sm">
+                                      <span className="pointer-events-none absolute -left-1.5 -top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 text-[7px] leading-none text-black shadow-sm">
                                         ★
                                       </span>
                                     )}
@@ -927,21 +890,21 @@ export default function ProductsPage() {
                                       type="button"
                                       onClick={() => openViewer(product.id, item.id)}
                                       title="ดูรูปขนาดใหญ่"
-                                      className="absolute -bottom-1 -left-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-slate-900 text-[8px] leading-none text-white group-hover:flex"
+                                      className="absolute -bottom-1 -left-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-black text-[8px] leading-none text-white group-hover:flex"
                                     >
                                       🔍
                                     </button>
                                   </div>
                                 ))}
                                 {mediaByProduct[product.id]!.length > 4 && (
-                                  <span className="text-[10px] font-normal text-slate-500">
+                                  <span className="text-[10px] font-normal text-neutral-500">
                                     +{mediaByProduct[product.id]!.length - 4}
                                   </span>
                                 )}
                               </div>
                             )}
                             {mediaActionErrors[product.id] && (
-                              <p className="mt-1 text-xs font-normal text-red-700">
+                              <p className="mt-1 text-xs font-normal text-red-400">
                                 {mediaActionErrors[product.id]}
                               </p>
                             )}
@@ -949,30 +912,26 @@ export default function ProductsPage() {
                         </div>
                       </td>
 
-                      <td className="p-4 text-slate-700">
+                      <td className="p-4 text-neutral-300">
                         {product.model || "-"}
                       </td>
 
-                      <td className="p-4 text-slate-700">
+                      <td className="p-4 text-neutral-300">
                         {product.master || "-"}
                       </td>
 
-                      <td className="p-4 text-slate-700">
-                        {product.year || "-"}
-                      </td>
-
-                      <td className="p-4 text-right tabular-nums text-slate-700">
+                      <td className="p-4 text-right tabular-nums text-neutral-300">
                         ฿{Number(product.price || 0).toLocaleString()}
                       </td>
 
-                      <td className="p-4 text-right tabular-nums text-slate-500">
+                      <td className="p-4 text-right tabular-nums text-neutral-500">
                         ฿{Number(product.cost || 0).toLocaleString()}
                       </td>
 
-                      <td className="p-4 text-right font-semibold tabular-nums text-slate-900">
+                      <td className="p-4 text-right font-semibold tabular-nums text-white">
                         {Number(product.stock || 0).toLocaleString()}
                         {product.low_stock_threshold > 0 && (
-                          <span className="ml-1 text-xs font-normal text-slate-500">
+                          <span className="ml-1 text-xs font-normal text-neutral-500">
                             / เกณฑ์ {product.low_stock_threshold}
                           </span>
                         )}
@@ -984,7 +943,7 @@ export default function ProductsPage() {
 
                           if (level === "ok") {
                             return (
-                              <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+                              <span className="rounded-full bg-emerald-950/40 px-3 py-1 text-xs font-medium text-emerald-400">
                                 พร้อมขาย
                               </span>
                             );
@@ -992,14 +951,14 @@ export default function ProductsPage() {
 
                           if (level === "low") {
                             return (
-                              <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                              <span className="rounded-full bg-amber-950/40 px-3 py-1 text-xs font-medium text-amber-400">
                                 ⚠️ ใกล้หมด
                               </span>
                             );
                           }
 
                           return (
-                            <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700">
+                            <span className="rounded-full bg-red-950/40 px-3 py-1 text-xs font-medium text-red-400">
                               หมด
                             </span>
                           );
@@ -1010,145 +969,57 @@ export default function ProductsPage() {
                         <div className="flex gap-2">
                           <button
                             onClick={() => startEdit(product)}
-                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            title="แก้ไขสินค้า / เปลี่ยนรูปภาพ"
+                            className="flex items-center gap-1.5 rounded-xl border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:border-amber-500/50 hover:bg-amber-500/10 hover:text-amber-400"
                           >
+                            <PenLineIcon className="h-3.5 w-3.5" />
                             แก้ไข
                           </button>
                           <button
                             onClick={() => startStockAdjustment(product)}
-                            className="rounded-xl border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            className="rounded-xl border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800"
                           >
                             ปรับสต็อก
                           </button>
                           <button
                             onClick={() => deleteProduct(product.id)}
-                            className="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+                            className="rounded-xl border border-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-950/30"
                           >
                             ลบ
                           </button>
                         </div>
                       </td>
                     </tr>
-                    {editingId === product.id && (
-                      <tr className="border-t bg-amber-50/40">
-                        <td colSpan={9} className="p-4">
-                          <p className="mb-3 text-sm font-semibold text-slate-900">
-                            แก้ไขสินค้า: {product.name} (ID {product.id})
-                          </p>
-                          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                            <input
-                              className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                              placeholder="ชื่อสินค้า"
-                              value={editForm.name}
-                              onChange={(e) => updateEditForm("name", e.target.value)}
-                            />
-                            <input
-                              className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                              placeholder="รุ่น"
-                              value={editForm.model}
-                              onChange={(e) => updateEditForm("model", e.target.value)}
-                            />
-                            <input
-                              className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                              placeholder="พระอาจารย์ / ผู้สร้าง"
-                              value={editForm.master}
-                              onChange={(e) => updateEditForm("master", e.target.value)}
-                            />
-                            <input
-                              className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                              placeholder="ปีที่สร้าง"
-                              value={editForm.year}
-                              onChange={(e) => updateEditForm("year", e.target.value)}
-                            />
-                            <input
-                              className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                              placeholder="รายละเอียดสินค้า"
-                              value={editForm.description}
-                              onChange={(e) => updateEditForm("description", e.target.value)}
-                            />
-                            <input
-                              className="w-full rounded-xl border px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-amber-300"
-                              type="number"
-                              placeholder="ราคาขาย"
-                              value={editForm.price}
-                              onChange={(e) => updateEditForm("price", e.target.value)}
-                            />
-                            <input
-                              className="w-full rounded-xl border px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-amber-300"
-                              type="number"
-                              placeholder="ต้นทุน"
-                              value={editForm.cost}
-                              onChange={(e) => updateEditForm("cost", e.target.value)}
-                            />
-                            <input
-                              className="w-full rounded-xl border px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-amber-300"
-                              type="number"
-                              placeholder="จำนวนสินค้า"
-                              value={editForm.stock}
-                              onChange={(e) => updateEditForm("stock", e.target.value)}
-                            />
-                            <input
-                              className="w-full rounded-xl border px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-amber-300"
-                              type="number"
-                              min="0"
-                              placeholder="เกณฑ์แจ้งเตือนสต็อกต่ำ"
-                              value={editForm.lowStockThreshold}
-                              onChange={(e) => updateEditForm("lowStockThreshold", e.target.value)}
-                            />
-                          </div>
-                          {editError && (
-                            <p className="mt-3 text-sm text-red-700">{editError}</p>
-                          )}
-                          <div className="mt-4 flex gap-3">
-                            <button
-                              onClick={() => saveEdit(product.id)}
-                              disabled={editSaving}
-                              className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
-                            >
-                              {editSaving ? "กำลังบันทึก..." : "บันทึก"}
-                            </button>
-                            <button
-                              onClick={cancelEdit}
-                              disabled={editSaving}
-                              className="rounded-xl border px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                            >
-                              ยกเลิก
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-
                     {stockAdjustingId === product.id && (
-                      <tr className="border-t bg-amber-50/40">
-                        <td colSpan={9} className="p-4">
-                          <div className="rounded-xl border bg-white p-4">
+                      <tr className="border-t border-neutral-800 bg-amber-950/10">
+                        <td colSpan={8} className="p-4">
+                          <div className="rounded-xl border border-neutral-800 bg-black p-4">
                             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                               <div>
-                                <p className="text-sm font-semibold text-slate-900">
+                                <p className="text-sm font-semibold text-white">
                                   ปรับสต็อก: {product.name}
                                 </p>
-                                <p className="mt-1 text-sm text-slate-500">
+                                <p className="mt-1 text-sm text-neutral-400">
                                   Stock ปัจจุบัน:{" "}
-                                  <span className="font-semibold tabular-nums text-slate-900">
+                                  <span className="font-semibold tabular-nums text-white">
                                     {Number(product.stock || 0).toLocaleString()}
                                   </span>{" "}
                                   ชิ้น
                                 </p>
                               </div>
 
-                              <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                              <span className="rounded-full bg-amber-950/40 px-3 py-1 text-xs font-medium text-amber-400">
                                 บันทึกเป็น Inventory Movement
                               </span>
                             </div>
 
                             <div className="grid gap-3 md:grid-cols-2">
                               <div>
-                                <label className="mb-1 block text-xs font-medium text-slate-500">
+                                <label className="mb-1 block text-xs font-medium text-neutral-400">
                                   จำนวนที่ปรับ
                                 </label>
                                 <input
-                                  className="w-full rounded-xl border px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 focus:ring-amber-300"
+                                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm tabular-nums text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
                                   type="number"
                                   step="1"
                                   placeholder="เช่น 5 หรือ -2"
@@ -1158,17 +1029,17 @@ export default function ProductsPage() {
                                   }
                                   disabled={stockAdjustSaving}
                                 />
-                                <p className="mt-1 text-xs text-slate-500">
+                                <p className="mt-1 text-xs text-neutral-500">
                                   ใช้ค่าบวกเพื่อเพิ่ม และค่าลบเพื่อลด
                                 </p>
                               </div>
 
                               <div>
-                                <label className="mb-1 block text-xs font-medium text-slate-500">
+                                <label className="mb-1 block text-xs font-medium text-neutral-400">
                                   หมายเหตุ / เหตุผล
                                 </label>
                                 <input
-                                  className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
                                   placeholder="เช่น รับสินค้าเข้า / ตรวจนับสต็อก"
                                   value={stockAdjustNote}
                                   onChange={(e) =>
@@ -1180,7 +1051,7 @@ export default function ProductsPage() {
                             </div>
 
                             {stockAdjustError && (
-                              <p className="mt-3 text-sm font-medium text-red-700">
+                              <p className="mt-3 text-sm font-medium text-red-400">
                                 {stockAdjustError}
                               </p>
                             )}
@@ -1189,7 +1060,7 @@ export default function ProductsPage() {
                               <button
                                 onClick={() => saveStockAdjustment(product.id)}
                                 disabled={stockAdjustSaving}
-                                className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+                                className="rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
                               >
                                 {stockAdjustSaving
                                   ? "กำลังบันทึก..."
@@ -1199,7 +1070,7 @@ export default function ProductsPage() {
                               <button
                                 onClick={cancelStockAdjustment}
                                 disabled={stockAdjustSaving}
-                                className="rounded-xl border px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                className="rounded-xl border border-neutral-700 px-5 py-2.5 text-sm font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
                               >
                                 ยกเลิก
                               </button>
@@ -1217,6 +1088,352 @@ export default function ProductsPage() {
         </section>
 
       </div>
+
+      {/* ===== Add Product Modal — Glassmorphism, มี Dropzone รูปภาพ =====
+          สร้างสินค้าก่อน (มี id จริง) แล้วค่อยอัปโหลดรูปที่เลือกไว้ต่อทันทีผ่าน uploadProductImage()
+          เดิม (ยิง /api/products/[id]/media จริง) — ไม่มี route/ตารางใหม่ */}
+      {showForm && (
+        <div
+          role="presentation"
+          onClick={closeAddModal}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="เพิ่มสินค้าใหม่"
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-amber-500/20 bg-neutral-950/95 backdrop-blur-lg shadow-[0_0_40px_rgba(245,158,11,0.15)] p-6"
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-white">เพิ่มสินค้าใหม่</h2>
+              <button
+                type="button"
+                onClick={closeAddModal}
+                aria-label="ปิด"
+                className="rounded-xl p-1.5 text-neutral-500 hover:bg-neutral-800 hover:text-white"
+              >
+                <XIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            <label
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                setNewImage(e.dataTransfer.files?.[0]);
+              }}
+              className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-amber-500/40 bg-black/30 p-6 text-center transition-colors hover:border-amber-500 hover:bg-amber-500/5"
+            >
+              {newImagePreviewUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={newImagePreviewUrl}
+                  alt="ตัวอย่างรูปสินค้า"
+                  className="h-32 w-32 rounded-xl object-cover"
+                />
+              ) : (
+                <>
+                  <UploadCloudIcon className="h-8 w-8 text-amber-500" />
+                  <p className="text-sm font-medium text-neutral-300">
+                    ลากรูปมาวาง หรือคลิกเพื่อเลือกไฟล์
+                  </p>
+                  <p className="text-xs text-neutral-500">รองรับไฟล์รูปภาพ (JPG, PNG)</p>
+                </>
+              )}
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => setNewImage(e.target.files?.[0])}
+              />
+              {newImagePreviewUrl && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setNewImage(null);
+                  }}
+                  className="text-xs font-medium text-red-400 hover:underline"
+                >
+                  เอารูปนี้ออก
+                </button>
+              )}
+            </label>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <input
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                placeholder="ชื่อสินค้า"
+                value={form.name}
+                onChange={(e) => updateForm("name", e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                placeholder="รุ่น"
+                value={form.model}
+                onChange={(e) => updateForm("model", e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                placeholder="พระอาจารย์ / ผู้สร้าง"
+                value={form.master}
+                onChange={(e) => updateForm("master", e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                placeholder="ปีที่สร้าง"
+                value={form.year}
+                onChange={(e) => updateForm("year", e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                placeholder="รายละเอียดสินค้า"
+                value={form.description}
+                onChange={(e) => updateForm("description", e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm tabular-nums text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                type="number"
+                placeholder="ราคาขาย"
+                value={form.price}
+                onChange={(e) => updateForm("price", e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm tabular-nums text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                type="number"
+                placeholder="ต้นทุน"
+                value={form.cost}
+                onChange={(e) => updateForm("cost", e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm tabular-nums text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                type="number"
+                placeholder="จำนวนสินค้า"
+                value={form.stock}
+                onChange={(e) => updateForm("stock", e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm tabular-nums text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                type="number"
+                min="0"
+                placeholder="เกณฑ์แจ้งเตือนสต็อกต่ำ (ค่าเริ่มต้น 0)"
+                value={form.lowStockThreshold}
+                onChange={(e) => updateForm("lowStockThreshold", e.target.value)}
+              />
+            </div>
+
+            {error && (
+              <p className="mt-3 text-sm text-red-400">{error}</p>
+            )}
+
+            <div className="mt-5 flex gap-3">
+              <button
+                onClick={addProduct}
+                disabled={saving}
+                className="rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+              >
+                {saving ? "กำลังบันทึก..." : "บันทึกสินค้า"}
+              </button>
+              <button
+                onClick={closeAddModal}
+                disabled={saving}
+                className="rounded-xl border border-neutral-700 px-5 py-2.5 text-sm font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Edit Product Modal — แก้ไขข้อมูล + จัดการรูปภาพในที่เดียว =====
+          ใช้ editForm/saveEdit เดิมสำหรับข้อมูลสินค้า และ uploadProductImage/setPrimaryImage/
+          deleteMediaItem เดิมสำหรับรูปภาพ (STEP 31/33) — ไม่มี logic ใหม่ซ้ำซ้อน */}
+      {editingId !== null && (() => {
+        const editingProduct = products.find((p) => p.id === editingId);
+        if (!editingProduct) return null;
+        const items = mediaByProduct[editingId] || [];
+
+        return (
+          <div
+            role="presentation"
+            onClick={cancelEdit}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label={`แก้ไขสินค้า: ${editingProduct.name}`}
+              onClick={(e) => e.stopPropagation()}
+              className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-amber-500/20 bg-neutral-950/95 backdrop-blur-lg shadow-[0_0_40px_rgba(245,158,11,0.15)] p-6"
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-white">
+                  แก้ไขสินค้า: {editingProduct.name}
+                </h2>
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  aria-label="ปิด"
+                  className="rounded-xl p-1.5 text-neutral-500 hover:bg-neutral-800 hover:text-white"
+                >
+                  <XIcon className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div>
+                <p className="mb-2 text-xs font-medium text-neutral-400">รูปภาพสินค้า</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {items.map((item) => (
+                    <div key={item.id} className="group relative">
+                      <button
+                        type="button"
+                        onClick={() => item.source === "product" && setPrimaryImage(editingId, item.id)}
+                        disabled={mediaActionId === item.id || item.source !== "product"}
+                        title={
+                          item.isPrimary
+                            ? "รูปหลัก"
+                            : item.source === "product"
+                            ? "ตั้งเป็นรูปหลัก"
+                            : "รูปที่สร้างด้วย AI (ตั้งเป็นรูปหลักไม่ได้)"
+                        }
+                        className={`h-16 w-16 overflow-hidden rounded-xl border object-cover disabled:cursor-not-allowed ${
+                          item.isPrimary ? "border-amber-500 ring-2 ring-amber-500" : "border-neutral-700"
+                        } ${item.source === "product" ? "cursor-pointer" : "cursor-not-allowed opacity-70"}`}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={item.url} alt="" className="h-full w-full object-cover" />
+                      </button>
+                      {item.isPrimary && (
+                        <span className="pointer-events-none absolute -left-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] leading-none text-black shadow-sm">
+                          ★
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => deleteMediaItem(editingId, item.id)}
+                        disabled={mediaActionId === item.id}
+                        title="ลบรูปนี้"
+                        className="absolute -right-1.5 -top-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-red-700 text-[10px] leading-none text-white group-hover:flex disabled:opacity-50"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+
+                  <label className="flex h-16 w-16 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-amber-500/40 text-amber-500 hover:border-amber-500 hover:bg-amber-500/5">
+                    <UploadCloudIcon className="h-5 w-5" />
+                    <span className="text-[9px] font-medium">
+                      {uploadingId[editingId] ? "กำลังอัป..." : "เพิ่มรูป"}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={Boolean(uploadingId[editingId])}
+                      onChange={(e) => {
+                        const input = e.target;
+                        const file = input.files?.[0];
+                        uploadProductImage(editingId, file).finally(() => {
+                          input.value = "";
+                        });
+                      }}
+                    />
+                  </label>
+                </div>
+                {uploadErrors[editingId] && (
+                  <p className="mt-1 text-xs text-red-400">{uploadErrors[editingId]}</p>
+                )}
+                {mediaActionErrors[editingId] && (
+                  <p className="mt-1 text-xs text-red-400">{mediaActionErrors[editingId]}</p>
+                )}
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                <input
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  placeholder="ชื่อสินค้า"
+                  value={editForm.name}
+                  onChange={(e) => updateEditForm("name", e.target.value)}
+                />
+                <input
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  placeholder="รุ่น"
+                  value={editForm.model}
+                  onChange={(e) => updateEditForm("model", e.target.value)}
+                />
+                <input
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  placeholder="พระอาจารย์ / ผู้สร้าง"
+                  value={editForm.master}
+                  onChange={(e) => updateEditForm("master", e.target.value)}
+                />
+                <input
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  placeholder="ปีที่สร้าง"
+                  value={editForm.year}
+                  onChange={(e) => updateEditForm("year", e.target.value)}
+                />
+                <input
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  placeholder="รายละเอียดสินค้า"
+                  value={editForm.description}
+                  onChange={(e) => updateEditForm("description", e.target.value)}
+                />
+                <input
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm tabular-nums text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  type="number"
+                  placeholder="ราคาขาย"
+                  value={editForm.price}
+                  onChange={(e) => updateEditForm("price", e.target.value)}
+                />
+                <input
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm tabular-nums text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  type="number"
+                  placeholder="ต้นทุน"
+                  value={editForm.cost}
+                  onChange={(e) => updateEditForm("cost", e.target.value)}
+                />
+                <input
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm tabular-nums text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  type="number"
+                  placeholder="จำนวนสินค้า"
+                  value={editForm.stock}
+                  onChange={(e) => updateEditForm("stock", e.target.value)}
+                />
+                <input
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm tabular-nums text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  type="number"
+                  min="0"
+                  placeholder="เกณฑ์แจ้งเตือนสต็อกต่ำ"
+                  value={editForm.lowStockThreshold}
+                  onChange={(e) => updateEditForm("lowStockThreshold", e.target.value)}
+                />
+              </div>
+
+              {editError && <p className="mt-3 text-sm text-red-400">{editError}</p>}
+
+              <div className="mt-4 flex gap-3">
+                <button
+                  onClick={() => saveEdit(editingProduct.id)}
+                  disabled={editSaving}
+                  className="rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+                >
+                  {editSaving ? "กำลังบันทึก..." : "บันทึก"}
+                </button>
+                <button
+                  onClick={cancelEdit}
+                  disabled={editSaving}
+                  className="rounded-xl border border-neutral-700 px-5 py-2.5 text-sm font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+                >
+                  ยกเลิก
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ===== Product Image Viewer (STEP 33) — modal ดูรูปขนาดใหญ่ ===== */}
       {viewerProduct && viewerItem && (

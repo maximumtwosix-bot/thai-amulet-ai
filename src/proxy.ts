@@ -53,6 +53,10 @@ function isProtectedPage(pathname: string): boolean {
   // /bank/reconciliation/[id].
   if (pathname === "/bank/reconciliation" || pathname.startsWith("/bank/reconciliation/")) return true;
 
+  // Content Workspace ("สมุดโน้ต") — new page, new prefix, same reasoning as /customers/
+  // /assistant/ /bank above.
+  if (pathname === "/notes") return true;
+
   return false;
 }
 
@@ -146,6 +150,10 @@ function isProtectedApi(pathname: string): boolean {
   // /api/bank-statements above — per the approved STEP D.5 audit contract.
   if (pathname === "/api/reconciliation" || pathname.startsWith("/api/reconciliation/")) return true;
 
+  // Content Workspace ("สมุดโน้ต") API. New prefix, same reasoning as /api/customers/
+  // /api/profit above.
+  if (pathname === "/api/notes") return true;
+
   return false;
 }
 
@@ -202,6 +210,9 @@ export const config = {
     // STEP D.7 — see isProtectedPage() above.
     "/bank/reconciliation",
     "/bank/reconciliation/:path*",
+    // Content Workspace ("สมุดโน้ต") — see isProtectedPage()/isProtectedApi() above.
+    "/notes",
+    "/api/notes",
     "/api/products",
     "/api/products/:path*",
     "/api/orders",

@@ -3,7 +3,18 @@
 import { useEffect, useRef, useState } from "react";
 import LogoutButton from "@/components/LogoutButton";
 import BackLink from "@/components/BackLink";
-import { BotIcon, GeminiIcon, GoogleIcon, MessageCircleIcon, SparklesIcon } from "@/components/icons";
+import {
+  BotIcon,
+  CapCutIcon,
+  ClaudeIcon,
+  DolaIcon,
+  GeminiIcon,
+  GitHubIcon,
+  GoogleIcon,
+  MessageCircleIcon,
+  PhayaIcon,
+  SparklesIcon,
+} from "@/components/icons";
 
 // STEP 74 — Local AI Assistant chat UI. Client Component (same client/server-boundary reasoning
 // documented in src/app/customers/page.tsx etc.) — talks ONLY to this codebase's own
@@ -135,6 +146,11 @@ const EXTERNAL_AI_TOOLS: ExternalAiTool[] = [
     href: "https://gemini.google.com/",
     icon: GeminiIcon,
   },
+  { id: "dola", label: "Dola AI", href: "https://www.dola.com/chat/", icon: DolaIcon },
+  { id: "phaya", label: "Phaya", href: "https://phaya.io/", icon: PhayaIcon },
+  { id: "github", label: "GitHub", href: "https://github.com/", icon: GitHubIcon },
+  { id: "claude", label: "Claude", href: "https://claude.ai/", icon: ClaudeIcon },
+  { id: "capcut", label: "CapCut", href: "https://www.capcut.com/", icon: CapCutIcon },
 ];
 
 function parseAssistantReply(raw: string): { content: string; pendingConfirmation: PendingConfirmation | null } {
@@ -381,6 +397,15 @@ export default function AssistantPage() {
           <div className="flex items-center justify-between border-b border-neutral-800 px-5 py-3">
             <p className="text-xs font-medium text-neutral-500">เครื่องมือ AI ภายนอก</p>
             <div className="flex items-center gap-2">
+              <a
+                href="/notes"
+                target="_blank"
+                rel="noopener noreferrer"
+                title="เปิดสมุดโน้ต"
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-amber-500/20 bg-neutral-950/60 px-2.5 text-xs font-medium text-neutral-400 transition-all hover:border-amber-400 hover:text-amber-500 hover:shadow-[0_0_10px_rgba(245,158,11,0.4)]"
+              >
+                📝 เปิดสมุดโน้ต
+              </a>
               {EXTERNAL_AI_TOOLS.map((tool) => {
                 const Icon = tool.icon;
                 return (

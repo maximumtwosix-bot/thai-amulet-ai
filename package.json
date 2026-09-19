@@ -11,6 +11,9 @@
     "backup": "tsx scripts/backup.ts"
   },
   "dependencies": {
+    "@tiptap/pm": "^3.31.3",
+    "@tiptap/react": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
     "better-sqlite3": "^13.0.3",
     "next": "16.3.2",
     "openai": "^7.5.0",

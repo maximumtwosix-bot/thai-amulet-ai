@@ -45,9 +45,12 @@ next-env.d.ts
 # transactions) and SQLite WAL/SHM journal files that are machine/session-specific and must never be
 # committed. public/generated/** is user-uploaded and AI-generated media written at runtime by the
 # app itself (product photos, AI images/video, voice audio, transaction receipt/slip attachments) —
-# regenerable, potentially large, and can contain real business/financial documents.
+# regenerable, potentially large, and can contain real business/financial documents. Same reasoning
+# for public/uploads/** — images uploaded through the Content Workspace's own upload API
+# (src/app/api/notes/upload/route.ts), organized into user-named project folders at runtime.
 /data/
 /public/generated/
+/public/uploads/
 
 # Playwright MCP tool output (console logs / page snapshots from interactive testing sessions) —
 # ephemeral test-tool exhaust, not source code or a fixture the project depends on.

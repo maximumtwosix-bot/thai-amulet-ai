@@ -151,8 +151,8 @@ function isProtectedApi(pathname: string): boolean {
   if (pathname === "/api/reconciliation" || pathname.startsWith("/api/reconciliation/")) return true;
 
   // Content Workspace ("สมุดโน้ต") API. New prefix, same reasoning as /api/customers/
-  // /api/profit above.
-  if (pathname === "/api/notes") return true;
+  // /api/profit above — prefix match (not exact) so /api/notes/upload is covered too.
+  if (pathname === "/api/notes" || pathname.startsWith("/api/notes/")) return true;
 
   return false;
 }
@@ -213,6 +213,7 @@ export const config = {
     // Content Workspace ("สมุดโน้ต") — see isProtectedPage()/isProtectedApi() above.
     "/notes",
     "/api/notes",
+    "/api/notes/:path*",
     "/api/products",
     "/api/products/:path*",
     "/api/orders",

@@ -69,9 +69,18 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ success: false, error: "กรุณาระบุรหัสโน้ต" }, { status: 400 });
     }
 
+    // รองรับทั้ง pages (array หลายหน้า, รูปแบบปัจจุบัน) และ content (string หน้าเดียว, รูปแบบเดิมก่อน
+    // STEP pagination) เผื่อ client เก่าที่ cache ไว้ยังส่ง content มา — แปลงเป็น pages ก่อนเข้า
+    // updateNote() เสมอ ไม่ให้ src/lib/notes.ts ต้องรู้จักรูปแบบเก่าเลย
+    const pages = Array.isArray(body.pages)
+      ? body.pages.filter((p: unknown): p is string => typeof p === "string")
+      : typeof body.content === "string"
+        ? [body.content]
+        : undefined;
+
     const note = await updateNote(id, {
       name: typeof body.name === "string" ? body.name : undefined,
-      content: typeof body.content === "string" ? body.content : undefined,
+      pages,
     });
 
     if (!note) {

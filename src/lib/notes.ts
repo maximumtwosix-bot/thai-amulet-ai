@@ -15,14 +15,32 @@ export type NoteFolder = {
   createdAt: string;
 };
 
+// STEP: multi-page pagination — `pages` (one HTML string per page) replaces the old single
+// `content: string` field. Kept optional/nullable on the raw-disk shape (see RawNoteFile below) so
+// existing data/notes.json rows written before this change still load correctly; normalizeNote()
+// below is the single place that migrates an old `content`-only row into `pages: [content]` on
+// read. Nothing after normalizeNote() ever needs to know the old shape existed.
 export type NoteFile = {
   id: string;
   type: "note";
   name: string;
-  content: string;
+  pages: string[];
   folderId: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+// Shape a note might actually have on disk — either current (`pages`) or pre-pagination legacy
+// (`content`), or in principle neither if the file was hand-edited. Every field is optional/unknown
+// on purpose; normalizeNote() is what turns this into a real NoteFile.
+type RawNoteFile = {
+  id?: unknown;
+  name?: unknown;
+  pages?: unknown;
+  content?: unknown;
+  folderId?: unknown;
+  createdAt?: unknown;
+  updatedAt?: unknown;
 };
 
 export type NotesData = {
@@ -32,14 +50,35 @@ export type NotesData = {
 
 const DATA_FILE = path.join(process.cwd(), "data", "notes.json");
 
+function normalizeNote(raw: RawNoteFile): NoteFile {
+  const pagesFromArray = Array.isArray(raw.pages)
+    ? raw.pages.filter((p): p is string => typeof p === "string")
+    : [];
+
+  const pages =
+    pagesFromArray.length > 0
+      ? pagesFromArray
+      : [typeof raw.content === "string" ? raw.content : ""];
+
+  return {
+    id: typeof raw.id === "string" ? raw.id : randomUUID(),
+    type: "note",
+    name: typeof raw.name === "string" ? raw.name : "โน้ตไม่มีชื่อ",
+    pages,
+    folderId: typeof raw.folderId === "string" ? raw.folderId : null,
+    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
+  };
+}
+
 async function loadNotesData(): Promise<NotesData> {
   try {
     const raw = await readFile(DATA_FILE, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<NotesData>;
+    const parsed = JSON.parse(raw) as { folders?: unknown; notes?: unknown };
 
     return {
-      folders: Array.isArray(parsed.folders) ? parsed.folders : [],
-      notes: Array.isArray(parsed.notes) ? parsed.notes : [],
+      folders: Array.isArray(parsed.folders) ? (parsed.folders as NoteFolder[]) : [],
+      notes: Array.isArray(parsed.notes) ? parsed.notes.map((n) => normalizeNote(n as RawNoteFile)) : [],
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -83,7 +122,7 @@ export async function createNote(name: string, folderId: string | null): Promise
     id: randomUUID(),
     type: "note",
     name,
-    content: "",
+    pages: [""],
     folderId,
     createdAt: now,
     updatedAt: now,
@@ -97,7 +136,7 @@ export async function createNote(name: string, folderId: string | null): Promise
 
 export async function updateNote(
   id: string,
-  patch: { name?: string; content?: string }
+  patch: { name?: string; pages?: string[] }
 ): Promise<NoteFile | null> {
   const data = await loadNotesData();
   const note = data.notes.find((n) => n.id === id);
@@ -110,8 +149,8 @@ export async function updateNote(
     note.name = patch.name;
   }
 
-  if (typeof patch.content === "string") {
-    note.content = patch.content;
+  if (Array.isArray(patch.pages) && patch.pages.length > 0) {
+    note.pages = patch.pages;
   }
 
   note.updatedAt = new Date().toISOString();

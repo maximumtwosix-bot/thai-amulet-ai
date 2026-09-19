@@ -339,6 +339,29 @@ export function QuoteIcon({ className }: IconProps) {
   );
 }
 
+export function HighlighterIcon({ className }: IconProps) {
+  return base(
+    <>
+      <path d="m9 11-6 6v3h9l3-3" />
+      <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4l8 8Z" />
+    </>,
+    className
+  );
+}
+
+export function PageBreakIcon({ className }: IconProps) {
+  return base(
+    <>
+      <rect x="3" y="4" width="18" height="6" rx="1" />
+      <rect x="3" y="14" width="18" height="6" rx="1" />
+      <line x1="3" y1="12" x2="7" y2="12" />
+      <line x1="10.5" y1="12" x2="13.5" y2="12" />
+      <line x1="17" y1="12" x2="21" y2="12" />
+    </>,
+    className
+  );
+}
+
 export function XIcon({ className }: IconProps) {
   return base(
     <>

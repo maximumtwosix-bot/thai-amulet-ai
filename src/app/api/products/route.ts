@@ -1,6 +1,23 @@
 ﻿import { NextResponse } from "next/server";
 import db from "@/lib/db";
 
+// STEP 102 — allowed storefront badge values (see src/lib/db.ts's products.badge column comment for
+// why this is TS-layer validated only, never a SQL CHECK). "📝 มีใบเซอร์" was dropped per this STEP —
+// existing rows that already hold it are left as-is (no backfill/scrub of historical data), but it
+// can no longer be newly assigned through this API.
+const PRODUCT_BADGES = ["⭐ ยอดนิยม", "👑 หายาก"] as const;
+
+function parseBadge(value: unknown): { ok: true; badge: string | null } | { ok: false } {
+  if (value === undefined || value === null || value === "") {
+    return { ok: true, badge: null };
+  }
+  const badge = String(value);
+  if (!(PRODUCT_BADGES as readonly string[]).includes(badge)) {
+    return { ok: false };
+  }
+  return { ok: true, badge };
+}
+
 export async function GET() {
   try {
     const products = db
@@ -18,6 +35,9 @@ export async function GET() {
           low_stock_threshold,
           category,
           status,
+          badge,
+          monk_image,
+          monk_history,
           created_at,
           updated_at
         FROM products
@@ -54,11 +74,22 @@ export async function POST(request: Request) {
     const master = String(body.master ?? "").trim();
     const year = String(body.year ?? "").trim();
     const description = String(body.description ?? "").trim();
+    const monkImage = String(body.monkImage ?? "").trim();
+    const monkHistory = String(body.monkHistory ?? "").trim();
 
     const price = Number(body.price ?? 0);
     const cost = Number(body.cost ?? 0);
     const stock = Number(body.stock ?? 0);
     const lowStockThreshold = Number(body.lowStockThreshold ?? 0);
+
+    const parsedBadge = parseBadge(body.badge);
+    if (!parsedBadge.ok) {
+      return NextResponse.json(
+        { error: "ป้ายกำกับไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+    const badge = parsedBadge.badge;
 
     if (!name) {
       return NextResponse.json(
@@ -112,10 +143,13 @@ export async function POST(request: Request) {
             stock,
             low_stock_threshold,
             category,
-            status
+            status,
+            badge,
+            monk_image,
+            monk_history
           )
         VALUES
-          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         name,
@@ -128,7 +162,10 @@ export async function POST(request: Request) {
         stock,
         lowStockThreshold,
         "วัตถุมงคล",
-        status
+        status,
+        badge,
+        monkImage,
+        monkHistory
       );
 
     const product = db
@@ -146,6 +183,9 @@ export async function POST(request: Request) {
           low_stock_threshold,
           category,
           status,
+          badge,
+          monk_image,
+          monk_history,
           created_at,
           updated_at
         FROM products
@@ -212,6 +252,8 @@ export async function PATCH(request: Request) {
     const master = String(body.master ?? "").trim();
     const year = String(body.year ?? "").trim();
     const description = String(body.description ?? "").trim();
+    const monkImage = String(body.monkImage ?? "").trim();
+    const monkHistory = String(body.monkHistory ?? "").trim();
 
     const price = Number(body.price ?? 0);
     const cost = Number(body.cost ?? 0);
@@ -225,6 +267,15 @@ export async function PATCH(request: Request) {
       body.lowStockThreshold === undefined
         ? existing.low_stock_threshold
         : Number(body.lowStockThreshold);
+
+    const parsedBadge = parseBadge(body.badge);
+    if (!parsedBadge.ok) {
+      return NextResponse.json(
+        { error: "ป้ายกำกับไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+    const badge = parsedBadge.badge;
 
     if (!name) {
       return NextResponse.json(
@@ -278,6 +329,9 @@ export async function PATCH(request: Request) {
           stock = ?,
           low_stock_threshold = ?,
           status = ?,
+          badge = ?,
+          monk_image = ?,
+          monk_history = ?,
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `
@@ -292,6 +346,9 @@ export async function PATCH(request: Request) {
       stock,
       lowStockThreshold,
       status,
+      badge,
+      monkImage,
+      monkHistory,
       id
     );
 
@@ -310,6 +367,9 @@ export async function PATCH(request: Request) {
           low_stock_threshold,
           category,
           status,
+          badge,
+          monk_image,
+          monk_history,
           created_at,
           updated_at
         FROM products

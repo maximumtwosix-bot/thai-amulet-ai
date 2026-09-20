@@ -1,0 +1,178 @@
+import { NextResponse } from "next/server";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+
+export const runtime = "nodejs";
+
+// STEP 105 — upload endpoint for products.monk_image (see src/lib/db.ts's column comment for why
+// this is a standalone endpoint rather than the product_media gallery table: it must work from the
+// "เพิ่มสินค้าใหม่" add-form, before a product id exists yet). Returns a plain URL that the caller
+// then submits as `monkImage` in the regular POST/PATCH /api/products body — same two-step flow the
+// add-form already uses for its main product photo (upload first, then reference the URL/id).
+//
+// Image validation copied from src/app/api/products/[id]/media/route.ts (itself copied into
+// src/app/api/notes/upload/route.ts and src/app/api/reviews/route.ts) — same 10MB limit, same
+// allowlisted extensions, same magic-byte signature check. Kept as its own inline copy, matching
+// this codebase's existing convention of not sharing this logic across upload routes.
+//
+// Left unauthenticated, matching the exact existing precedent of every other product-photo upload
+// route under /api/products/* (src/proxy.ts's isProtectedApi() comment: "/api/products" protects
+// only the top-level list/create/edit/delete route, NOT its media/AI-video sub-routes).
+const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
+
+const ALLOWED_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+
+type ImageSignatureType = "jpeg" | "png" | "gif" | "webp";
+
+const EXTENSION_TO_SIGNATURE_TYPE: Record<string, ImageSignatureType> = {
+  ".jpg": "jpeg",
+  ".jpeg": "jpeg",
+  ".png": "png",
+  ".gif": "gif",
+  ".webp": "webp",
+};
+
+const MIME_TO_SIGNATURE_TYPE: Record<string, ImageSignatureType> = {
+  "image/jpeg": "jpeg",
+  "image/jpg": "jpeg",
+  "image/pjpeg": "jpeg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
+function signatureTypeToExtension(type: ImageSignatureType): string {
+  switch (type) {
+    case "jpeg":
+      return ".jpg";
+    case "png":
+      return ".png";
+    case "gif":
+      return ".gif";
+    case "webp":
+      return ".webp";
+    default:
+      return ".jpg";
+  }
+}
+
+function detectImageSignatureType(buffer: Buffer): ImageSignatureType | null {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "jpeg";
+  }
+
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return "png";
+  }
+
+  if (
+    buffer.length >= 6 &&
+    (buffer.toString("ascii", 0, 6) === "GIF87a" || buffer.toString("ascii", 0, 6) === "GIF89a")
+  ) {
+    return "gif";
+  }
+
+  if (
+    buffer.length >= 12 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP"
+  ) {
+    return "webp";
+  }
+
+  return null;
+}
+
+export async function POST(request: Request) {
+  try {
+    const formData = await request.formData();
+    const file = formData.get("image");
+
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: "กรุณาเลือกไฟล์รูปภาพ" }, { status: 400 });
+    }
+    if (!file.type.startsWith("image/")) {
+      return NextResponse.json({ error: "รองรับเฉพาะไฟล์รูปภาพเท่านั้น" }, { status: 400 });
+    }
+    if (file.size <= 0) {
+      return NextResponse.json({ error: "ไฟล์รูปภาพว่างเปล่า" }, { status: 400 });
+    }
+    if (file.size > MAX_IMAGE_SIZE_BYTES) {
+      return NextResponse.json(
+        { error: "ไฟล์รูปภาพมีขนาดใหญ่เกินไป (จำกัดไม่เกิน 10MB)" },
+        { status: 400 }
+      );
+    }
+
+    const rawExtension = path.extname(file.name).toLowerCase();
+
+    if (rawExtension && !ALLOWED_IMAGE_EXTENSIONS.has(rawExtension)) {
+      return NextResponse.json(
+        { error: "รองรับเฉพาะไฟล์นามสกุล .jpg, .jpeg, .png, .gif, .webp เท่านั้น" },
+        { status: 400 }
+      );
+    }
+
+    const mimeSignatureType = MIME_TO_SIGNATURE_TYPE[file.type.split(";")[0].trim().toLowerCase()];
+
+    if (!mimeSignatureType) {
+      return NextResponse.json(
+        { error: "รองรับเฉพาะไฟล์รูปภาพ JPEG, PNG, GIF, WEBP เท่านั้น" },
+        { status: 400 }
+      );
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const detectedSignatureType = detectImageSignatureType(buffer);
+
+    if (!detectedSignatureType) {
+      return NextResponse.json(
+        { error: "ไม่สามารถตรวจสอบชนิดไฟล์จากเนื้อไฟล์จริงได้ — ไฟล์อาจเสียหายหรือไม่ใช่ไฟล์รูปภาพ" },
+        { status: 400 }
+      );
+    }
+    if (detectedSignatureType !== mimeSignatureType) {
+      return NextResponse.json(
+        { error: "ชนิดไฟล์จริงไม่ตรงกับ Content-Type ที่แจ้งมา" },
+        { status: 400 }
+      );
+    }
+    if (rawExtension && EXTENSION_TO_SIGNATURE_TYPE[rawExtension] !== detectedSignatureType) {
+      return NextResponse.json(
+        { error: "ชนิดไฟล์จริงไม่ตรงกับนามสกุลไฟล์ที่ระบุ" },
+        { status: 400 }
+      );
+    }
+
+    const safeExtension = rawExtension || signatureTypeToExtension(detectedSignatureType);
+
+    const imageDirectory = path.join(process.cwd(), "public", "generated", "monk-images");
+    await mkdir(imageDirectory, { recursive: true });
+
+    const fileName = `monk-${randomUUID()}${safeExtension}`;
+    await writeFile(path.join(imageDirectory, fileName), buffer);
+
+    return NextResponse.json({
+      success: true,
+      url: `/generated/monk-images/${fileName}`,
+    });
+  } catch (error) {
+    console.error("POST /api/products/monk-image error:", error);
+
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "ไม่สามารถอัปโหลดรูปภาพได้" },
+      { status: 500 }
+    );
+  }
+}

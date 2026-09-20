@@ -57,6 +57,13 @@ function isProtectedPage(pathname: string): boolean {
   // /assistant/ /bank above.
   if (pathname === "/notes") return true;
 
+  // STEP 104 — Review management UI (admin list + "+ เพิ่มรีวิว" form). Exact match only, same
+  // reasoning as /customers/ /assistant/ /bank above. Deliberately does NOT protect /api/reviews —
+  // that endpoint is intentionally public (see its own file comment): a storefront customer writing
+  // a review from /shop has no admin session, and this admin page posts to that exact same public
+  // endpoint rather than a separate authenticated one.
+  if (pathname === "/reviews") return true;
+
   return false;
 }
 
@@ -214,6 +221,8 @@ export const config = {
     "/notes",
     "/api/notes",
     "/api/notes/:path*",
+    // STEP 104 — see isProtectedPage() above. /api/reviews is deliberately NOT listed here.
+    "/reviews",
     "/api/products",
     "/api/products/:path*",
     "/api/orders",

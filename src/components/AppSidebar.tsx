@@ -21,12 +21,23 @@ import {
   FacebookIcon,
   FlagIcon,
   ChevronDownIcon,
+  CalendarIcon,
+  StoreIcon,
+  StarIcon,
 } from "./icons";
 
 const menuItems = [
   { icon: HomeIcon, title: "Dashboard", desc: "ภาพรวมระบบ", href: "/" },
+  {
+    icon: StoreIcon,
+    title: "หน้าร้านค้า (Storefront)",
+    desc: "ดูหน้าเว็บลูกค้า",
+    href: "/shop",
+    external: true,
+  },
   { icon: PackageIcon, title: "สินค้า", desc: "จัดการข้อมูลสินค้า", href: "/products" },
   { icon: ReceiptIcon, title: "ออเดอร์", desc: "จัดการคำสั่งซื้อ", href: "/orders" },
+  { icon: StarIcon, title: "รีวิว", desc: "จัดการรีวิวลูกค้า", href: "/reviews" },
   { icon: UsersIcon, title: "ลูกค้า", desc: "รายชื่อลูกค้า", href: "/customers" },
   { icon: WalletIcon, title: "การเงิน", desc: "รายรับ-รายจ่าย", href: "/finance" },
   { icon: LandmarkIcon, title: "บัญชีธนาคาร", desc: "จัดการบัญชีธนาคาร", href: "/bank" },
@@ -63,6 +74,12 @@ const marketingItems = [
     desc: "รวมแชทลูกค้า",
     href: "https://business.facebook.com/latest/inbox/",
   },
+  {
+    icon: CalendarIcon,
+    title: "ตั้งโพสต์อัตโนมัติ",
+    desc: "Auto Post Planner",
+    href: "https://business.facebook.com/latest/planner",
+  },
 ];
 
 export default function AppSidebar() {
@@ -80,16 +97,14 @@ export default function AppSidebar() {
           const isActive = pathname === item.href;
           const Icon = item.icon;
 
-          return (
-            <Link
-              key={item.title}
-              href={item.href}
-              className={`group flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all hover:bg-amber-500/10 hover:text-amber-500 hover:shadow-[0_0_15px_rgba(245,158,11,0.15)] ${
-                isActive
-                  ? "bg-neutral-900 text-amber-400 border border-neutral-800"
-                  : "text-neutral-400"
-              }`}
-            >
+          const className = `group flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all hover:bg-amber-500/10 hover:text-amber-500 hover:shadow-[0_0_15px_rgba(245,158,11,0.15)] ${
+            isActive
+              ? "bg-neutral-900 text-amber-400 border border-neutral-800"
+              : "text-neutral-400"
+          }`;
+
+          const content = (
+            <>
               <div className="flex items-center gap-3">
                 <Icon
                   className={`h-5 w-5 transition-all group-hover:drop-shadow-[0_0_8px_rgba(245,158,11,0.6)] ${
@@ -99,6 +114,29 @@ export default function AppSidebar() {
                 <span>{item.title}</span>
               </div>
               <span className="text-[11px] text-neutral-600">{item.desc}</span>
+            </>
+          );
+
+          // "หน้าร้านค้า (Storefront)" is the one entry in this main group that points at a
+          // customer-facing page, not a back-office one — opened in a new tab (target="_blank")
+          // so checking it never navigates the admin away from the Dashboard.
+          if (item.external) {
+            return (
+              <a
+                key={item.title}
+                href={item.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={className}
+              >
+                {content}
+              </a>
+            );
+          }
+
+          return (
+            <Link key={item.title} href={item.href} className={className}>
+              {content}
             </Link>
           );
         })}

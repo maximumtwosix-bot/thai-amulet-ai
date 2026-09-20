@@ -17,7 +17,14 @@ type Product = {
   low_stock_threshold: number;
   category: string | null;
   status: string;
+  badge: string | null;
+  monk_image: string | null;
+  monk_history: string | null;
 };
+
+// STEP 101 — storefront badge shown on the public /shop catalogue. Kept in sync with the allowed
+// values enforced server-side in src/app/api/products/route.ts (PRODUCT_BADGES).
+const PRODUCT_BADGES = ["⭐ ยอดนิยม", "👑 หายาก"] as const;
 
 // STEP 23 — out: stock=0 (เดิม "หมด"), low: 0 < stock <= threshold, ok: stock > threshold
 type StockLevel = "out" | "low" | "ok";
@@ -58,6 +65,9 @@ type FormState = {
   cost: string;
   stock: string;
   lowStockThreshold: string;
+  badge: string;
+  monkImage: string;
+  monkHistory: string;
 };
 const emptyForm: FormState = {
   name: "",
@@ -69,6 +79,9 @@ const emptyForm: FormState = {
   cost: "",
   stock: "",
   lowStockThreshold: "0",
+  badge: "",
+  monkImage: "",
+  monkHistory: "",
 };
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -94,6 +107,27 @@ export default function ProductsPage() {
     }
     setNewImageFile(file);
     setNewImagePreviewUrl(URL.createObjectURL(file));
+  }
+
+  // STEP 105 — monk_image is a plain URL field on the product itself (not the product_media
+  // gallery), so it's uploaded immediately on file select through POST /api/products/monk-image —
+  // unlike the main product photo above, this doesn't need an existing productId, so there's no
+  // "upload after save" step: the returned URL goes straight into form.monkImage/editForm.monkImage.
+  const [monkImageUploading, setMonkImageUploading] = useState(false);
+  const [editMonkImageUploading, setEditMonkImageUploading] = useState(false);
+
+  async function uploadMonkImage(file: File): Promise<string> {
+    const uploadFormData = new FormData();
+    uploadFormData.append("image", file);
+    const response = await fetch("/api/products/monk-image", {
+      method: "POST",
+      body: uploadFormData,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error || "ไม่สามารถอัปโหลดรูปภาพหลวงพ่อได้");
+    }
+    return data.url as string;
   }
 
   function closeAddModal() {
@@ -132,6 +166,9 @@ export default function ProductsPage() {
       cost: String(product.cost),
       stock: String(product.stock),
       lowStockThreshold: String(product.low_stock_threshold ?? 0),
+      badge: product.badge || "",
+      monkImage: product.monk_image || "",
+      monkHistory: product.monk_history || "",
     });
     setEditError("");
   }
@@ -178,6 +215,9 @@ export default function ProductsPage() {
           cost: Number(editForm.cost || 0),
           stock: Number(editForm.stock || 0),
           lowStockThreshold: Number(editForm.lowStockThreshold || 0),
+          badge: editForm.badge || null,
+          monkImage: editForm.monkImage,
+          monkHistory: editForm.monkHistory,
         }),
       });
       const data = await response.json();
@@ -571,6 +611,9 @@ export default function ProductsPage() {
           cost: Number(form.cost || 0),
           stock: Number(form.stock || 0),
           lowStockThreshold: Number(form.lowStockThreshold || 0),
+          badge: form.badge || null,
+          monkImage: form.monkImage,
+          monkHistory: form.monkHistory,
         }),
       });
       const data = await response.json();
@@ -767,6 +810,7 @@ export default function ProductsPage() {
                     <th className="p-4 text-right">ต้นทุน</th>
                     <th className="p-4 text-right">คงเหลือ</th>
                     <th className="p-4">สถานะ</th>
+                    <th className="p-4">ป้ายหน้าร้าน</th>
                     <th className="p-4">จัดการ</th>
                   </tr>
                 </thead>
@@ -966,6 +1010,16 @@ export default function ProductsPage() {
                       </td>
 
                       <td className="p-4">
+                        {product.badge ? (
+                          <span className="inline-block rounded-full border border-amber-400/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-300">
+                            {product.badge}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-neutral-600">-</span>
+                        )}
+                      </td>
+
+                      <td className="p-4">
                         <div className="flex gap-2">
                           <button
                             onClick={() => startEdit(product)}
@@ -992,7 +1046,7 @@ export default function ProductsPage() {
                     </tr>
                     {stockAdjustingId === product.id && (
                       <tr className="border-t border-neutral-800 bg-amber-950/10">
-                        <td colSpan={8} className="p-4">
+                        <td colSpan={9} className="p-4">
                           <div className="rounded-xl border border-neutral-800 bg-black p-4">
                             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                               <div>
@@ -1221,6 +1275,65 @@ export default function ProductsPage() {
                 value={form.lowStockThreshold}
                 onChange={(e) => updateForm("lowStockThreshold", e.target.value)}
               />
+              <select
+                className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                value={form.badge}
+                onChange={(e) => updateForm("badge", e.target.value)}
+              >
+                <option value="">ป้ายหน้าร้าน: ไม่มี</option>
+                {PRODUCT_BADGES.map((badge) => (
+                  <option key={badge} value={badge}>
+                    {badge}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-amber-500/20 bg-black/20 p-4">
+              <p className="mb-3 text-xs font-medium text-neutral-400">
+                ประวัติพระเกจิ/หลวงพ่อ (แสดงในหน้าร้าน — ไม่บังคับ)
+              </p>
+              <div className="flex gap-3">
+                <label className="flex h-16 w-16 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border-2 border-dashed border-amber-500/40 bg-neutral-950 text-amber-500 hover:border-amber-500">
+                  {monkImageUploading ? (
+                    <span className="text-[9px]">กำลังอัป...</span>
+                  ) : form.monkImage ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={form.monkImage} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <UploadCloudIcon className="h-6 w-6" />
+                  )}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    disabled={monkImageUploading}
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (!file) return;
+                      try {
+                        setMonkImageUploading(true);
+                        const url = await uploadMonkImage(file);
+                        updateForm("monkImage", url);
+                      } catch (err) {
+                        setError(
+                          err instanceof Error ? err.message : "ไม่สามารถอัปโหลดรูปภาพหลวงพ่อได้"
+                        );
+                      } finally {
+                        setMonkImageUploading(false);
+                      }
+                    }}
+                  />
+                </label>
+                <textarea
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  rows={3}
+                  placeholder="ประวัติการสร้างและพุทธคุณ..."
+                  value={form.monkHistory}
+                  onChange={(e) => updateForm("monkHistory", e.target.value)}
+                />
+              </div>
             </div>
 
             {error && (
@@ -1410,6 +1523,65 @@ export default function ProductsPage() {
                   value={editForm.lowStockThreshold}
                   onChange={(e) => updateEditForm("lowStockThreshold", e.target.value)}
                 />
+                <select
+                  className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                  value={editForm.badge}
+                  onChange={(e) => updateEditForm("badge", e.target.value)}
+                >
+                  <option value="">ป้ายหน้าร้าน: ไม่มี</option>
+                  {PRODUCT_BADGES.map((badge) => (
+                    <option key={badge} value={badge}>
+                      {badge}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-amber-500/20 bg-black/20 p-4">
+                <p className="mb-3 text-xs font-medium text-neutral-400">
+                  ประวัติพระเกจิ/หลวงพ่อ (แสดงในหน้าร้าน — ไม่บังคับ)
+                </p>
+                <div className="flex gap-3">
+                  <label className="flex h-16 w-16 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border-2 border-dashed border-amber-500/40 bg-neutral-950 text-amber-500 hover:border-amber-500">
+                    {editMonkImageUploading ? (
+                      <span className="text-[9px]">กำลังอัป...</span>
+                    ) : editForm.monkImage ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={editForm.monkImage} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <UploadCloudIcon className="h-6 w-6" />
+                    )}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={editMonkImageUploading}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!file) return;
+                        try {
+                          setEditMonkImageUploading(true);
+                          const url = await uploadMonkImage(file);
+                          updateEditForm("monkImage", url);
+                        } catch (err) {
+                          setEditError(
+                            err instanceof Error ? err.message : "ไม่สามารถอัปโหลดรูปภาพหลวงพ่อได้"
+                          );
+                        } finally {
+                          setEditMonkImageUploading(false);
+                        }
+                      }}
+                    />
+                  </label>
+                  <textarea
+                    className="w-full rounded-xl border border-neutral-700 bg-black px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40"
+                    rows={3}
+                    placeholder="ประวัติการสร้างและพุทธคุณ..."
+                    value={editForm.monkHistory}
+                    onChange={(e) => updateEditForm("monkHistory", e.target.value)}
+                  />
+                </div>
               </div>
 
               {editError && <p className="mt-3 text-sm text-red-400">{editError}</p>}

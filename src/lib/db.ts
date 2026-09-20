@@ -1768,6 +1768,34 @@ if (!columnNames.has("low_stock_threshold")) {
   );
 }
 
+// STEP 101 — Storefront badge (ยอดนิยม/หายาก/มีใบเซอร์), shown on the public /shop catalogue.
+// Nullable, no default — same "no silent default" reasoning as bank_accounts.classification:
+// whether a product is "popular"/"rare"/"certified" is a merchandising call only a human makes,
+// never something this schema should assume. Existing products simply have no badge until their
+// owner sets one via the edit form. Allowed values enforced in the TS layer only (this route file),
+// never a SQL CHECK, matching every other enum-like TEXT column in this schema: '⭐ ยอดนิยม' |
+// '👑 หายาก' | '📝 มีใบเซอร์'.
+if (!columnNames.has("badge")) {
+  db.exec("ALTER TABLE products ADD COLUMN badge TEXT");
+}
+
+// STEP 105 — per-product "ประวัติพระเกจิ/หลวงพ่อ" shown in the storefront Quick View modal's left
+// column (src/app/shop/page.tsx), editable per product from the admin add/edit form
+// (src/app/products/page.tsx). Both nullable, no default — most products won't have this filled in,
+// and the storefront hides the whole section when both are empty (never shows an awkward empty
+// box). monk_image stores a plain URL (like the other per-product fields here), uploaded through its
+// own small endpoint (POST /api/products/monk-image) rather than the product_media gallery table —
+// it's a single field on the product row itself, not a many-per-product media item, and unlike a
+// gallery photo it must be uploadable before the product exists yet (the "เพิ่มสินค้าใหม่" add-form
+// case), which product_media's product_id NOT NULL FK cannot support.
+if (!columnNames.has("monk_image")) {
+  db.exec("ALTER TABLE products ADD COLUMN monk_image TEXT");
+}
+
+if (!columnNames.has("monk_history")) {
+  db.exec("ALTER TABLE products ADD COLUMN monk_history TEXT");
+}
+
 // STEP 12 — ขยาย social_posts ให้รองรับ Queue/Scheduling/Retry โดยไม่ทำลายข้อมูลเดิม
 // (แถวเก่าจาก STEP 10 ที่ไม่มีคอลัมน์เหล่านี้จะได้ค่า default ที่ปลอดภัย ไม่ null พัง logic)
 const socialPostColumns = db
@@ -1898,6 +1926,29 @@ if (!bankStatementColumnNames.has("column_mapping")) {
 if (!bankStatementColumnNames.has("source_file_type")) {
   db.exec("ALTER TABLE bank_statements ADD COLUMN source_file_type TEXT NOT NULL DEFAULT 'CSV'");
 }
+
+// STEP 103 — reviews: site-wide customer testimonials shown in the storefront's Review Modal
+// (src/app/shop/page.tsx) and manageable by an admin (src/app/reviews/page.tsx). Deliberately NOT
+// tied to a specific product (no product_id FK) — the storefront has only ever had one site-wide
+// review list/modal, never a per-product one, so adding that relation now would be speculative.
+// image_url is nullable from the start — most reviews have no attached photo, and both
+// customer-submitted (POST /api/reviews, unauthenticated — see src/proxy.ts, same public-write
+// precedent as /api/shop/checkout) and admin-created reviews share this exact same row shape; there
+// is no separate "admin review" type or moderation status. rating is a plain INTEGER (1-5),
+// TS-layer validated only (src/lib/reviews.ts), matching this schema's 100% consistent convention
+// for every other enum/range-constrained column — never a SQL CHECK.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_name TEXT NOT NULL,
+    rating INTEGER NOT NULL,
+    comment TEXT,
+    image_url TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_reviews_created_at ON reviews(created_at);
+`);
 
 export default db;
 

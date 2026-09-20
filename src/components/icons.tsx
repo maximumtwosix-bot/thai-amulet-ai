@@ -36,6 +36,63 @@ export function ArrowLeftIcon({ className }: IconProps) {
   );
 }
 
+export function ChevronLeftIcon({ className }: IconProps) {
+  return base(<path d="m15 18-6-6 6-6" />, className);
+}
+
+export function ChevronRightIcon({ className }: IconProps) {
+  return base(<path d="m9 18 6-6-6-6" />, className);
+}
+
+export function GridLargeIcon({ className }: IconProps) {
+  return base(
+    <>
+      <rect width="8" height="8" x="3" y="3" rx="1.5" />
+      <rect width="8" height="8" x="13" y="3" rx="1.5" />
+      <rect width="8" height="8" x="3" y="13" rx="1.5" />
+      <rect width="8" height="8" x="13" y="13" rx="1.5" />
+    </>,
+    className
+  );
+}
+
+export function GridSmallIcon({ className }: IconProps) {
+  return base(
+    <>
+      <rect width="4" height="4" x="3" y="3" rx="1" />
+      <rect width="4" height="4" x="10" y="3" rx="1" />
+      <rect width="4" height="4" x="17" y="3" rx="1" />
+      <rect width="4" height="4" x="3" y="10" rx="1" />
+      <rect width="4" height="4" x="10" y="10" rx="1" />
+      <rect width="4" height="4" x="17" y="10" rx="1" />
+      <rect width="4" height="4" x="3" y="17" rx="1" />
+      <rect width="4" height="4" x="10" y="17" rx="1" />
+      <rect width="4" height="4" x="17" y="17" rx="1" />
+    </>,
+    className
+  );
+}
+
+// Unlike every other icon here, this one's fill is meaningful (filled = selected rating star, not
+// just a stroke outline) — callers pass `filled` to toggle it rather than relying on `base()`'s
+// fixed fill="none".
+export function StarIcon({ className, filled }: IconProps & { filled?: boolean }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill={filled ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className ?? "h-5 w-5"}
+    >
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+    </svg>
+  );
+}
+
 export function LogOutIcon({ className }: IconProps) {
   return base(
     <>
@@ -192,6 +249,18 @@ export function ChevronDownIcon({ className }: IconProps) {
   return base(<path d="m6 9 6 6 6-6" />, className);
 }
 
+export function StoreIcon({ className }: IconProps) {
+  return base(
+    <>
+      <path d="M2 7h20l-1.6 5.6a2 2 0 0 1-1.92 1.4H5.52a2 2 0 0 1-1.92-1.4L2 7Z" />
+      <path d="M4 7V4a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v3" />
+      <path d="M4 21h16" />
+      <path d="M9 21v-5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v5" />
+    </>,
+    className
+  );
+}
+
 export function FlagIcon({ className }: IconProps) {
   return base(
     <>
@@ -235,6 +304,18 @@ export function FacebookIcon({ className }: IconProps) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={className ?? "h-5 w-5"}>
       <path d="M12 2C6.48 2 2 6.48 2 12c0 5 3.66 9.13 8.44 9.88v-6.99h-2.54V12h2.54V9.8c0-2.5 1.49-3.89 3.78-3.89 1.09 0 2.23.2 2.23.2v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.44 2.89h-2.34v6.99C18.34 21.13 22 17 22 12c0-5.52-4.48-10-10-10z" />
     </svg>
+  );
+}
+
+export function CalendarIcon({ className }: IconProps) {
+  return base(
+    <>
+      <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </>,
+    className
   );
 }
 
@@ -369,6 +450,51 @@ export function GalleryIcon({ className }: IconProps) {
       <rect x="14" y="3" width="7" height="7" rx="1" />
       <rect x="3" y="14" width="7" height="7" rx="1" />
       <rect x="14" y="14" width="7" height="7" rx="1" />
+    </>,
+    className
+  );
+}
+
+export function TrashIcon({ className }: IconProps) {
+  return base(
+    <>
+      <path d="M3 6h18" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </>,
+    className
+  );
+}
+
+export function AlignLeftIcon({ className }: IconProps) {
+  return base(
+    <>
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="12" x2="15" y2="12" />
+      <line x1="3" y1="18" x2="18" y2="18" />
+    </>,
+    className
+  );
+}
+
+export function AlignCenterIcon({ className }: IconProps) {
+  return base(
+    <>
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="6" y1="12" x2="18" y2="12" />
+      <line x1="4.5" y1="18" x2="19.5" y2="18" />
+    </>,
+    className
+  );
+}
+
+export function AlignRightIcon({ className }: IconProps) {
+  return base(
+    <>
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="9" y1="12" x2="21" y2="12" />
+      <line x1="6" y1="18" x2="21" y2="18" />
     </>,
     className
   );
